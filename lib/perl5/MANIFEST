@@ -4,6 +4,8 @@ MANIFEST
 ppport.h
 README
 Ugly.xs
-t/Ugly.t
+t/01_context.t
+t/02_value.t
+t/03_language.t
 lib/Ugly.pm
 lib/Ugly/Value.pm
