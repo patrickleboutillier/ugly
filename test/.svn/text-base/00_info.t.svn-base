@@ -1,4 +1,0 @@
-
-plan_tests(1) ;
-
-ok(1, "Test language is %s (%s)", MLP_TEST_LANG, MLP_TEST_OPTS) ;
