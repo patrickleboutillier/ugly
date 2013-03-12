@@ -1,0 +1,20 @@
+plan_tests(9) ;
+
+mlp_context *ctx = mlp_context_new() ;
+ok(! mlp_context_has_error(ctx), "Context doesn't have a pending error") ;
+ok(mlp_context_get_error(ctx) == MLP_OK, "Context error is MLP_OK") ;
+ok(mlp_context_get_error_msg(ctx) == NULL, "Context error msg is NULL") ;
+
+mlp_context_set_error(ctx, MLP_INTERNAL_ERROR, NULL) ;
+ok(mlp_context_get_error(ctx) == MLP_INTERNAL_ERROR, "Context error is MLP_INTERNAL_ERROR") ;
+ok(mlp_context_get_error_msg(ctx) == NULL, "Context error msg is NULL") ;
+
+mlp_context_clear_error(ctx) ;
+ok(mlp_context_get_error(ctx) == MLP_OK, "Context error is MLP_OK") ;
+ok(mlp_context_get_error_msg(ctx) == NULL, "Context error msg is NULL") ;
+
+mlp_context_set_error(ctx, MLP_INTERNAL_ERROR, "internal %s", "error") ;
+ok(mlp_context_get_error(ctx) == MLP_INTERNAL_ERROR, "Context error is MLP_INTERNAL_ERROR") ;
+ok(strcmp(mlp_context_get_error_msg(ctx), "internal error") == 0, "Context error msg is \\"internal error\\"") ;
+
+mlp_context_delete(ctx) ;

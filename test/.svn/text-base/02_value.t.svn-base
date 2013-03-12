@@ -1,0 +1,30 @@
+plan_tests(4) ;
+
+mlp_context *ctx = mlp_context_new() ;
+
+{
+mlp_value *l = mlp_value_new_long(42L) ;
+ok(mlp_value_get_long(l) == 42L, "Long value is 42") ;
+mlp_value_delete(ctx, l) ;
+}
+
+{
+mlp_value *d = mlp_value_new_double(42.6) ;
+ok(mlp_value_get_double(d) == 42.6, "Double value is 42.6") ;
+mlp_value_delete(ctx, d) ;
+}
+
+{
+mlp_value *s = mlp_value_new_string("some string") ;
+ok(strcmp(mlp_value_get_string(s), "some string") == 0, "String value is \\"some string\\"") ;
+mlp_value_delete(ctx, s) ;
+}
+
+{
+mlp_value *s = mlp_value_new_string((const char *)NULL) ;
+ok(mlp_value_get_string(s) == NULL, "String value as string is NULL") ;
+mlp_value_delete(ctx, s) ;
+}
+
+mlp_context_delete(ctx) ;
+

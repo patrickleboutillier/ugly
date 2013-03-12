@@ -1,0 +1,36 @@
+use strict ;
+
+sub calc_add_long {
+	return calc->add_long(@_) ;
+}
+
+
+*{calc_add_double} = \&calc_add_long ;
+*{calc_add_string} = \&calc_add_long ;
+
+
+
+package calc ;
+
+sub new {
+	my $class = shift ;
+
+	my $this = {} ;
+	bless($this, $class) ;
+
+	return $this ;
+}
+
+
+sub add_long {
+	my ($this, $a, $b) = @_ ;
+
+	return $a + $b ;
+}
+
+
+*{calc::add_double} = \&calc::add_long ;
+*{calc::add_string} = \&calc::add_long ;
+
+
+1 ;

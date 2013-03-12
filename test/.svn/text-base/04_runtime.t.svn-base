@@ -1,0 +1,25 @@
+plan_tests(5) ;
+
+mlp_context *ctx = mlp_context_new() ;
+
+mlp_language *lang = mlp_language_init(ctx, MLP_TEST_LANG) ; /* MLP_TEST_OPTS */ 
+MLP_CHECK_ERROR(ctx, 1){
+    ok(lang != NULL, "Language %s initialized", MLP_TEST_LANG) ;
+}
+mlp_runtime *rt = mlp_runtime_new(ctx, lang) ;
+MLP_CHECK_ERROR(ctx, 2){
+    ok(rt != NULL, "%s runtime initialized", MLP_TEST_LANG) ;
+    ok(mlp_runtime_get_language(rt) == lang, "Runtime language == language") ;
+}
+
+mlp_runtime_delete(ctx, rt) ;
+MLP_CHECK_ERROR(ctx, 1){
+	pass("%s runtime destroyed", MLP_TEST_LANG) ;
+}
+
+mlp_language_delete(ctx, lang) ;
+MLP_CHECK_ERROR(ctx, 1){
+	pass("Language %s destroyed", MLP_TEST_LANG) ;
+}
+
+mlp_context_delete(ctx) ;

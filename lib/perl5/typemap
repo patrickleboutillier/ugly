@@ -1,0 +1,33 @@
+TYPEMAP
+	ugly_error		T_ENUM
+	ugly_type		T_ENUM
+	ugly_context * 	T_PTROBJ_UGLY_CONTEXT
+	ugly_language * 	T_PTROBJ_UGLY_LANGUAGE
+	ugly_value * 	T_PTROBJ_UGLY_VALUE
+	ugly_runtime * 	T_PTROBJ_UGLY_RUNTIME
+
+OUTPUT
+T_PTROBJ_UGLY_CONTEXT
+	sv_setref_pv($arg, \"Ugly::Context\", (void *)$var) ;
+T_PTROBJ_UGLY_LANGUAGE
+	sv_setref_pv($arg, \"Ugly::Language\", (void *)$var) ;
+T_PTROBJ_UGLY_VALUE
+	sv_setref_pv($arg, \"Ugly::Value\", (void *)$var) ;
+T_PTROBJ_UGLY_RUNTIME
+	sv_setref_pv($arg, \"Ugly::Runtime\", (void *)$var) ;
+
+INPUT
+T_PTROBJ_UGLY_CONTEXT
+	if (sv_derived_from($arg, \"Ugly::Context\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
+	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Context\") ; } }
+T_PTROBJ_UGLY_LANGUAGE
+	if (sv_derived_from($arg, \"Ugly::Language\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
+	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Language\") ; } }
+T_PTROBJ_UGLY_VALUE
+	if (sv_derived_from($arg, \"Ugly::Value\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
+	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Value\") ; } }
+T_PTROBJ_UGLY_RUNTIME
+	if (sv_derived_from($arg, \"Ugly::Runtime\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
+	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Runtime\") ; } }
+
+

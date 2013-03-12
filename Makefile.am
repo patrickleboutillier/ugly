@@ -1,0 +1,5 @@
+SUBDIRS = lib
+SUBDIRS += lang
+SUBDIRS += test
+
+ACLOCAL_AMFLAGS = -I m4

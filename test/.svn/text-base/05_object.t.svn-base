@@ -1,0 +1,149 @@
+plan_tests(30) ;
+
+mlp_context *ctx = mlp_context_new() ;
+
+mlp_language *lang = mlp_language_init(ctx, MLP_TEST_LANG) ; /* MLP_TEST_OPTS */ 
+MLP_CHECK_ERROR(ctx, 1){
+    ok(lang != NULL, "Language %s initialized", MLP_TEST_LANG) ;
+}
+mlp_runtime *rt = mlp_runtime_new(ctx, lang) ;
+MLP_CHECK_ERROR(ctx, 2){
+    ok(rt != NULL, "%s runtime initialized", MLP_TEST_LANG) ;
+    ok(mlp_runtime_get_language(rt) == lang, "Runtime language == language") ;
+}
+
+const char *class = "calc" ;
+mlp_value *v = mlp_object_new(ctx, rt, class, NULL, 0, NULL) ;
+MLP_CHECK_ERROR(ctx, 3){
+	ok(v != NULL, "new calc: value returned") ;
+	ok(mlp_value_get_type(v) == MLP_OBJECT, "new calc: value is an object") ;
+	diag("%s", mlp_value_to_string(v)) ;
+}
+
+
+mlp_object *obj = mlp_value_take_object(v) ;
+mlp_value_delete(ctx, v) ;
+
+
+{
+	mlp_value **args = mlp_value_array_new(2) ;
+	args[0] = mlp_value_new_long(1) ;
+	args[1] = mlp_value_new_long(2) ;
+	mlp_value *v2 = mlp_object_call_method(ctx, rt, obj, "add", args, 2, NULL) ;
+	MLP_CHECK_ERROR(ctx, 3){
+		ok(v2 != NULL, "add(1,2) result: value returned") ;
+		ok(mlp_value_get_type(v2) == MLP_LONG, "add(1,2) result: value is a long") ;
+		diag("%s", mlp_value_to_string(v2)) ;
+		ok(mlp_value_get_long(v2) == 3, "value is 3") ;
+	}
+	mlp_value_array_delete(ctx, args) ;
+	mlp_value_delete(ctx, v2) ; 
+}
+
+
+{
+	mlp_value **args = mlp_value_array_new(2) ;
+	args[0] = mlp_value_new_double(1.1) ;
+	args[1] = mlp_value_new_double(2.2) ;
+	mlp_value *v2 = mlp_object_call_method(ctx, rt, obj, "add", args, 2, NULL) ;
+	MLP_CHECK_ERROR(ctx, 3){
+		ok(v2 != NULL, "add(1.1,2.2) result: value returned") ;
+		ok(mlp_value_get_type(v2) == MLP_DOUBLE, "add(1.1,2.2) result: value is a long") ;
+		diag("%s", mlp_value_to_string(v2)) ;
+		ok(EQUALS(mlp_value_get_double(v2), 3.3), "value is 3.3") ;
+	}
+	mlp_value_array_delete(ctx, args) ;
+	mlp_value_delete(ctx, v2) ; 
+}
+
+
+{
+	mlp_value **args = mlp_value_array_new(2) ;
+	args[0] = mlp_value_new_string("1.0") ;
+	args[1] = mlp_value_new_string("2.0") ;
+	mlp_value *v2 = mlp_object_call_method(ctx, rt, obj, "add", args, 2, NULL) ;
+	MLP_CHECK_ERROR(ctx, 3){
+		ok(v2 != NULL, "add(\\"1.0\\",\\"2.0\\") result: value returned") ;
+		ok(mlp_value_get_type(v2) == MLP_STRING, "add(\\"1.0\\",\\"2.0\\") result: value is a string") ;
+		diag("%s", mlp_value_to_string(v2)) ;
+		ok(strcmp(mlp_value_get_string(v2), "3.0") == 0, "value is \\"3.0\\"") ;
+	}
+	mlp_value_array_delete(ctx, args) ;
+	mlp_value_delete(ctx, v2) ; 
+}
+{
+	mlp_value **args = mlp_value_array_new(2) ;
+	args[0] = mlp_value_new_string(NULL) ;
+	args[1] = mlp_value_new_string(NULL) ;
+	mlp_value *v2 = mlp_object_call_method(ctx, rt, obj, "add", args, 2, NULL) ;
+	MLP_CHECK_ERROR(ctx, 3){
+		ok(v2 != NULL, "add(NULL,NULL) result: value returned") ;
+		ok(mlp_value_get_type(v2) == MLP_STRING, "add(NULL,NULL) result: value is a string") ;
+		diag("%s", mlp_value_to_string(v2)) ;
+		ok(mlp_value_get_string(v2) == NULL, "value is NULL") ;
+	}
+	mlp_value_array_delete(ctx, args) ;
+	mlp_value_delete(ctx, v2) ; 
+}
+
+{
+	mlp_value **args = mlp_value_array_new(1) ;
+	args[0] = mlp_value_new_long(5) ;
+	mlp_value *n = mlp_object_new(ctx, rt, "num", args, 1, NULL) ;
+	ok(n != NULL, "new num: value returned") ;
+	ok(mlp_value_get_type(n) == MLP_OBJECT, "new num: value is an object") ;
+	diag("%s", mlp_value_to_string(n)) ;
+	mlp_object *on = mlp_value_take_object(n) ;
+	ok(n != NULL, "num object returned: %s", mlp_object_to_string(on)) ;
+	mlp_value_array_delete(ctx, args) ;
+	mlp_value_delete(ctx, n) ;
+	/* on persist */
+
+	args = mlp_value_array_new(1) ;
+	args[0] = mlp_value_new_object(on) ;
+	mlp_value *n2 = mlp_object_call_method(ctx, rt, on, "copy", args, 1, NULL) ;
+	ok(n2 != NULL, "copy(num): value returned") ;
+	ok(mlp_value_get_type(n2) == MLP_OBJECT, "copy(num): value is an object") ;
+	diag("%s", mlp_value_to_string(n2)) ;
+	mlp_object *on2 = mlp_value_take_object(n2) ;
+	ok(on2 != NULL, "num object returned: %s", mlp_object_to_string(on2)) ;
+	mlp_value_take_object(args[0]) ;
+	mlp_value_array_delete(ctx, args) ;
+	mlp_value_delete(ctx, n2) ;
+	/* on,on2 persists */
+
+	args = mlp_value_array_new(2) ;
+	args[0] = mlp_value_new_object(on) ;
+	args[1] = mlp_value_new_object(on2) ;
+	mlp_value *v = mlp_object_call_method(ctx, rt, obj, "add", args, 2, NULL) ;
+	ok(v != NULL, "add(num,num) result: value returned") ;
+	ok(mlp_value_get_type(v) == MLP_OBJECT, "add(num,num) result: value is an object") ;
+	diag("%s", mlp_value_to_string(v)) ;
+	mlp_object *res = mlp_value_take_object(v) ;
+	mlp_value_delete(ctx, v) ;
+	mlp_value_array_delete(ctx, args) ;
+	/* res persists */
+	
+	mlp_value *a = mlp_object_call_method(ctx, rt, res, "get_n", NULL, 0, NULL) ;
+	ok(a != NULL, "get_n() result: value returned") ;
+	ok(mlp_value_get_type(a) == MLP_LONG, "get_n() result: value is a long") ;
+	diag("%s", mlp_value_to_string(a)) ;
+	ok(mlp_value_get_long(a) == 10, "get_n() result: value is 10") ;
+	mlp_value_delete(ctx, a) ;
+	mlp_object_delete(ctx, res) ;
+}
+
+
+mlp_object_delete(ctx, obj) ;
+
+mlp_runtime_delete(ctx, rt) ;
+MLP_CHECK_ERROR(ctx, 1){
+	pass("%s runtime destroyed", MLP_TEST_LANG) ;
+}
+
+mlp_language_delete(ctx, lang) ;
+MLP_CHECK_ERROR(ctx, 1){
+	pass("Language %s destroyed", MLP_TEST_LANG) ;
+}
+
+mlp_context_delete(ctx) ;
