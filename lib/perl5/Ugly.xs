@@ -149,6 +149,16 @@ new_string(pkg, val)
 		RETVAL
 
 
+ugly_value *
+new_object(pkg, val)
+	const char *pkg
+	ugly_object *val
+	CODE:
+		RETVAL = ugly_value_new_object(val) ;
+	OUTPUT:
+		RETVAL
+
+
 void 
 delete(this)
 	ugly_value *this
@@ -220,6 +230,17 @@ get_string(this)
 		this = NULL ;
 	CODE:
 		RETVAL = ugly_value_get_string(this) ;
+	OUTPUT:
+		RETVAL
+
+
+ugly_object * 
+get_object(this)
+	ugly_value *this
+	PREINIT:
+		this = NULL ;
+	CODE:
+		RETVAL = ugly_value_get_object(this) ;
 	OUTPUT:
 		RETVAL
 

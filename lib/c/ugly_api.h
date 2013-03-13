@@ -32,6 +32,7 @@ ugly_value*					ugly_value_new_long			(long val) ;
 ugly_value*					ugly_value_new_double		(double val) ;
 ugly_value*					ugly_value_new_char			(char val) ;
 ugly_value*					ugly_value_new_string		(const char *val) ;
+ugly_value*					ugly_value_new_object		(ugly_object *val) ;
 void 						ugly_value_delete			(ugly_value *val) ;
 ugly_type 					ugly_value_get_type			(const ugly_value *val) ;
 char 						ugly_value_get_bool			(const ugly_value *val) ;
@@ -39,6 +40,7 @@ long 						ugly_value_get_long			(const ugly_value *val) ;
 double 						ugly_value_get_double		(const ugly_value *val) ;
 char 						ugly_value_get_char			(const ugly_value *val) ;
 const_char*					ugly_value_get_string		(const ugly_value *val) ;
+ugly_object*				ugly_value_get_object		(const ugly_value *val) ;
 const_char*					ugly_value_to_string		(ugly_value *val) ;
 
 
@@ -54,4 +56,13 @@ ugly_language*				ugly_runtime_get_language	(const ugly_runtime *rt) ;
 UGLY_IFACE void 			ugly_runtime_load_library	(ugly_context *ctx, ugly_runtime *rt, const char *lib) ;
 UGLY_IFACE ugly_value*		ugly_runtime_call_function	(ugly_context *ctx, ugly_runtime *rt, ugly_type rtype, const char *func, ugly_value **args, int nb_args, const char *hint) ;
 
+
+/* ugly_object api */
+ugly_runtime*				ugly_object_get_runtime		(const ugly_object *obj) ;
+const_char*					ugly_object_get_class		(const ugly_object *obj) ;
+void*						ugly_object_get_handle		(const ugly_object *obj) ;
+const_char*					ugly_object_to_string		(ugly_object* obj) ;
+UGLY_IFACE ugly_value*		ugly_object_new				(ugly_context *ctx, ugly_runtime* rt, const char *class, ugly_value **args, int nb_args, const char *hint) ;
+UGLY_IFACE ugly_value*		ugly_object_call_method		(ugly_context *ctx, ugly_object *obj, ugly_type rtype, const char *method, ugly_value **args, int nb_args, const char *hint) ;
+UGLY_IFACE void				ugly_object_delete			(ugly_context *ctx, ugly_object *obj) ;
 

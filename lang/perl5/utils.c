@@ -4,7 +4,7 @@
 #include "ugly_perl5_priv.h"
 
 
-SV *perl_call_helper_function(ugly_context *ctx, ugly_runtime *rt, const char *func, int nb_args, SV **args){
+ugly_value *perl_call_helper_function(ugly_context *ctx, ugly_runtime *rt, const char *func, int nb_args, SV **args){
 	PerlInterpreter *my_perl = (PerlInterpreter *)rt->handle ;
 
 	dSP ;
@@ -58,7 +58,7 @@ SV *perl_call_helper_function(ugly_context *ctx, ugly_runtime *rt, const char *f
 }
 
 
-SV *perl_call_helper_function_v(ugly_context *ctx, ugly_runtime *rt, const char *func, int nb_args, ...){
+ugly_value *perl_call_helper_function_v(ugly_context *ctx, ugly_runtime *rt, const char *func, int nb_args, ...){
 
     va_list ap ;
     va_start(ap, nb_args) ;

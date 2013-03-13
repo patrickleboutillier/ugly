@@ -95,7 +95,8 @@ am__installdirs = "$(DESTDIR)$(libdir)"
 LTLIBRARIES = $(lib_LTLIBRARIES)
 libugly_perl5_la_LIBADD =
 am_libugly_perl5_la_OBJECTS = libugly_perl5_la-utils.lo \
-	libugly_perl5_la-language.lo libugly_perl5_la-runtime.lo
+	libugly_perl5_la-language.lo libugly_perl5_la-runtime.lo \
+	libugly_perl5_la-object.lo
 libugly_perl5_la_OBJECTS = $(am_libugly_perl5_la_OBJECTS)
 libugly_perl5_la_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(libugly_perl5_la_CFLAGS) \
@@ -237,7 +238,7 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 lib_LTLIBRARIES = libugly_perl5.la
-libugly_perl5_la_SOURCES = utils.c language.c runtime.c 
+libugly_perl5_la_SOURCES = utils.c language.c runtime.c object.c
 libugly_perl5_la_CFLAGS = $(shell perl -MExtUtils::Embed -e ccopts)
 libugly_perl5_la_LDFLAGS = $(shell perl -MExtUtils::Embed -e ldopts) -L../../lib/c -lugly
 all: all-am
@@ -318,6 +319,7 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libugly_perl5_la-language.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libugly_perl5_la-object.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libugly_perl5_la-runtime.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libugly_perl5_la-utils.Plo@am__quote@
 
@@ -362,6 +364,13 @@ libugly_perl5_la-runtime.lo: runtime.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='runtime.c' object='libugly_perl5_la-runtime.lo' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libugly_perl5_la_CFLAGS) $(CFLAGS) -c -o libugly_perl5_la-runtime.lo `test -f 'runtime.c' || echo '$(srcdir)/'`runtime.c
+
+libugly_perl5_la-object.lo: object.c
+@am__fastdepCC_TRUE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libugly_perl5_la_CFLAGS) $(CFLAGS) -MT libugly_perl5_la-object.lo -MD -MP -MF $(DEPDIR)/libugly_perl5_la-object.Tpo -c -o libugly_perl5_la-object.lo `test -f 'object.c' || echo '$(srcdir)/'`object.c
+@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/libugly_perl5_la-object.Tpo $(DEPDIR)/libugly_perl5_la-object.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='object.c' object='libugly_perl5_la-object.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL)  --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libugly_perl5_la_CFLAGS) $(CFLAGS) -c -o libugly_perl5_la-object.lo `test -f 'object.c' || echo '$(srcdir)/'`object.c
 
 mostlyclean-libtool:
 	-rm -f *.lo

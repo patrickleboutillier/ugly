@@ -46,6 +46,7 @@ struct _ugly_value {
 		long l ;
 		double d ;
 		char *s ;
+		ugly_object *o ;
 	} v ;
 	/* int thrown ; */
 	char *stringy ;
@@ -69,7 +70,19 @@ struct _ugly_runtime {
 } ;
 
 
+/* UGLY object */
+struct _ugly_object {
+    ugly_runtime *runtime ;
+    char *class ;
+    void *handle ;
+    char *stringy ;
+} ;
+
+
 #include "ugly_iface.h"
+
+
+ugly_object *ugly_object_alloc(ugly_runtime *rt, const char *class, void *object) ;
 
 
 #endif

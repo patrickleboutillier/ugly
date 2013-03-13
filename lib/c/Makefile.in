@@ -96,7 +96,7 @@ am__installdirs = "$(DESTDIR)$(libdir)" "$(DESTDIR)$(includedir)"
 LTLIBRARIES = $(lib_LTLIBRARIES)
 libugly_la_LIBADD =
 am_libugly_la_OBJECTS = ugly.lo context.lo value.lo language.lo \
-	runtime.lo
+	runtime.lo object.lo
 libugly_la_OBJECTS = $(am_libugly_la_OBJECTS)
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
@@ -237,7 +237,7 @@ top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 lib_LTLIBRARIES = libugly.la
 include_HEADERS = ugly.h
-libugly_la_SOURCES = ugly.c context.c value.c language.c runtime.c 
+libugly_la_SOURCES = ugly.c context.c value.c language.c runtime.c object.c
 BUILT_SOURCES = ugly_iface.h
 CLEANFILES = ugly_iface.h
 EXTRA_DIST = gen_iface.sh
@@ -321,6 +321,7 @@ distclean-compile:
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/context.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/language.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/object.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runtime.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ugly.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/value.Plo@am__quote@

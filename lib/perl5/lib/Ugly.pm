@@ -55,6 +55,7 @@ use constant {
     DOUBLE => 2,
     CHAR => 3,
     STRING => 4,
+    OBJECT => 5,
 } ;
 
 
@@ -76,6 +77,9 @@ sub to_string {
     }
     elsif ($type == STRING()){
         return "STRING" ;
+    }
+    elsif ($type == OBJECT()){
+        return "OBJECT" ;
     }
     else {
         croak("Unknown Ugly::Type '$type'") ;

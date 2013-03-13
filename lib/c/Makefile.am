@@ -2,7 +2,7 @@ lib_LTLIBRARIES = libugly.la
 
 include_HEADERS = ugly.h
 
-libugly_la_SOURCES = ugly.c context.c value.c language.c runtime.c 
+libugly_la_SOURCES = ugly.c context.c value.c language.c runtime.c object.c
 
 BUILT_SOURCES = ugly_iface.h
 CLEANFILES = ugly_iface.h

@@ -24,7 +24,8 @@ enum _ugly_type {
 	UGLY_LONG,
 	UGLY_DOUBLE,
 	UGLY_CHAR,
-	UGLY_STRING
+	UGLY_STRING,
+	UGLY_OBJECT
 } ;
 typedef enum _ugly_type ugly_type ;
 
@@ -39,8 +40,9 @@ struct _ugly_language ;
 typedef struct _ugly_language ugly_language ;
 struct _ugly_runtime ;
 typedef struct _ugly_runtime ugly_runtime ;
-struct _ugly_library ;
-typedef struct _ugly_library ugly_library ;
+struct _ugly_object ;
+typedef struct _ugly_object ugly_object ;
+
 
 
 /* Public API */

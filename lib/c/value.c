@@ -57,6 +57,14 @@ ugly_value *ugly_value_new_string(const char *val){
 }
 
 
+ugly_value *ugly_value_new_object(ugly_object *val){
+	ugly_value *v = ugly_value_new(UGLY_OBJECT) ;
+	v->v.o = val ;
+
+	return v ;
+}
+
+
 void ugly_value_delete(ugly_value *val){
 	ugly_debug(2, "-> Value delete: %s", ugly_value_to_string(val)) ;
 	switch (val->type){
@@ -110,6 +118,12 @@ const char *ugly_value_get_string(const ugly_value *val){
 }
 
 
+ugly_object *ugly_value_get_object(const ugly_value *val){
+    assert(val->type == UGLY_OBJECT) ;
+    return val->v.o ;
+}
+
+
 const char *ugly_value_to_string(ugly_value *val){
 	if (val->stringy != NULL){
 		return val->stringy ;
@@ -150,6 +164,18 @@ const char *ugly_value_to_string(ugly_value *val){
 			}
 			return val->stringy ;
 		}
+        case UGLY_OBJECT: {
+            if (val->v.o != NULL){
+                const char *ostr = ugly_object_to_string(val->v.o) ;
+                int len = strlen(ostr) + 32 ;
+                val->stringy = (char *)malloc(len * sizeof(char)) ;
+                snprintf(val->stringy, len-1, "OBJECT(%s)", ostr) ;
+            }
+            else {
+                val->stringy = strdup("OBJECT(NULL)") ;
+            }
+            return val->stringy ;
+        }
     }
 
 	return val->stringy ;

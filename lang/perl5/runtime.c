@@ -59,7 +59,7 @@ ugly_value *_ugly_perl5_runtime_call_function(ugly_context *ctx, ugly_runtime *r
 	}
 
 	ugly_debug(3, "Calling perl5 function Ugly::perl5::call_function") ;
-	SV *ret = perl_call_helper_function(ctx, rt, "Ugly::perl5::call_function", nb_args + 2, svs) ;
+	ugly_value *ret = perl_call_helper_function(ctx, rt, "Ugly::perl5::call_function", nb_args + 2, svs) ;
 	ugly_debug(3, "perl5 function Ugly::perl5::call_function called") ;
 
 	free(svs) ;

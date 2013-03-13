@@ -5,6 +5,7 @@ TYPEMAP
 	ugly_language * 	T_PTROBJ_UGLY_LANGUAGE
 	ugly_value * 	T_PTROBJ_UGLY_VALUE
 	ugly_runtime * 	T_PTROBJ_UGLY_RUNTIME
+	ugly_object * 	T_PTROBJ_UGLY_OBJECT
 
 OUTPUT
 T_PTROBJ_UGLY_CONTEXT
@@ -15,6 +16,8 @@ T_PTROBJ_UGLY_VALUE
 	sv_setref_pv($arg, \"Ugly::Value\", (void *)$var) ;
 T_PTROBJ_UGLY_RUNTIME
 	sv_setref_pv($arg, \"Ugly::Runtime\", (void *)$var) ;
+T_PTROBJ_UGLY_OBJECT
+	sv_setref_pv($arg, \"Ugly::Object\", (void *)$var) ;
 
 INPUT
 T_PTROBJ_UGLY_CONTEXT
@@ -29,5 +32,8 @@ T_PTROBJ_UGLY_VALUE
 T_PTROBJ_UGLY_RUNTIME
 	if (sv_derived_from($arg, \"Ugly::Runtime\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
 	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Runtime\") ; } }
+T_PTROBJ_UGLY_OBJECT
+	if (sv_derived_from($arg, \"Ugly::Object\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
+	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Object\") ; } }
 
 

@@ -7,8 +7,10 @@
 #include <perl.h>
 
 
-SV *perl_call_helper_function(ugly_context *ctx, ugly_runtime *rt, const char *func, int nb_args, SV **args) ;
-SV *perl_call_helper_function_v(ugly_context *ctx, ugly_runtime *rt, const char *func, int nb_args, ...) ;
+ugly_value *perl_call_helper_function(ugly_context *ctx, ugly_runtime *rt, 
+	const char *func, int nb_args, SV **args) ;
+ugly_value *perl_call_helper_function_v(ugly_context *ctx, ugly_runtime *rt, 
+	const char *func, int nb_args, ...) ;
 
 
 #endif

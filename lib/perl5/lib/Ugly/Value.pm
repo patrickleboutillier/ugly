@@ -23,6 +23,9 @@ sub unwrap {
 	elsif ($type == Ugly::Type::STRING()){
 		return $this->get_string() ;
 	}
+	elsif ($type == Ugly::Type::OBJECT()){
+		return $this->get_object() ;
+	}
 	else {
 		croak("Unknown Ugly::Type '$type'") ;
 	}
@@ -48,6 +51,9 @@ sub wrap {
 	}
 	elsif ($type == Ugly::Type::STRING()){
 		return Ugly::Value->new_string($v) ;
+	}
+	elsif ($type == Ugly::Type::OBJECT()){
+		return Ugly::Value->new_object($v) ;
 	}
 	else {
 		croak("Unknown Ugly::Type '$type'") ;
