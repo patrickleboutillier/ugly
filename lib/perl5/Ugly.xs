@@ -14,6 +14,8 @@ PROTOTYPES: ENABLE
 ugly_context *
 new(pkg)
 	const char *pkg
+	PREINIT:
+		pkg = NULL ;
 	CODE:
 		RETVAL = ugly_context_new() ;
 	OUTPUT:
@@ -98,6 +100,8 @@ ugly_value *
 new_bool(pkg, val)
 	const char *pkg
 	char val
+	PREINIT:
+		pkg = NULL ;
 	CODE:
 		RETVAL = ugly_value_new_bool(val) ;
 	OUTPUT:
@@ -108,6 +112,8 @@ ugly_value *
 new_long(pkg, val)
 	const char *pkg
 	long val
+	PREINIT:
+		pkg = NULL ;
 	CODE:
 		RETVAL = ugly_value_new_long(val) ;
 	OUTPUT:
@@ -118,6 +124,8 @@ ugly_value *
 new_double(pkg, val)
 	const char *pkg
 	double val
+	PREINIT:
+		pkg = NULL ;
 	CODE:
 		RETVAL = ugly_value_new_double(val) ;
 	OUTPUT:
@@ -128,6 +136,8 @@ ugly_value *
 new_char(pkg, val)
 	const char *pkg
 	char val
+	PREINIT:
+		pkg = NULL ;
 	CODE:
 		RETVAL = ugly_value_new_char(val) ;
 	OUTPUT:
@@ -139,6 +149,7 @@ new_string(pkg, val)
 	const char *pkg
 	SV *val
 	PREINIT:
+		pkg = NULL ;
 		char *val_str = NULL ;
 	CODE:
 		if (SvOK(val)){
@@ -153,6 +164,9 @@ ugly_value *
 new_object(pkg, val)
 	const char *pkg
 	ugly_object *val
+	PREINIT:
+		pkg = NULL ;
+		val = NULL ;
 	CODE:
 		RETVAL = ugly_value_new_object(val) ;
 	OUTPUT:
@@ -223,7 +237,7 @@ get_char(this)
 		RETVAL
 
 
-char * 
+const char * 
 get_string(this)
 	ugly_value *this
 	PREINIT:
@@ -245,7 +259,7 @@ get_object(this)
 		RETVAL
 
 
-char * 
+const char * 
 to_string(this)
 	ugly_value *this
 	PREINIT:
@@ -267,6 +281,7 @@ init(pkg, ctx, name)
 	ugly_context *ctx
 	const char *name
 	PREINIT:
+		pkg = NULL ;
 		ctx = NULL ;
 	CODE:
 		RETVAL = ugly_language_init(ctx, name) ;
@@ -307,21 +322,100 @@ new(pkg, ctx, lang)
 	ugly_context *ctx
 	ugly_language *lang
 	PREINIT:
+		pkg = NULL ;
 		ctx = NULL ;
 		lang = NULL ;
 	CODE:
 		RETVAL = ugly_runtime_new(ctx, lang) ;
 		if (RETVAL == NULL){
-			RETVAL = &PL_sv_undef ;
+			RETVAL = NULL ;
 		}
 	OUTPUT:
 		RETVAL
 
 
-
 # ugly_language*				ugly_runtime_get_language	(const ugly_runtime *rt) ;
 # UGLY_IFACE void 			ugly_runtime_load_library	(ugly_context *ctx, ugly_runtime *rt, const char *lib) ;
 # UGLY_IFACE ugly_value*		ugly_runtime_call_function	(ugly_context *ctx, ugly_runtime *rt, const char *func, ugly_value **args, int nb_args, const char *hint) ;
+
+
+
+MODULE = Ugly		PACKAGE = Ugly::Object
+PROTOTYPES: ENABLE
+
+ugly_runtime * 
+get_runtime(this)
+	ugly_object *this
+	PREINIT:
+		this = NULL ;
+	CODE:
+		RETVAL = ugly_object_get_runtime(this) ;
+	OUTPUT:
+		RETVAL
+
+
+const char * 
+get_class(this)
+	ugly_object *this
+	PREINIT:
+		this = NULL ;
+	CODE:
+		RETVAL = ugly_object_get_class(this) ;
+	OUTPUT:
+		RETVAL
+
+
+void *
+get_handle(this)
+	ugly_object *this
+	PREINIT:
+		this = NULL ;
+	CODE:
+		RETVAL = ugly_object_get_handle(this) ;
+	OUTPUT:
+		RETVAL
+
+
+const char * 
+to_string(this)
+	ugly_object *this
+	PREINIT:
+		this = NULL ;
+	CODE:
+		RETVAL = ugly_object_to_string(this) ;
+	OUTPUT:
+		RETVAL
+
+
+ugly_object * 
+wrap(pkg, ctx, rt, ref)
+	const char *pkg
+	ugly_context *ctx
+	ugly_runtime *rt
+	SV *ref
+	PREINIT:
+		const char *class ;
+		SV *copy = NULL ;
+		ctx = NULL ;
+		rt = NULL ;
+	CODE:
+		/* TODO: Make sure ref is a reference blessed SV sv_isobject , SvSTASH, HvNAME*/
+		if (sv_isobject(ref)){
+			class = HvNAME(SvSTASH(SvRV(ref))) ;
+			copy = newSVsv(ref) ;
+			SvREFCNT_inc(copy) ;
+			RETVAL = ugly_object_alloc(rt, class, copy) ;
+		}
+		else {
+			croak("ref is not an object reference") ;
+		}
+	OUTPUT:
+		RETVAL
+
+
+# UGLY_IFACE ugly_value*      ugly_object_new             (ugly_context *ctx, ugly_runtime* rt, const char *class, ugly_value **args, int nb_args, const char *hint) ;
+# UGLY_IFACE ugly_value*      ugly_object_call_method     (ugly_context *ctx, ugly_object *obj, ugly_type rtype, const char *method, ugly_value **args, int nb_args, const char *hint) ;
+# UGLY_IFACE void             ugly_object_delete          (ugly_context *ctx, ugly_object *obj) ;
 
 
 

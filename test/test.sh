@@ -27,6 +27,11 @@ else
 	TESTS=t/*.t
 fi
 
-export UGLY_TEST_UNDER_HARNESS=1
-perl -e "use Test::Harness qw(&runtests \$verbose); \$verbose='1'; runtests @ARGV;" $TESTS
-
+if [ -n "UGLY_TEST_NO_HARNESS" ] ; then
+	for t in $TESTS ; do
+		./test $t
+	done
+else
+	export UGLY_TEST_UNDER_HARNESS=1
+	perl -e "use Test::Harness qw(&runtests \$verbose); \$verbose='1'; runtests @ARGV;" $TESTS
+fi

@@ -48,6 +48,8 @@ use constant {
 
 
 package Ugly::Type ;
+use Carp ;
+
 
 use constant {
     BOOL => 0,

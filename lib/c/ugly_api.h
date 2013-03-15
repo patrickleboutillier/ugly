@@ -62,7 +62,8 @@ ugly_runtime*				ugly_object_get_runtime		(const ugly_object *obj) ;
 const_char*					ugly_object_get_class		(const ugly_object *obj) ;
 void*						ugly_object_get_handle		(const ugly_object *obj) ;
 const_char*					ugly_object_to_string		(ugly_object* obj) ;
-UGLY_IFACE ugly_value*		ugly_object_new				(ugly_context *ctx, ugly_runtime* rt, const char *class, ugly_value **args, int nb_args, const char *hint) ;
+ugly_object*				ugly_object_wrap			(ugly_context *ctx, ugly_runtime* rt, const char *class, void *ref) ;
+UGLY_IFACE ugly_object*		ugly_object_new				(ugly_context *ctx, ugly_runtime* rt, const char *class, ugly_value **args, int nb_args, const char *hint) ;
 UGLY_IFACE ugly_value*		ugly_object_call_method		(ugly_context *ctx, ugly_object *obj, ugly_type rtype, const char *method, ugly_value **args, int nb_args, const char *hint) ;
 UGLY_IFACE void				ugly_object_delete			(ugly_context *ctx, ugly_object *obj) ;
 
