@@ -4,14 +4,20 @@
 # Libraries
 *.lib
 *.a
+*.class
 
 # Shared objects (inc. Windows DLLs)
 *.dll
 *.so
 *.so.*
 *.dylib
+*.lo
+*.la
+.deps
+.libs
 
 # Executables
 *.exe
 *.out
 *.app
+
