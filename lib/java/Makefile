@@ -9,4 +9,4 @@ test: build
 	./t/test.sh "$(CLASSPATH):.:t" "../c/.libs"
 
 clean:	
-	rm -f ugly/*.class
+	rm -f ugly/*.class t/*.class

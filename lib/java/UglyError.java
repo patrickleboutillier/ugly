@@ -16,6 +16,19 @@ public enum UglyError {
 		this.no = no ;
 	}
 
+	public static UglyError wrap(int no){
+		switch(no){
+			case -1000: return NOT_SUPPORTED ; 
+			case -1001: return NOT_IMPLEMENTED ; 
+			case 0: return OK ;
+			case 1: return INTERNAL_ERROR ; 
+			case 2: return RUNTIME_ERROR ; 
+			case 3: return LIBRARY_ERROR ; 
+			default:
+				throw new RuntimeException("Unknown UglyError " + no + "") ;
+		}
+	}
+
 	public String getName(){
 		return name ;
 	}

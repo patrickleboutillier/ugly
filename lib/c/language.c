@@ -52,7 +52,7 @@ ugly_language *ugly_language_init(ugly_context *ctx, const char *name){
 	lang->handle = handle ;
 	lang->iface = iface ;
 
-	ugly_debug(2, "<- Language init: %s", name) ;
+	ugly_debug(2, "<- Language init") ;
 	return lang ;
 }
 

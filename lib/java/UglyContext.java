@@ -6,27 +6,52 @@ import com.sun.jna.Pointer ;
 
 
 public class UglyContext {
-	Pointer handle ;
+	Pointer ptr ;
 
     static {
         Native.register("ugly") ;
     }
 
-	public static native Pointer ugly_context_new() ;
+	static native Pointer ugly_context_new() ;
+	static native int ugly_context_has_error(Pointer ctx) ;
+	static native int ugly_context_get_error(Pointer ctx) ;
+	static native String ugly_context_get_error_msg(Pointer ctx) ;
+	static native void ugly_context_set_error(Pointer ctx, int error, String msg) ;
+	static native void ugly_context_clear_error(Pointer ctx) ;
+	static native void ugly_context_delete(Pointer ctx) ;
 
 	public UglyContext(){
-		handle = ugly_context_new() ;
+		ptr = ugly_context_new() ;
 	}
 
-	public UglyContext(Pointer p){
-		handle = p ;
+	public UglyContext(Pointer ctx){
+		ptr = ctx ;
 	}
 
-//ugly_error                  ugly_context_get_error      (const ugly_context *ctx) ;
-//const_char*                 ugly_context_get_error_msg  (const ugly_context *ctx) ;
-//void                        ugly_context_set_error      (ugly_context *ctx, ugly_error error, const char *fmt, ...) ;
-//void                        ugly_context_clear_error    (ugly_context *ctx) ;
-//void                        ugly_context_delete         (ugly_context *ctx) ;
+	public boolean hasError(){
+		int e = ugly_context_has_error(this.ptr) ;
+		return (e != 0 ? true : false) ;
+	}
+
+	public UglyError getError(){
+		return UglyError.wrap(ugly_context_get_error(this.ptr)) ;
+	}
+
+	public String getErrorMsg(){
+		return ugly_context_get_error_msg(this.ptr) ;
+	}
+
+	public void setError(UglyError err, String msg){
+		ugly_context_set_error(this.ptr, err.getNo(), msg) ;
+	}
+
+	public void clearError(){
+		ugly_context_clear_error(this.ptr) ;
+	}
+
+	public void delete(){
+		ugly_context_delete(this.ptr) ;
+	}
 } ;
 
 

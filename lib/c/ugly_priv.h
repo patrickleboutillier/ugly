@@ -82,6 +82,7 @@ struct _ugly_object {
 #include "ugly_iface.h"
 
 
+const char *ugly_type_to_string(ugly_type t) ;
 ugly_object *ugly_object_alloc(ugly_runtime *rt, const char *class, void *object) ;
 
 

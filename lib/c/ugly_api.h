@@ -12,6 +12,7 @@
 
 /* ugly api */
 void						ugly_debug					(int level, const char *fmt, ...) ;
+const_char*					ugly_debug_args				(ugly_value **args, int nb_args) ;
 int							ugly_debug_on				(int level) ;
 int							ugly_debug_level			() ;
 
@@ -52,6 +53,7 @@ const_char* 				ugly_language_get_dir		(const ugly_language *lang) ;
 
 /* ugly_runtime api */
 UGLY_IFACE_V ugly_runtime*	ugly_runtime_new			(ugly_context *ctx, ugly_language *lang) ; 
+const_char*					ugly_runtime_to_string 		(const ugly_runtime *rt) ;
 ugly_language*				ugly_runtime_get_language	(const ugly_runtime *rt) ;
 UGLY_IFACE void 			ugly_runtime_load_library	(ugly_context *ctx, ugly_runtime *rt, const char *lib) ;
 UGLY_IFACE ugly_value*		ugly_runtime_call_function	(ugly_context *ctx, ugly_runtime *rt, ugly_type rtype, const char *func, ugly_value **args, int nb_args, const char *hint) ;
