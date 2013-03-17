@@ -24,8 +24,13 @@ public class UglyContext {
 		ptr = ugly_context_new() ;
 	}
 
-	public UglyContext(Pointer ctx){
+	UglyContext(Pointer ctx){
 		ptr = ctx ;
+	}
+
+	static public UglyContext warp(Pointer ctx){
+		UglyContext c = new UglyContext(ctx) ;
+		return c ;
 	}
 
 	public boolean hasError(){
