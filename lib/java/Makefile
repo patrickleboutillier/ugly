@@ -1,4 +1,4 @@
-SRC=UglyValue.java UglyContext.java UglyType.java UglyError.java
+SRC=UglyRuntime.java UglyLanguage.java UglyValue.java UglyContext.java UglyType.java UglyError.java
 CLASSPATH=/usr/share/java/jna.jar
 
 build:

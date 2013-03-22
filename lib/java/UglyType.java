@@ -11,10 +11,23 @@ public enum UglyType {
 
 	private String name ;
 	private int no ;
-	UglyType(String name, int no){
+	private UglyType(String name, int no){
 		this.name = name ;
 		this.no = no ;
 	}
+
+	public static UglyType wrap(int no){
+        switch(no){
+            case 0: return BOOL ;
+            case 1: return LONG ;
+            case 2: return DOUBLE ;
+            case 3: return CHAR ;
+            case 4: return STRING ;
+            case 5: return OBJECT ;
+            default:
+                throw new RuntimeException("Unknown UglyType " + no + "") ;
+        }
+    }
 
 	public String getName(){
 		return name ;

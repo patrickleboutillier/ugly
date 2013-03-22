@@ -24,7 +24,7 @@ public class UglyContext {
 		ptr = ugly_context_new() ;
 	}
 
-	UglyContext(Pointer ctx){
+	private UglyContext(Pointer ctx){
 		ptr = ctx ;
 	}
 

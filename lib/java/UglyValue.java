@@ -37,7 +37,19 @@ public class UglyValue {
 		ptr = ugly_value_new_long(l) ;
 	}
 
-	UglyValue(){
+	public UglyValue(double d){
+		ptr = ugly_value_new_double(d) ;
+	}
+
+	public UglyValue(char c){
+		ptr = ugly_value_new_char(c) ;
+	}
+
+	public UglyValue(String s){
+		ptr = ugly_value_new_string(s) ;
+	}
+
+	private UglyValue(){
 	}
 
 	public static UglyValue wrap(Pointer val){
@@ -46,10 +58,10 @@ public class UglyValue {
 		return v ;
 	}
 
-//	public UglyType getType(){
-//		int t = ugly_context_get_type(this.ptr) ;
-//		return (e != 0 ? true : false) ;
-//	}
+	public UglyType getType(){
+		int t = ugly_value_get_type(this.ptr) ;
+		return UglyType.wrap(t) ;
+	}
 
 	public boolean getBool(){
 		int b = ugly_value_get_bool(this.ptr) ;
@@ -58,6 +70,18 @@ public class UglyValue {
 
 	public long getLong(){
 		return ugly_value_get_long(this.ptr) ;
+	}
+
+	public double getDouble(){
+		return ugly_value_get_double(this.ptr) ;
+	}
+
+	public char getChar(){
+		return ugly_value_get_char(this.ptr) ;
+	}
+
+	public String getString(){
+		return ugly_value_get_string(this.ptr) ;
 	}
 
 	public void delete(){

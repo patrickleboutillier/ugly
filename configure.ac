@@ -36,6 +36,7 @@ AC_CONFIG_FILES([
 	lib/c/Makefile
 	lang/Makefile
 	lang/perl5/Makefile
+	lang/java/Makefile
 	test/Makefile
 ])
 

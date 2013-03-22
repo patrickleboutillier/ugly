@@ -11,7 +11,7 @@ public enum UglyError {
 
 	private String name ;
 	private int no ;
-	UglyError(String name, int no){
+	private UglyError(String name, int no){
 		this.name = name ;
 		this.no = no ;
 	}

@@ -1,1 +1,1 @@
-SUBDIRS = perl5
+SUBDIRS = perl5 java
