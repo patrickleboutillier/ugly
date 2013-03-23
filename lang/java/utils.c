@@ -156,7 +156,6 @@ ugly_value *java_call_helper_function(ugly_context *ctx, ugly_runtime *rt, const
     check_exception(env) ;
 
 	jobjectArray jargs = (*(env))->NewObjectArray(env, nb_args, _rt->value, NULL) ;
-	ugly_debug(3, "allo") ;
     check_exception(env) ;
     int i = 0 ;
     for (i = 0; i < nb_args ; i++){
@@ -177,7 +176,6 @@ ugly_value *java_call_helper_function(ugly_context *ctx, ugly_runtime *rt, const
 
 	jlong val = (*(env))->CallStaticLongMethod(env, _rt->pointer, _rt->pointer_nativevalue, jretvalptr) ;
     check_exception(env) ;
-	ugly_debug(3, "allo2 %p", val) ;
 	ugly_debug(3, "%s", ugly_value_to_string((ugly_value *)val)) ;
 
     return (ugly_value *)val ;

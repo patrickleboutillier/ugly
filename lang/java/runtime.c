@@ -89,7 +89,7 @@ void *_ugly_java_runtime_new(ugly_context *ctx, ugly_language *lang){
 		classpath = "" ;
 	}
 	char *cp = (char *)malloc((strlen(dir) + strlen(classpath) + 64) * sizeof(char)) ;
-	sprintf(cp, "-Djava.class.path=%s:%s/helper.jar", dir, classpath) ;
+	sprintf(cp, "-Djava.class.path=%s:%s", dir, classpath) ;
 	vm_args.options[vm_args.nOptions++].optionString = cp ;
 
 	JavaVM *jvm = NULL ;
@@ -108,6 +108,7 @@ void *_ugly_java_runtime_new(ugly_context *ctx, ugly_language *lang){
 
 
 void _ugly_java_runtime_load_library(ugly_context *ctx, ugly_runtime *rt, const char *lib){
+   	ugly_context_set_error(ctx, UGLY_NOT_SUPPORTED, "Java loads class/jar libraries automatically as they are required.") ;
 }
 
 
@@ -115,37 +116,25 @@ ugly_value *_ugly_java_runtime_call_function(ugly_context *ctx, ugly_runtime *rt
 	const char *func, ugly_value **args, int nb_args, const char *hint){
 	ugly_debug(3, "Calling java function ugly.helper.call_function") ;
 
-	ugly_value *ret = java_call_helper_function(ctx, rt, func,
-	    nb_args, args) ;
+	int extra = 2 ;
+	ugly_value **new_args = UGLY_MALLOC_N(ugly_value *, nb_args + extra) ;
+	new_args[0] = ugly_value_new_long(rtype) ;
+	new_args[1] = ugly_value_new_string(func) ;
+	int i = 0 ;
+	for (i = 0 ; i < nb_args ; i++){
+		new_args[extra + i] = args[i] ;
+	}
+
+	ugly_value *ret = java_call_helper_function(ctx, rt, "call_function",
+	    nb_args + extra, new_args) ;
+
+	for (i = 0 ; i < extra ; i++){
+		ugly_value_delete(new_args[i]) ;
+	}
+	free(new_args) ;
 
 	ugly_debug(3, "Called java function ugly.helper.call_function") ;
 	ugly_debug(3, "%s", ugly_value_to_string(ret)) ;
+
 	return ret ;
 }
-
-
-/*
-void *_mlp_java_runtime_new(mlp_context *ctx, mlp_language *lang){
-}
-
-
-void _mlp_java_runtime_load_library(mlp_context *ctx, mlp_runtime *rt, const char *lib){
-   	mlp_context_set_error(ctx, MLP_NOT_SUPPORTED, "Java loads class/jar libraries automatically as they are required.") ;
-}
-
-
-void _mlp_java_runtime_delete(mlp_context *ctx, mlp_runtime *rt){
-	mlp_java_runtime *jrt = (mlp_java_runtime *)rt->handle ;
-	JavaVM *jvm = jrt->jvm ;
-	mlp_debug(2, "Destroying JavaVM...") ;
-	jint rc = (*jvm)->DestroyJavaVM(jvm) ;
-	mlp_debug(3, "JavaVM destroyed") ;
-	if (rc < 0){
-    	mlp_context_set_error(ctx, MLP_RUNTIME_ERROR, "Error destroying Java VM") ;
-	}
-	
-	free(rt->handle) ;
-	rt->handle = NULL ;
-}
-*/
-

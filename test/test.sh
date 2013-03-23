@@ -30,6 +30,8 @@ fi
 if [ -n "UGLY_TEST_NO_HARNESS" ] ; then
 	for t in $TESTS ; do
 		./test $t
+		rc=$?
+		[ "$rc" != "0" ] && exit $rc
 	done
 else
 	export UGLY_TEST_UNDER_HARNESS=1
