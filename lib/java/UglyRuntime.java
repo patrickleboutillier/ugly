@@ -16,19 +16,19 @@ public class UglyRuntime {
 	static native void ugly_runtime_load_library(Pointer ctx, Pointer rt, String lib) ;
 	static native Pointer ugly_runtime_get_language(Pointer rt) ;
 	static native String ugly_runtime_to_string(Pointer rt) ;
-	static native Pointer ugly_runtime_call_function(Pointer ctx, Pointer rt, UglyType rtype, 
+	static native Pointer ugly_runtime_call_function(Pointer ctx, Pointer rt, int rtype, 
 		String func, Pointer args, int nb_args, String hint) ;
 
 	public UglyRuntime(UglyContext ctx, UglyLanguage lang){
 		ptr = ugly_runtime_new(ctx.ptr, lang.ptr) ;
 	}
 
-	private UglyRuntime(Pointer lang){
-		ptr = lang ;
+	private UglyRuntime(Pointer rt){
+		ptr = rt ;
 	}
 
-	static public UglyRuntime warp(Pointer ctx){
-		UglyRuntime r = new UglyRuntime(ctx) ;
+	static public UglyRuntime wrap(Pointer rt){
+		UglyRuntime r = new UglyRuntime(rt) ;
 		return r ;
 	}
 

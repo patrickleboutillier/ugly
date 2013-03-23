@@ -16,7 +16,8 @@ struct _ugly_java_runtime {
     jmethodID throwable_getMessage ;
 
 	jclass pointer ;
-	jmethodID new_pointer ;
+	jmethodID pointer_new ;
+	jmethodID pointer_nativevalue ;
 
 	jclass context ;
 	jmethodID context_wrap ;
@@ -26,6 +27,7 @@ struct _ugly_java_runtime {
 
 	jclass value ;
 	jmethodID value_wrap ;
+	jmethodID value_getptr ;
 
 	jclass helper ;
 	jmethodID helper_dispatch ;
@@ -38,14 +40,11 @@ JNIEnv *get_env(ugly_context *ctx, ugly_java_runtime *jrt) ;
 jclass load_class(ugly_context *ctx, JNIEnv *env, const char *class) ;
 jmethodID get_method(ugly_context *ctx, JNIEnv *env, const char *cname, jclass class, const char *name, const char *proto) ;
 jmethodID get_static_method(ugly_context *ctx, JNIEnv *env, const char *cname, jclass class, const char *name, const char *proto) ;
-jstring jstring_new(ugly_context *ctx, JNIEnv *env, const char *s) ;
-void jstring_delete(JNIEnv *env, jstring s) ; 
 
-jobject java_MLPValue_new(ugly_context *ctx, ugly_runtime *rt, JNIEnv *env, ugly_value *v) ;
-jobjectArray java_MLPValue_array_new(ugly_context *ctx, ugly_runtime *rt, JNIEnv *env, ugly_value **args, int nb_args) ;
-void java_MLPValue_array_delete(JNIEnv *env, jobjectArray vargs, int nb_args) ;
-ugly_value *ugly_value_new(ugly_context *ctx, ugly_runtime *rt, JNIEnv *env, jobject v) ;
-jobject java_MLPJavaObject_new(ugly_context *ctx, ugly_runtime *rt, JNIEnv *env, ugly_object *obj) ;
+ugly_value *java_call_helper_function(ugly_context *ctx, ugly_runtime *rt, const char *func,
+	int nb_args, ugly_value **args) ;
+ugly_value *java_call_helper_function_v(ugly_context *ctx, ugly_runtime *rt, const char *func, 
+	int nb_args, ...) ;
 
 
 #endif

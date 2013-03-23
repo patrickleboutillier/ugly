@@ -28,7 +28,7 @@ public class UglyContext {
 		ptr = ctx ;
 	}
 
-	static public UglyContext warp(Pointer ctx){
+	static public UglyContext wrap(Pointer ctx){
 		UglyContext c = new UglyContext(ctx) ;
 		return c ;
 	}

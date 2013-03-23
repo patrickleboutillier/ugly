@@ -19,7 +19,10 @@ static ugly_java_runtime *init_jrt(ugly_context *ctx, JavaVM *jvm, JNIEnv *env){
 	jclass pointer = load_class(ctx, env, "com/sun/jna/Pointer") ;
 	RETURN_NULL_IF_NULL(pointer) ;
 	jmethodID pointer_new = get_method(ctx, env, "com/sun/jna/Pointer", pointer,
-		"<init>", "(J)Lcom/sun/jna/Pointer;") ;
+		"<init>", "(J)V") ;
+	RETURN_NULL_IF_NULL(pointer_new) ;
+	jmethodID pointer_nativevalue = get_static_method(ctx, env, "com/sun/jna/Pointer", pointer,
+		"nativeValue", "(Lcom/sun/jna/Pointer;)J") ;
 	RETURN_NULL_IF_NULL(pointer_new) ;
 
 	jclass context = load_class(ctx, env, "ugly/UglyContext") ;
@@ -39,12 +42,15 @@ static ugly_java_runtime *init_jrt(ugly_context *ctx, JavaVM *jvm, JNIEnv *env){
 	jmethodID value_wrap = get_static_method(ctx, env, "ugly/UglyValue", value,
 		"wrap", "(Lcom/sun/jna/Pointer;)Lugly/UglyValue;") ;
 	RETURN_NULL_IF_NULL(value_wrap) ;
+	jmethodID value_getptr = get_method(ctx, env, "ugly/UglyValue", value,
+		"getPtr", "()Lcom/sun/jna/Pointer;") ;
+	RETURN_NULL_IF_NULL(value_wrap) ;
 
 	jclass helper = load_class(ctx, env, "ugly/helper") ;
-	RETURN_NULL_IF_NULL(value) ;
-	jmethodID helper_dispatch = get_static_method(ctx, env, "ugly/helper", value,
-		"dispatch", "(Lugly/UglyContext;Lugly/UglyRuntime;[Lugly/UglyValue;)Lugly/UglyValue;") ;
-	RETURN_NULL_IF_NULL(value_wrap) ;
+	RETURN_NULL_IF_NULL(helper) ;
+	jmethodID helper_dispatch = get_static_method(ctx, env, "ugly/helper", helper,
+		"dispatch", "(Lugly/UglyContext;Lugly/UglyRuntime;Ljava/lang/String;[Lugly/UglyValue;)Lugly/UglyValue;") ;
+	RETURN_NULL_IF_NULL(helper_dispatch) ;
 
 
 	ugly_java_runtime *jrt = UGLY_CALLOC(ugly_java_runtime) ;
@@ -53,12 +59,16 @@ static ugly_java_runtime *init_jrt(ugly_context *ctx, JavaVM *jvm, JNIEnv *env){
 	jrt->class_getName = class_getName ;
 	jrt->throwable = throwable ;
 	jrt->throwable_getMessage = throwable_getMessage ;
+	jrt->pointer = pointer ;
+	jrt->pointer_new = pointer_new ;
+	jrt->pointer_nativevalue = pointer_nativevalue ;
 	jrt->context = context ;
 	jrt->context_wrap = context_wrap ;
 	jrt->runtime = runtime ;
-	jrt->runtime_wrap = runtime_wrap ;
+	jrt->runtime_wrap = runtime_wrap ; 
 	jrt->value = value ;
 	jrt->value_wrap = value_wrap ;
+	jrt->value_getptr = value_getptr ;
 	jrt->helper = helper ;
 	jrt->helper_dispatch = helper_dispatch ;
 
@@ -103,6 +113,14 @@ void _ugly_java_runtime_load_library(ugly_context *ctx, ugly_runtime *rt, const 
 
 ugly_value *_ugly_java_runtime_call_function(ugly_context *ctx, ugly_runtime *rt, ugly_type rtype, 
 	const char *func, ugly_value **args, int nb_args, const char *hint){
+	ugly_debug(3, "Calling java function ugly.helper.call_function") ;
+
+	ugly_value *ret = java_call_helper_function(ctx, rt, func,
+	    nb_args, args) ;
+
+	ugly_debug(3, "Called java function ugly.helper.call_function") ;
+	ugly_debug(3, "%s", ugly_value_to_string(ret)) ;
+	return ret ;
 }
 
 

@@ -2,7 +2,7 @@ package ugly ;
 
 
 public class Ugly { 
-	private static int debug = 0 ;
+	private static int debug = 3 ;
 
 
 	public synchronized static void setDebugLevel(int d){

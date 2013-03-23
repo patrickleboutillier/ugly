@@ -58,6 +58,10 @@ public class UglyValue {
 		return v ;
 	}
 
+	public Pointer getPtr(){
+		return ptr ;
+	}
+
 	public UglyType getType(){
 		int t = ugly_value_get_type(this.ptr) ;
 		return UglyType.wrap(t) ;
@@ -82,6 +86,10 @@ public class UglyValue {
 
 	public String getString(){
 		return ugly_value_get_string(this.ptr) ;
+	}
+
+	public String toString(){
+		return ugly_value_to_string(this.ptr) ;
 	}
 
 	public void delete(){
