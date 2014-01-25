@@ -128,7 +128,7 @@ ugly_value *_ugly_java_runtime_call_function(ugly_context *ctx, ugly_runtime *rt
 	ugly_value *ret = java_call_helper_function(ctx, rt, "call_function",
 	    nb_args + extra, new_args) ;
 
-	for (i = 0 ; i < extra ; i++){
+	for (i = 0 ; i < nb_args + extra ; i++){
 		ugly_value_delete(new_args[i]) ;
 	}
 	free(new_args) ;

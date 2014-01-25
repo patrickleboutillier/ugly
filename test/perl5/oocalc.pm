@@ -8,13 +8,12 @@ sub new {
 	my $this = {} ;
 
 	bless($this, $class) ;
-	warn "$class" ;
 	return $this ;
 }
 
 
 sub DESTROY {
-	warn "DESTROY!" ;
+	# warn "DESTROY!" ;
 }
 
 

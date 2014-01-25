@@ -27,12 +27,13 @@ else
 	TESTS=t/*.t
 fi
 
-if [ -n "UGLY_TEST_NO_HARNESS" ] ; then
+if [ -n "$UGLY_TEST_NO_HARNESS" ] ; then
 	for t in $TESTS ; do
 		./test $t
 		rc=$?
 		[ "$rc" != "0" ] && exit $rc
 	done
+	exit 0
 else
 	export UGLY_TEST_UNDER_HARNESS=1
 	perl -e "use Test::Harness qw(&runtests \$verbose); \$verbose='1'; runtests @ARGV;" $TESTS

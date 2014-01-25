@@ -1,6 +1,7 @@
 package ugly ;
 
 import ugly.* ;
+import java.util.Arrays ;
 
 
 class helper {
@@ -29,6 +30,10 @@ class helper {
 
 	static UglyValue call_function(UglyContext ctx, UglyRuntime rt, UglyType rtype, String func, 
 		Object args[]){
+		Ugly.debug(3, "-> Ugly::java::call_function: (" + rtype.toString() + ")" + func + "(" +
+			Arrays.toString(args) + ")") ;
+
+		Ugly.debug(3, "<- Ugly::java::call_function") ;
 		return new UglyValue(6) ;
 	}
 
