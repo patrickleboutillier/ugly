@@ -1,0 +1,4 @@
+git status
+git commit: commit changes locally
+git push origin master: push changes to github
+
