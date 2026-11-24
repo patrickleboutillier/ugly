@@ -61,7 +61,7 @@ int main(void){
 	/* The same, through two runtimes: list -> rt2 -> rt1 -> back. */
 	ugly_rt *rt2 ;
 	ugly_handle mod2 ;
-	if (fx_runtime(&f, &rt2, &mod2)){
+	if (fx_second(&f, &rt2, &mod2, "through two runtimes")){
 		ugly_val echo2 ;
 		ugly_get_member(ctx, mod2, "echo", UGLY_HANDLE, &echo2) ;
 		ugly_val args[] = { echo2, ugly_hval(l) } ;

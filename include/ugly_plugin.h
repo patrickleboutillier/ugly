@@ -1,5 +1,5 @@
 /*
- * UGLY v2 plugin contract: approved 2026-11-24. See doc/v2/contract.md.
+ * UGLY v2 plugin contract: approved 2026-11-24. See doc/contract.md.
  *
  * A plugin is ugly_<lang>.so exporting one symbol:
  *

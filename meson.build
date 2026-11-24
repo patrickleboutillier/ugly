@@ -39,6 +39,7 @@ v2_test_plugins = ['mock']     # the conformance suite runs against each of thes
 subdir('src')
 subdir('plugins/mock')
 subdir('plugins/lua')
+subdir('plugins/python')
 subdir('tests')
 
 # v1 (frozen; the reference is tag v0.02): built and tested, but not
@@ -65,7 +66,8 @@ subdir('test')
 # process). The tests therefore delete everything they create.
 #
 # --keep-debuginfo keeps stack traces readable for plugins that have been
-# dlclose()d. The v1 Perl binding tests are left out: running perl itself
+# dlclose()d. tests/valgrind.supp suppresses only CPython's live objects
+# reported as "possibly lost" (Python is never finalized); see that file. The v1 Perl binding tests are left out: running perl itself
 # under valgrind is mostly noise about perl.
 valgrind = find_program('valgrind', required: false)
 if valgrind.found()
@@ -77,6 +79,7 @@ if valgrind.found()
       '--track-origins=yes',
       '--num-callers=30',
       '--keep-debuginfo=yes',
+      '--suppressions=' + (meson.project_source_root() / 'tests' / 'valgrind.supp'),
     ],
     exclude_suites: ['perl'],
     timeout_multiplier: 10,

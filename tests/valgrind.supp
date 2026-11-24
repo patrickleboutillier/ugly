@@ -1,0 +1,17 @@
+# Valgrind suppressions for the test setup (meson test --setup valgrind).
+#
+# CPython is initialized once per process and never finalized (see
+# plugins/python/python.c), so its live objects are still allocated at exit.
+# Its GC-tracked objects are reached through tagged/offset pointers in the
+# collector's lists, so memcheck reports them as "possibly lost". Only that
+# kind is suppressed: memory errors and definite or indirect leaks still fail,
+# in the Python plugin as everywhere else. (Valgrind can't tell a refcount
+# leak in the plugin from Python's own live objects; the conformance suite's
+# finalized() checks cover that instead.)
+{
+   cpython-live-objects-possibly-lost
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   obj:*/libpython3*.so*
+}

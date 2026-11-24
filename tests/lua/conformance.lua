@@ -1,4 +1,4 @@
--- The conformance fixtures (doc/v2/contract.md section 9), in Lua.
+-- The conformance fixtures (doc/contract.md section 9), in Lua.
 --
 -- Type names the suite checks (describe) come from each metatable's __name:
 -- module, counter, list, class, point. Exceptions are ConformanceError.

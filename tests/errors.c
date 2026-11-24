@@ -90,7 +90,7 @@ int main(void){
 	/* Across three runtimes: rt1 -> C -> rt2, which raises. */
 	ugly_rt *rt2 ;
 	ugly_handle mod2 ;
-	if (fx_runtime(&f, &rt2, &mod2)){
+	if (fx_second(&f, &rt2, &mod2, "across three runtimes")){
 		ugly_val t ;
 		ugly_get_member(ctx, mod2, "raise_error", UGLY_HANDLE, &t) ;
 		raise2 = t.as.h ;

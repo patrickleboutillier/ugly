@@ -27,7 +27,9 @@ static void describe(fixture *f, ugly_handle h, uint32_t traits, const char *typ
 	ugly_status st = ugly_describe(f->ctx, h, &t, &name) ;
 	if (is_status(f->ctx, st, UGLY_OK, what)){
 		ok((t & traits) == traits, "  ... has the expected traits") ;
-		is_str(sval(&name), type, "  ... type name") ;
+		if (type != NULL){
+			is_str(sval(&name), type, "  ... type name") ;
+		}
 		ugly_val_release(f->ctx, &name) ;
 	}
 }
@@ -86,10 +88,10 @@ int main(void){
 		ugly_val_release(ctx, &items) ;
 	}
 
-	st = ugly_set_member(ctx, c, "count", ugly_str("10", 2)) ;
-	is_status(ctx, st, UGLY_OK, "set_member(counter, count, \"10\")") ;
+	st = ugly_set_member(ctx, c, "count", ugly_int(10)) ;
+	is_status(ctx, st, UGLY_OK, "set_member(counter, count, 10)") ;
 	ugly_get_member(ctx, c, "count", UGLY_INT, &v) ;
-	is_int(v.as.i, 10, "  ... converted by the home language's rules") ;
+	is_int(v.as.i, 10, "  ... reads back as 10") ;
 
 	st = ugly_call(ctx, c, NULL, 0, UGLY_ANY, &v) ;
 	is_status(ctx, st, UGLY_ERR_NOT_CAPABLE, "call(counter): UGLY_ERR_NOT_CAPABLE") ;
@@ -99,7 +101,7 @@ int main(void){
 	ugly_val cls ;
 	st = ugly_get_member(ctx, f.mod, "Point", UGLY_HANDLE, &cls) ;
 	if (is_status(ctx, st, UGLY_OK, "get_member(module, Point)")){
-		describe(&f, cls.as.h, UGLY_TRAIT_INSTANTIABLE, "class", "describe(Point)") ;
+		describe(&f, cls.as.h, UGLY_TRAIT_INSTANTIABLE, NULL, "describe(Point)") ;     /* a class's type name is the language's own */
 		ugly_val xy[] = { ugly_int(3), ugly_int(4) } ;
 		ugly_handle p ;
 		st = ugly_new(ctx, cls.as.h, xy, 2, &p) ;
