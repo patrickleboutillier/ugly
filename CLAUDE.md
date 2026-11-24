@@ -27,6 +27,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Perl XS binding**: no MakeMaker. `xsubpp` generates `Ugly.c` (`lib/perl5/meson.build`), and `lib/perl5/auto/Ugly/meson.build` builds it, so the module lands at `build/lib/perl5/auto/Ugly/Ugly.so`, where XSLoader finds it through `@INC`. Install goes to `$Config{installsitearch}`, which the `perl_installdir` option overrides.
 - **Build:** Meson (≥ 0.61) and Ninja: `meson setup build && meson compile -C build`. Builds are out-of-tree. It uses `-Wall` (`warning_level=1`) and is warning-free. `gen_iface.sh <path to ugly_api.h>` is a `custom_target`. Linking the Perl plugin needs `libperl-dev`. `UGLY_DEBUG=<n>` turns on debug tracing.
 - **Tag `v0.01`**: the original 2013–2014 state, including the Java plugin (`lang/java`), the JNA binding (`lib/java`) and `test/java`.
+- **Tag `v0.02`** (annotated): the **v1 reference**. The Perl 5 plugin is frozen against the original contract, with the Meson build. Both tags are pushed.
 
 ## Current state (assessed 2026-11-24)
 
@@ -47,8 +48,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## Where we left off (2026-11-24)
 
-- **`master`** (pushed, 2026-11-24) holds the revival up to the v1 cleanup (`76a1266`): Java removal, the TAP test suite and fixes, docs, check-valgrind, teardown and cleanup. That commit is the **v1 reference point**. A tag name for it is still to be decided (`v0.02` or `v1-reference`). Tag `v0.01` is local only.
-- **Branch `meson-build`** (from `76a1266`): the build was ported from autotools to Meson. Autotools, all its generated files, MakeMaker and the GNU boilerplate files are gone, with no dual build.
+- **`master`** (pushed, 2026-11-24) holds the whole revival: Java removal, the TAP test suite and fixes, docs, teardown, the v1 cleanup, the Meson port (which also removed `doc/git.howto`, at the author's request), and version 0.02. The head is tagged **`v0.02`**, the v1 reference. The branches `revive-docs-and-tests` and `meson-build` are fully merged.
 - **The valgrind setup** (`add_test_setup('valgrind', ...)` in `test/meson.build`) runs only the C suite (`exclude_suites: ['perl']`), directly with no libtool wrappers.
   - A test fails on any memory error or any definite, indirect or possible leak. Still-reachable memory is allowed.
   - Checked with an injected heap overread and an injected leak: both show as ERROR (exit status 99).
@@ -88,5 +88,5 @@ Inline::Java solved most of these for the Perl↔Java pair. The open problem is 
    - Plugin order: Lua first (contract problems show up undisguised), then embedded CPython (GIL and reentrancy), then QuickJS. Perl is ported last, as the neutrality stress test.
    - Use Panama FFM instead of JNI/JNA if Java returns. Creating the JVM still needs the JNI invocation API.
    - Make callbacks, ownership rules and structured errors first-class in `ugly_value` and the API from day one.
-   - Build: Meson (done on 2026-11-24, branch `meson-build`).
+   - Build: Meson (done on 2026-11-24).
    - Each new plugin must pass the existing suite (`UGLY_TEST_LANG=<lang> meson test -C build`). That suite is the start of the conformance tests.
