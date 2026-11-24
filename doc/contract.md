@@ -477,3 +477,7 @@ All of them are in the headers and covered by the conformance suite.
    Milestone: `python3 script.py` uses a Lua module, and `lua script.lua`
    uses a Python one, with no C host.
 6. Then QuickJS, then port Perl.
+
+v1 (the 2013 contract, its Perl plugin and XS binding) was removed from the
+tree on 2026-11-24, once v2 had two real languages calling each other. It is
+kept in tag `v0.02`, and the Perl port starts from there.

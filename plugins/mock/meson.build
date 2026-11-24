@@ -4,9 +4,9 @@
 ugly_mock = shared_module('ugly_mock',
   'mock.c',
   name_prefix: '',
-  dependencies: [ugly2_dep, libm2],
+  dependencies: [ugly_dep, libm],
   install: false,
 )
 
-v2_plugins += ugly_mock
-v2_plugin_dirs += meson.current_build_dir()
+plugins += ugly_mock
+plugin_dirs += meson.current_build_dir()
