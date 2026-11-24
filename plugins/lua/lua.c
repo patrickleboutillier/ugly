@@ -34,18 +34,23 @@
 #define REF(p) ((int)(intptr_t)(p))
 #define PTR(r) ((void *)(intptr_t)(r))
 
+#define RT_KEY "ugly.rt"
+
 typedef struct lrt {
-	lua_State *L ;
+	lua_State *L ;       /* the main state */
 	ugly_rt *urt ;
+	int owns ;           /* created by rt_new (closed on delete), not attached */
 } lrt ;
 
 typedef struct { ugly_handle h ; } proxy ;
 typedef struct { ugly_error *err ; } errbox ;
 
 
+/* The runtime a state (or one of its coroutines) belongs to, from the registry. */
 static lrt *R(lua_State *L){
-	lrt *r ;
-	memcpy(&r, lua_getextraspace(L), sizeof(r)) ;
+	lua_getfield(L, LUA_REGISTRYINDEX, RT_KEY) ;
+	lrt *r = lua_touserdata(L, -1) ;
+	lua_pop(L, 1) ;
 	return r ;
 }
 
@@ -97,8 +102,7 @@ static ugly_status type_error(ugly_ctx *ctx, lrt *r, const char *what, int idx){
 
 
 /* Exports the Lua value at idx as an owned handle (unwrapping our proxies). */
-static ugly_status export(ugly_ctx *ctx, lrt *r, int idx, ugly_handle *out){
-	lua_State *L = r->L ;
+static ugly_status export(ugly_ctx *ctx, lrt *r, lua_State *L, int idx, ugly_handle *out){
 	proxy *p = luaL_testudata(L, idx, PROXY_MT) ;
 	if (p != NULL){
 		return ugly_dup(ctx, p->h, out) ;
@@ -111,8 +115,7 @@ static ugly_status export(ugly_ctx *ctx, lrt *r, int idx, ugly_handle *out){
 
 
 /* The Lua value at idx as a result of kind 'want', by Lua's own conversion rules. */
-static ugly_status to_val(ugly_ctx *ctx, lrt *r, int idx, ugly_kind want, ugly_val *out){
-	lua_State *L = r->L ;
+static ugly_status to_val(ugly_ctx *ctx, lrt *r, lua_State *L, int idx, ugly_kind want, ugly_val *out){
 	idx = lua_absindex(L, idx) ;
 	int t = lua_type(L, idx) ;
 	*out = ugly_null() ;
@@ -182,7 +185,7 @@ static ugly_status to_val(ugly_ctx *ctx, lrt *r, int idx, ugly_kind want, ugly_v
 				return type_error(ctx, r, "a handle", idx) ;
 			}
 			ugly_handle h ;
-			ugly_status st = export(ctx, r, idx, &h) ;
+			ugly_status st = export(ctx, r, L, idx, &h) ;
 			if (st == UGLY_OK){
 				*out = ugly_hval(h) ;
 			}
@@ -199,8 +202,7 @@ static ugly_status to_val(ugly_ctx *ctx, lrt *r, int idx, ugly_kind want, ugly_v
 /* ---------------------------------------------------------------- */
 
 /* Pushes a proxy for a foreign handle: one per value (cached), owning one reference. */
-static ugly_status push_proxy(ugly_ctx *ctx, lrt *r, ugly_handle borrowed){
-	lua_State *L = r->L ;
+static ugly_status push_proxy(ugly_ctx *ctx, lrt *r, lua_State *L, ugly_handle borrowed){
 	ugly_handle h ;
 	ugly_status st = ugly_dup(ctx, borrowed, &h) ;     /* the owned handle: the same id for the same value */
 	if (st != UGLY_OK){
@@ -225,8 +227,7 @@ static ugly_status push_proxy(ugly_ctx *ctx, lrt *r, ugly_handle borrowed){
 
 
 /* Pushes an argument (borrowed): our own values resolve to the original (rule 5), foreign ones get a proxy. */
-static ugly_status push_val(ugly_ctx *ctx, lrt *r, ugly_val v){
-	lua_State *L = r->L ;
+static ugly_status push_val(ugly_ctx *ctx, lrt *r, lua_State *L, ugly_val v){
 	switch (v.kind){
 		case UGLY_NULL: lua_pushnil(L) ; return UGLY_OK ;
 		case UGLY_BOOL: lua_pushboolean(L, v.as.b) ; return UGLY_OK ;
@@ -244,7 +245,7 @@ static ugly_status push_val(ugly_ctx *ctx, lrt *r, ugly_val v){
 				lua_rawgeti(L, LUA_REGISTRYINDEX, REF(ref)) ;
 				return UGLY_OK ;
 			}
-			return push_proxy(ctx, r, v.as.h) ;
+			return push_proxy(ctx, r, L, v.as.h) ;
 		}
 		default:
 			return UGLY_ERR_USAGE ;
@@ -256,14 +257,30 @@ static ugly_status push_val(ugly_ctx *ctx, lrt *r, ugly_val v){
 /* Errors at the boundary                                           */
 /* ---------------------------------------------------------------- */
 
-/* Raises the ctx's current error in Lua, as an ugly.error. Never returns. */
+/*
+ * Raises the ctx's current error in Lua. If its payload is one of our own
+ * values (a Lua error coming home), that original value is raised (rule 7);
+ * otherwise an ugly.error. Never returns.
+ */
 static int throw_ugly_error(lua_State *L, ugly_ctx *ctx, ugly_status st){
+	lrt *r = R(L) ;
 	if (ugly_last_error(ctx) == NULL){
 		/* A failure that recorded no error (e.g. a stale handle met while converting). */
-		ugly_fail(ctx, R(L)->urt, st, "Error", "operation failed") ;
+		ugly_fail(ctx, r->urt, st, "Error", "operation failed") ;
 	}
+	ugly_error *err = ugly_take_error(ctx) ;
+	ugly_handle payload = UGLY_NO_HANDLE ;
+	void *ref = NULL ;
+	if ((err != NULL)&&(ugly_error_payload(ctx, err, &payload) == UGLY_OK)&&(payload != UGLY_NO_HANDLE)
+		&&(ugly_resolve(ctx, r->urt, payload, &ref) == UGLY_OK)&&(ref != NULL)){
+		lua_rawgeti(L, LUA_REGISTRYINDEX, REF(ref)) ;
+		ugly_release(ctx, payload) ;
+		ugly_error_free(err) ;
+		return lua_error(L) ;
+	}
+	ugly_release(ctx, payload) ;
 	errbox *b = lua_newuserdatauv(L, sizeof(errbox), 0) ;
-	b->err = ugly_take_error(ctx) ;
+	b->err = err ;
 	luaL_setmetatable(L, ERROR_MT) ;
 	return lua_error(L) ;
 }
@@ -390,7 +407,7 @@ static int callable(lua_State *L, int idx){
 static int push_args(op *o){
 	size_t i ;
 	for (i = 0 ; i < o->nargs ; i++){
-		if ((o->st = push_val(o->ctx, o->r, o->args[i])) != UGLY_OK){
+		if ((o->st = push_val(o->ctx, o->r, o->r->L, o->args[i])) != UGLY_OK){
 			return 0 ;
 		}
 	}
@@ -415,12 +432,12 @@ static int op_body(lua_State *L){
 			if (! indexable(L, -1) && ! callable(L, -1)){
 				FAIL(o, UGLY_ERR_TYPE, "ImportError", "the module is not a table") ;
 			}
-			o->st = to_val(ctx, r, -1, UGLY_HANDLE, o->out) ;
+			o->st = to_val(ctx, r, L, -1, UGLY_HANDLE, o->out) ;
 			return 0 ;
 
 		case OP_GLOBALS:
 			lua_pushglobaltable(L) ;
-			o->st = to_val(ctx, r, -1, UGLY_HANDLE, o->out) ;
+			o->st = to_val(ctx, r, L, -1, UGLY_HANDLE, o->out) ;
 			return 0 ;
 
 		case OP_EVAL:
@@ -428,7 +445,7 @@ static int op_body(lua_State *L){
 				return lua_error(L) ;
 			}
 			lua_call(L, 0, 1) ;
-			o->st = to_val(ctx, r, -1, o->want, o->out) ;
+			o->st = to_val(ctx, r, L, -1, o->want, o->out) ;
 			return 0 ;
 
 		case OP_DESCRIBE: {
@@ -463,14 +480,14 @@ static int op_body(lua_State *L){
 			if (lua_getfield(L, 2, o->name) == LUA_TNIL){
 				FAIL(o, UGLY_ERR_NOT_FOUND, "KeyError", o->name) ;
 			}
-			o->st = to_val(ctx, r, -1, o->want, o->out) ;
+			o->st = to_val(ctx, r, L, -1, o->want, o->out) ;
 			return 0 ;
 
 		case OP_SET_MEMBER:
 			if (! indexable(L, 2)){
 				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
 			}
-			CHECK(o, push_val(ctx, r, o->v)) ;
+			CHECK(o, push_val(ctx, r, L, o->v)) ;
 			lua_setfield(L, 2, o->name) ;
 			return 0 ;
 
@@ -518,10 +535,10 @@ static int op_body(lua_State *L){
 			}
 			if (o->code == OP_GET_INDEX){
 				lua_geti(L, 2, (lua_Integer)o->index + 1) ;
-				o->st = to_val(ctx, r, -1, o->want, o->out) ;
+				o->st = to_val(ctx, r, L, -1, o->want, o->out) ;
 			}
 			else {
-				CHECK(o, push_val(ctx, r, o->v)) ;
+				CHECK(o, push_val(ctx, r, L, o->v)) ;
 				lua_seti(L, 2, (lua_Integer)o->index + 1) ;
 			}
 			return 0 ;
@@ -552,7 +569,7 @@ static int op_body(lua_State *L){
 				return 0 ;
 			}
 			lua_call(L, (int)o->nargs + (plain ? 0 : 1), 1) ;
-			o->st = to_val(ctx, r, -1, o->want, o->out) ;
+			o->st = to_val(ctx, r, L, -1, o->want, o->out) ;
 			return 0 ;
 		}
 
@@ -573,7 +590,7 @@ static int op_body(lua_State *L){
 			lua_call(L, (int)o->nargs, 1) ;
 			{
 				ugly_val v ;
-				o->st = to_val(ctx, r, -1, UGLY_HANDLE, &v) ;
+				o->st = to_val(ctx, r, L, -1, UGLY_HANDLE, &v) ;
 				if (o->st == UGLY_OK){
 					*o->hout = v.as.h ;
 				}
@@ -629,7 +646,7 @@ static ugly_ctx *need_ctx(lua_State *L){
 static int lua_args(lua_State *L, ugly_ctx *ctx, int from, ugly_val *args, int n, ugly_status *st){
 	int i ;
 	for (i = 0 ; i < n ; i++){
-		*st = to_val(ctx, R(L), from + i, UGLY_ANY, &args[i]) ;
+		*st = to_val(ctx, R(L), L, from + i, UGLY_ANY, &args[i]) ;
 		if (*st != UGLY_OK){
 			return i ;
 		}
@@ -653,7 +670,7 @@ static int finish(lua_State *L, ugly_ctx *ctx, ugly_status st, ugly_val *out){
 	if (st != UGLY_OK){
 		return throw_ugly_error(L, ctx, st) ;
 	}
-	st = push_val(ctx, R(L), *out) ;
+	st = push_val(ctx, R(L), L, *out) ;
 	ugly_val_release(ctx, out) ;
 	if (st != UGLY_OK){
 		return throw_ugly_error(L, ctx, st) ;
@@ -741,7 +758,7 @@ static int proxy_newindex(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
 	ugly_val v ;
-	ugly_status st = to_val(ctx, R(L), 3, UGLY_ANY, &v) ;
+	ugly_status st = to_val(ctx, R(L), L, 3, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){
 		if (lua_isinteger(L, 2)){
 			st = ugly_set_index(ctx, p->h, (int64_t)lua_tointeger(L, 2) - 1, v) ;
@@ -821,7 +838,7 @@ static int error_index(lua_State *L){
 			lua_pushnil(L) ;
 			return 1 ;
 		}
-		ugly_status st = push_val(ctx, R(L), ugly_hval(h)) ;
+		ugly_status st = push_val(ctx, R(L), L, ugly_hval(h)) ;
 		ugly_release(ctx, h) ;
 		if (st != UGLY_OK){
 			lua_pushnil(L) ;
@@ -858,20 +875,81 @@ static int error_gc(lua_State *L){
 /* The plugin                                                       */
 /* ---------------------------------------------------------------- */
 
-static ugly_status lua_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
-	lrt *r = calloc(1, sizeof(lrt)) ;
-	if (r == NULL){
-		return UGLY_ERR_NOMEM ;
+/* ---------------------------------------------------------------- */
+/* The in-language API: require "ugly"                              */
+/* ---------------------------------------------------------------- */
+
+/* The runtime of another language, for this thread (the core finds or makes it). */
+static ugly_rt *other(lua_State *L, ugly_ctx *ctx, const char *lang){
+	ugly_rt *rt ;
+	ugly_status st = ugly_rt_get(ctx, lang, &rt) ;
+	if (st != UGLY_OK){
+		throw_ugly_error(L, ctx, st) ;
 	}
-	lua_State *L = luaL_newstate() ;
-	if (L == NULL){
-		free(r) ;
-		return ugly_fail(ctx, rt, UGLY_ERR_NOMEM, "MemoryError", "can't create a Lua state") ;
+	return rt ;
+}
+
+
+/* ugly.module(lang, name): a module of any language; Lua's own come from require. */
+static int api_module(lua_State *L){
+	const char *lang = luaL_checkstring(L, 1) ;
+	const char *name = luaL_checkstring(L, 2) ;
+	if (strcmp(lang, "lua") == 0){
+		lua_getglobal(L, "require") ;
+		lua_pushvalue(L, 2) ;
+		lua_call(L, 1, 1) ;
+		return 1 ;
 	}
-	r->L = L ;
-	r->urt = rt ;
-	memcpy(lua_getextraspace(L), &r, sizeof(r)) ;
-	luaL_openlibs(L) ;
+	ugly_ctx *ctx = need_ctx(L) ;
+	ugly_rt *rt = other(L, ctx, lang) ;
+	ugly_handle h ;
+	ugly_status st = ugly_rt_import(ctx, rt, name, &h) ;
+	ugly_val v = ugly_hval(h) ;
+	return finish(L, ctx, st, &v) ;
+}
+
+
+/* ugly.eval(lang, code): the value of code in any language. */
+static int api_eval(lua_State *L){
+	const char *lang = luaL_checkstring(L, 1) ;
+	size_t len ;
+	const char *code = luaL_checklstring(L, 2, &len) ;
+	ugly_ctx *ctx = need_ctx(L) ;
+	ugly_rt *rt = other(L, ctx, lang) ;
+	ugly_val out = ugly_null() ;
+	ugly_status st = ugly_rt_eval(ctx, rt, code, len, UGLY_ANY, &out) ;
+	return finish(L, ctx, st, &out) ;
+}
+
+
+/* ugly.is_error(e): whether e is an error from another language (with .type, .message, .language, .payload). */
+static int api_is_error(lua_State *L){
+	lua_pushboolean(L, luaL_testudata(L, 1, ERROR_MT) != NULL) ;
+	return 1 ;
+}
+
+
+/* ugly.is_proxy(x): whether x is a value from another language. */
+static int api_is_proxy(lua_State *L){
+	lua_pushboolean(L, luaL_testudata(L, 1, PROXY_MT) != NULL) ;
+	return 1 ;
+}
+
+
+static const luaL_Reg api[] = {
+	{ "module", api_module }, { "eval", api_eval }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
+	{ NULL, NULL }
+} ;
+
+
+/* ---------------------------------------------------------------- */
+/* The plugin                                                       */
+/* ---------------------------------------------------------------- */
+
+/* What every runtime needs, created or attached: the registry entry, metatables, proxy cache, and the ugly module. */
+static void setup_state(lua_State *L, lrt *r){
+	lua_pushlightuserdata(L, r) ;
+	lua_setfield(L, LUA_REGISTRYINDEX, RT_KEY) ;
 
 	static const luaL_Reg proxy_mt[] = {
 		{ "__index", proxy_index }, { "__newindex", proxy_newindex }, { "__call", proxy_call },
@@ -897,6 +975,46 @@ static ugly_status lua_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 	lua_setmetatable(L, -2) ;
 	lua_setfield(L, LUA_REGISTRYINDEX, PROXY_CACHE) ;
 
+	/* require "ugly" finds the API already loaded. */
+	luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE) ;
+	luaL_newlib(L, api) ;
+	lua_setfield(L, -2, "ugly") ;
+	lua_pop(L, 1) ;
+}
+
+
+static ugly_status lua_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
+	lrt *r = calloc(1, sizeof(lrt)) ;
+	if (r == NULL){
+		return UGLY_ERR_NOMEM ;
+	}
+	lua_State *L = luaL_newstate() ;
+	if (L == NULL){
+		free(r) ;
+		return ugly_fail(ctx, rt, UGLY_ERR_NOMEM, "MemoryError", "can't create a Lua state") ;
+	}
+	r->L = L ;
+	r->urt = rt ;
+	r->owns = 1 ;
+	luaL_openlibs(L) ;
+	setup_state(L, r) ;
+	*native = r ;
+	return UGLY_OK ;
+}
+
+
+/* An existing state: the host's own, when Lua is the host (the binding). */
+static ugly_status lua_rt_attach(ugly_ctx *ctx, ugly_rt *rt, void *existing, void **native){
+	(void)ctx ;
+	lrt *r = calloc(1, sizeof(lrt)) ;
+	if ((r == NULL)||(existing == NULL)){
+		free(r) ;
+		return (existing == NULL ? UGLY_ERR_USAGE : UGLY_ERR_NOMEM) ;
+	}
+	r->L = existing ;
+	r->urt = rt ;
+	r->owns = 0 ;
+	setup_state(r->L, r) ;
 	*native = r ;
 	return UGLY_OK ;
 }
@@ -905,7 +1023,14 @@ static ugly_status lua_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 static ugly_status lua_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 	(void)ctx ; (void)rt ;
 	lrt *r = native ;
-	lua_close(r->L) ;     /* runs __gc: proxies release their handles */
+	if (r->owns){
+		lua_close(r->L) ;     /* runs __gc: proxies release their handles */
+	}
+	else {
+		/* Detach: the host keeps its state; our entry points stop resolving it. */
+		lua_pushnil(r->L) ;
+		lua_setfield(r->L, LUA_REGISTRYINDEX, RT_KEY) ;
+	}
 	free(r) ;
 	return UGLY_OK ;
 }
@@ -1010,10 +1135,10 @@ static ugly_status lua_call_op(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly
 	}
 	size_t i ;
 	for (i = 0 ; (i < nargs)&&(st == UGLY_OK) ; i++){
-		st = push_val(ctx, r, args[i]) ;
+		st = push_val(ctx, r, L, args[i]) ;
 	}
 	if (st == UGLY_OK){
-		st = (lua_pcall(L, (int)nargs, 1, 0) != LUA_OK ? lua_failure(ctx, r) : to_val(ctx, r, -1, want, out)) ;
+		st = (lua_pcall(L, (int)nargs, 1, 0) != LUA_OK ? lua_failure(ctx, r) : to_val(ctx, r, L, -1, want, out)) ;
 	}
 	lua_settop(L, top) ;
 	return st ;
@@ -1052,9 +1177,10 @@ static void lua_release(ugly_rt *rt, void *ref){
 
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
-	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_RESTARTABLE | UGLY_CAP_EVAL,
+	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_RESTARTABLE | UGLY_CAP_EVAL | UGLY_CAP_ATTACH,
 	.name = "lua",
 	.rt_new = lua_rt_new,
+	.rt_attach = lua_rt_attach,
 	.rt_delete = lua_rt_delete,
 	.import = lua_import,
 	.globals = lua_globals,
@@ -1076,3 +1202,67 @@ static const ugly_plugin plugin = {
 const ugly_plugin *ugly_plugin_lua(void){
 	return &plugin ;
 }
+
+
+#ifdef UGLY_BINDING
+/* ---------------------------------------------------------------- */
+/* The binding: require "ugly" from a plain lua process             */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Built from this same file as ugly.so, without liblua: its Lua symbols come
+ * from the host interpreter. It registers this plugin as "lua" (loading
+ * ugly_lua.so would bring a second Lua into the process), attaches to the
+ * host's state, and returns the same ugly module embedded runtimes get.
+ * Everything it created is torn down by a __gc sentinel when the host closes
+ * its state.
+ */
+typedef struct { ugly_ctx *ctx ; ugly_lang *lang ; ugly_rt *rt ; int owns_ctx ; } binding ;
+
+static int binding_gc(lua_State *L){
+	binding *b = lua_touserdata(L, 1) ;
+	if (b->rt != NULL){
+		ugly_rt_delete(b->ctx, b->rt) ;
+		ugly_lang_unload(b->ctx, b->lang) ;
+		if (b->owns_ctx){
+			ugly_ctx_delete(b->ctx) ;     /* also deletes the runtimes ugly.module created */
+		}
+		b->rt = NULL ;
+	}
+	return 0 ;
+}
+
+
+int luaopen_ugly(lua_State *L){
+	lua_getfield(L, LUA_REGISTRYINDEX, RT_KEY) ;
+	int attached = ! lua_isnil(L, -1) ;
+	lua_pop(L, 1) ;
+	if (! attached){
+		binding *b = lua_newuserdatauv(L, sizeof(binding), 0) ;
+		memset(b, 0, sizeof(*b)) ;
+		b->ctx = ugly_current_ctx() ;
+		if (b->ctx == NULL){
+			if (ugly_ctx_new(&b->ctx) != UGLY_OK){
+				return luaL_error(L, "ugly: can't create a context") ;
+			}
+			b->owns_ctx = 1 ;
+		}
+		ugly_status st = ugly_lang_register(b->ctx, &plugin, &b->lang) ;
+		if (st == UGLY_OK){
+			st = ugly_rt_attach(b->ctx, b->lang, L, &b->rt) ;
+		}
+		if (st != UGLY_OK){
+			const ugly_error *e = ugly_last_error(b->ctx) ;
+			return luaL_error(L, "ugly: can't attach: %s", e ? ugly_error_message(e) : "?") ;
+		}
+		lua_newtable(L) ;
+		lua_pushcfunction(L, binding_gc) ;
+		lua_setfield(L, -2, "__gc") ;
+		lua_setmetatable(L, -2) ;
+		lua_setfield(L, LUA_REGISTRYINDEX, "ugly.binding") ;
+	}
+	luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE) ;
+	lua_getfield(L, -1, "ugly") ;
+	return 1 ;
+}
+#endif

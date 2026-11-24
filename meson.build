@@ -26,11 +26,15 @@ cc = meson.get_compiler('c')
 # tests/. Plugins are installed to, and searched for in, ugly_plugin_dir
 # (UGLY_PLUGIN_PATH overrides it at runtime). Each plugin's meson.build
 # appends its target to 'plugins', its build directory to 'plugin_dirs', and
-# its name to 'test_plugins' (the conformance suite runs against each).
+# its name to 'test_plugins' (the conformance suite runs against each). A
+# plugin with a binding (plugins/<lang>/binding/) adds it to 'bindings' and
+# 'binding_dirs'.
 ugly_plugin_dir = get_option('prefix') / get_option('libdir') / 'ugly' / 'plugins'
 plugins = []
 plugin_dirs = []
 test_plugins = ['mock']
+bindings = []          # each language's binding (ugly module), and its build directory
+binding_dirs = {}
 
 subdir('src')
 subdir('plugins/mock')

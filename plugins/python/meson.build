@@ -3,6 +3,7 @@
 python_dep = dependency('python3-embed', required: get_option('python'))
 
 if python_dep.found()
+  pyinst = import('python').find_installation('python3')
   ugly_python = shared_module('ugly_python',
     'python.c',
     name_prefix: '',
@@ -13,4 +14,5 @@ if python_dep.found()
   plugins += ugly_python
   plugin_dirs += meson.current_build_dir()
   test_plugins += 'python'
+  subdir('binding')
 endif

@@ -202,6 +202,16 @@ ugly_status ugly_rt_attach(ugly_ctx *ctx, ugly_lang *lang, void *native, ugly_rt
 ugly_status ugly_rt_delete(ugly_ctx *ctx, ugly_rt *rt) ;
 ugly_lang *ugly_rt_lang(const ugly_rt *rt) ;
 
+/*
+ * "The runtime of language 'name' for this thread": the oldest live runtime
+ * of it owned by this thread (whoever created it), or else a new one, which
+ * the ctx owns and deletes in ugly_ctx_delete (unloading the language if
+ * this call loaded it). What a binding's ugly.module(lang, name) uses.
+ */
+ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out) ;
+/* The oldest live runtime of lang owned by the calling thread, or NULL. */
+ugly_rt *ugly_rt_find(ugly_ctx *ctx, ugly_lang *lang) ;
+
 /* Loads a library/module ("calc", "os.path", "./x.js") and returns it as a handle. */
 ugly_status ugly_rt_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_handle *out) ;
 /* The runtime's global namespace (Lua _G, Python __main__, JS globalThis, Perl main::). */

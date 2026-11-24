@@ -50,3 +50,20 @@ foreach a : test_plugins
     endif
   endforeach
 endforeach
+
+# Bindings: plain python3 and lua processes using each other through "ugly"
+# (attach mode, no C host). Each runs a TAP script from tests/<lang>/.
+if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
+  env = environment(test_env_vars)
+  env.prepend('PYTHONPATH', binding_dirs['python'])
+  test('binding-python', pyinst, args: files('python' / 'test_binding.py'), protocol: 'tap', env: env,
+    suite: 'bindings', depends: plugins + bindings)
+
+  lua_exe = find_program('lua5.4', 'lua', required: false)
+  if lua_exe.found()
+    env = environment(test_env_vars)
+    env.set('LUA_CPATH', binding_dirs['lua'] / '?.so;;')
+    test('binding-lua', lua_exe, args: files('lua' / 'test_binding.lua'), protocol: 'tap', env: env,
+      suite: 'bindings', depends: plugins + bindings)
+  endif
+endif

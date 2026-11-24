@@ -17,7 +17,7 @@ static pthread_mutex_t langs_lock = PTHREAD_MUTEX_INITIALIZER ;
 static ugly_lang *langs ;
 
 /* The built-in "c" language: home of host callables, lists and maps. Never unloaded. */
-static ugly_lang c_lang = { NULL, "c", "", NULL, &ugly_c_plugin, 1, 0, 1 } ;
+static ugly_lang c_lang = { NULL, "c", "", NULL, &ugly_c_plugin, 1, 0, 1, NULL } ;
 
 
 ugly_lang *lang_builtin_c(void){
@@ -214,7 +214,9 @@ ugly_status ugly_lang_unload(ugly_ctx *ctx, ugly_lang *lang){
 			}
 		}
 		lang->plugin->term() ;
-		dlclose(lang->dl) ;
+		if (lang->dl != NULL){
+			dlclose(lang->dl) ;
+		}
 		free(lang->name) ;
 		free(lang->dir) ;
 		free(lang) ;
@@ -231,4 +233,119 @@ const char *ugly_lang_name(const ugly_lang *lang){
 
 uint32_t ugly_lang_caps(const ugly_lang *lang){
 	return lang->plugin->caps ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Runtimes per language                                            */
+/* ---------------------------------------------------------------- */
+
+void lang_add_rt(ugly_lang *lang, ugly_rt *rt){
+	pthread_mutex_lock(&langs_lock) ;
+	ugly_rt **p = &lang->rts ;          /* appended: the oldest runtime comes first */
+	while (*p != NULL){
+		p = &(*p)->lang_next ;
+	}
+	rt->lang_next = NULL ;
+	*p = rt ;
+	pthread_mutex_unlock(&langs_lock) ;
+}
+
+
+void lang_remove_rt(ugly_lang *lang, ugly_rt *rt){
+	pthread_mutex_lock(&langs_lock) ;
+	ugly_rt **p ;
+	for (p = &lang->rts ; *p != NULL ; p = &(*p)->lang_next){
+		if (*p == rt){
+			*p = rt->lang_next ;
+			break ;
+		}
+	}
+	pthread_mutex_unlock(&langs_lock) ;
+}
+
+
+ugly_rt *lang_find_rt_on_thread(ugly_lang *lang){
+	pthread_mutex_lock(&langs_lock) ;
+	ugly_rt *rt ;
+	for (rt = lang->rts ; rt != NULL ; rt = rt->lang_next){
+		if (on_thread(rt->thread)&&(! rt->dying)){
+			break ;
+		}
+	}
+	pthread_mutex_unlock(&langs_lock) ;
+	return rt ;
+}
+
+
+ugly_lang *lang_find(const char *name){
+	if (name == NULL){
+		return NULL ;
+	}
+	pthread_mutex_lock(&langs_lock) ;
+	ugly_lang *l ;
+	for (l = langs ; l != NULL ; l = l->next){
+		if ((l->loads > 0)&&(strcmp(l->name, name) == 0)){
+			break ;
+		}
+	}
+	pthread_mutex_unlock(&langs_lock) ;
+	return l ;
+}
+
+
+/*
+ * A binding registers its language: the plugin is compiled into the binding,
+ * which the host interpreter already loaded, so nothing is dlopen()ed (that
+ * could bring a second copy of the interpreter into the process).
+ */
+ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_lang **out){
+	ugly_status st = ctx_check(ctx) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	if ((plugin == NULL)||(out == NULL)||(plugin->abi != UGLY_PLUGIN_ABI)||(! valid_name(plugin->name))){
+		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_lang_register: invalid plugin") ;
+	}
+	*out = NULL ;
+	pthread_mutex_lock(&langs_lock) ;
+	ugly_lang *l ;
+	for (l = langs ; l != NULL ; l = l->next){
+		if (strcmp(l->name, plugin->name) == 0){
+			if (l->plugin != plugin){
+				pthread_mutex_unlock(&langs_lock) ;
+				return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "another plugin for %s is already loaded",
+					plugin->name) ;
+			}
+			l->loads++ ;
+			*out = l ;
+			pthread_mutex_unlock(&langs_lock) ;
+			return UGLY_OK ;
+		}
+	}
+	if (plugin->init != NULL){
+		st = plugin->init(ctx, "") ;
+		if (st != UGLY_OK){
+			pthread_mutex_unlock(&langs_lock) ;
+			if (ctx->error == NULL){
+				ctx_fail(ctx, st, plugin->name, "", "plugin initialization failed") ;
+			}
+			return st ;
+		}
+	}
+	l = calloc(1, sizeof(ugly_lang)) ;
+	if (l == NULL){
+		pthread_mutex_unlock(&langs_lock) ;
+		return ctx_fail(ctx, UGLY_ERR_NOMEM, "core", "", "out of memory") ;
+	}
+	l->name = xstrdup(plugin->name) ;
+	l->dir = xstrdup("") ;
+	l->plugin = plugin ;
+	l->loads = 1 ;
+	l->initialized = 1 ;
+	l->next = langs ;
+	langs = l ;
+	pthread_mutex_unlock(&langs_lock) ;
+	*out = l ;
+	return UGLY_OK ;
 }

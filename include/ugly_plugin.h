@@ -113,6 +113,16 @@ typedef struct ugly_plugin {
 /* Core services for plugins                                          */
 /* ------------------------------------------------------------------ */
 
+/*
+ * For a binding: registers a plugin compiled into the binding as language
+ * plugin->name, instead of loading ugly_<name>.so. The binding is already
+ * loaded into the host interpreter, and loading the plugin's .so could bring
+ * a second copy of that interpreter into the process. Afterwards
+ * ugly_lang_load(name) returns this language. UGLY_ERR_IN_USE if a different
+ * plugin is already loaded under that name.
+ */
+ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_lang **out) ;
+
 /* The calling thread's ctx, for native code (a proxy's __call) that wasn't handed one. NULL if none. */
 ugly_ctx *ugly_current_ctx(void) ;
 

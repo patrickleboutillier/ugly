@@ -76,6 +76,19 @@ static PyObject *raise_ugly(ugly_ctx *ctx, ugly_status st){
 		PyErr_SetString(PyExc_RuntimeError, "ugly: operation failed") ;
 		return NULL ;
 	}
+
+	/* A Python exception coming home (rule 7): raise the original object itself. */
+	ugly_handle home = UGLY_NO_HANDLE ;
+	void *ref = NULL ;
+	if ((URT() != NULL)&&(ugly_error_payload(ctx, err, &home) == UGLY_OK)&&(home != UGLY_NO_HANDLE)
+		&&(ugly_resolve(ctx, URT(), home, &ref) == UGLY_OK)&&(ref != NULL)&&(PyExceptionInstance_Check((PyObject *)ref))){
+		PyErr_SetObject((PyObject *)Py_TYPE((PyObject *)ref), (PyObject *)ref) ;
+		ugly_release(ctx, home) ;
+		ugly_error_free(err) ;
+		return NULL ;
+	}
+	ugly_release(ctx, home) ;
+
 	PyObject *exc = PyObject_CallFunction(ErrorType, "s", ugly_error_message(err)) ;
 	if (exc == NULL){
 		ugly_error_free(err) ;
@@ -734,7 +747,58 @@ static PyObject *mod_rethrow(PyObject *mod, PyObject *e){
 	return NULL ;
 }
 
+/* ugly.module(lang, name): a module of any language; Python's own come from import. */
+static PyObject *mod_module(PyObject *mod, PyObject *args){
+	(void)mod ;
+	const char *lang, *name ;
+	if (! PyArg_ParseTuple(args, "ss:module", &lang, &name)){
+		return NULL ;
+	}
+	if (strcmp(lang, "python") == 0){
+		return PyImport_ImportModule(name) ;
+	}
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	ugly_rt *rt ;
+	ugly_status st = ugly_rt_get(ctx, lang, &rt) ;
+	if (st != UGLY_OK){
+		return raise_ugly(ctx, st) ;
+	}
+	ugly_handle h ;
+	st = ugly_rt_import(ctx, rt, name, &h) ;
+	ugly_val v = ugly_hval(h) ;
+	return result(ctx, st, &v) ;
+}
+
+
+/* ugly.eval(lang, code): the value of code in any language. */
+static PyObject *mod_eval(PyObject *mod, PyObject *args){
+	(void)mod ;
+	const char *lang, *code ;
+	Py_ssize_t len ;
+	if (! PyArg_ParseTuple(args, "ss#:eval", &lang, &code, &len)){
+		return NULL ;
+	}
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	ugly_rt *rt ;
+	ugly_status st = ugly_rt_get(ctx, lang, &rt) ;
+	if (st != UGLY_OK){
+		return raise_ugly(ctx, st) ;
+	}
+	ugly_val out = ugly_null() ;
+	st = ugly_rt_eval(ctx, rt, code, (size_t)len, UGLY_ANY, &out) ;
+	return result(ctx, st, &out) ;
+}
+
+
 static PyMethodDef mod_methods[] = {
+	{ "module", mod_module, METH_VARARGS, "module(lang, name): a module of any language." },
+	{ "eval", mod_eval, METH_VARARGS, "eval(lang, code): the value of code in any language." },
 	{ "rethrow", mod_rethrow, METH_O, "Raise e again; a foreign exception object keeps its identity." },
 	{ NULL, NULL, 0, NULL }
 } ;
@@ -1111,6 +1175,30 @@ static ugly_status py_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 }
 
 
+/* The host's own Python, when Python is the host (the binding): its __main__ is the namespace. */
+static ugly_status py_rt_attach(ugly_ctx *ctx, ugly_rt *rt, void *existing, void **native){
+	(void)ctx ; (void)existing ;
+	pyrt *r = calloc(1, sizeof(pyrt)) ;
+	if (r == NULL){
+		return UGLY_ERR_NOMEM ;
+	}
+	r->urt = rt ;
+	ENTER ;
+	PyObject *main = PyImport_AddModule("__main__") ;     /* borrowed */
+	r->globals = (main != NULL ? PyModule_GetDict(main) : NULL) ;
+	Py_XINCREF(r->globals) ;
+	PyErr_Clear() ;
+	LEAVE ;
+	if (r->globals == NULL){
+		free(r) ;
+		return UGLY_ERR_INTERNAL ;
+	}
+	current_rt = r ;
+	*native = r ;
+	return UGLY_OK ;
+}
+
+
 static ugly_status py_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 	(void)ctx ; (void)rt ;
 	pyrt *r = native ;
@@ -1128,10 +1216,11 @@ static ugly_status py_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
-	.caps = UGLY_CAP_EVAL,
+	.caps = UGLY_CAP_EVAL | UGLY_CAP_ATTACH,
 	.name = "python",
 	.init = py_init,
 	.rt_new = py_rt_new,
+	.rt_attach = py_rt_attach,
 	.rt_delete = py_rt_delete,
 	.import = py_import,
 	.globals = py_globals,
@@ -1153,3 +1242,72 @@ static const ugly_plugin plugin = {
 const ugly_plugin *ugly_plugin_python(void){
 	return &plugin ;
 }
+
+
+#ifdef UGLY_BINDING
+/* ---------------------------------------------------------------- */
+/* The binding: import ugly from a plain python3 process            */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Built from this same file as the "ugly" extension module, without
+ * libpython: its Python symbols come from the host interpreter. It registers
+ * this plugin as "python" (loading ugly_python.so would bring a second
+ * CPython into the process), attaches to the host's interpreter, and returns
+ * the same ugly module embedded runtimes get. An atexit handler tears down
+ * everything it created.
+ */
+static ugly_ctx *b_ctx ;
+static ugly_lang *b_lang ;
+static ugly_rt *b_rt ;
+static int b_owns_ctx ;
+
+static PyObject *binding_teardown(PyObject *mod, PyObject *noargs){
+	(void)mod ; (void)noargs ;
+	if (b_rt != NULL){
+		ugly_rt_delete(b_ctx, b_rt) ;
+		ugly_lang_unload(b_ctx, b_lang) ;
+		if (b_owns_ctx){
+			ugly_ctx_delete(b_ctx) ;     /* also deletes the runtimes ugly.module created */
+		}
+		b_rt = NULL ;
+	}
+	Py_RETURN_NONE ;
+}
+
+static PyMethodDef teardown_def = { "_teardown", binding_teardown, METH_NOARGS, "Detach UGLY (run at exit)." } ;
+
+
+PyMODINIT_FUNC PyInit_ugly(void){
+	if (b_rt == NULL){
+		b_ctx = ugly_current_ctx() ;
+		if (b_ctx == NULL){
+			if (ugly_ctx_new(&b_ctx) != UGLY_OK){
+				PyErr_SetString(PyExc_ImportError, "ugly: can't create a context") ;
+				return NULL ;
+			}
+			b_owns_ctx = 1 ;
+		}
+		ugly_status st = ugly_lang_register(b_ctx, &plugin, &b_lang) ;
+		if (st == UGLY_OK){
+			st = ugly_rt_attach(b_ctx, b_lang, PyImport_AddModule("__main__"), &b_rt) ;
+		}
+		if (st != UGLY_OK){
+			const ugly_error *e = ugly_last_error(b_ctx) ;
+			PyErr_Format(PyExc_ImportError, "ugly: can't attach: %s", e ? ugly_error_message(e) : "?") ;
+			return NULL ;
+		}
+		PyObject *atexit = PyImport_ImportModule("atexit") ;
+		PyObject *f = PyCFunction_New(&teardown_def, NULL) ;
+		PyObject *r = ((atexit != NULL)&&(f != NULL) ? PyObject_CallMethod(atexit, "register", "O", f) : NULL) ;
+		Py_XDECREF(r) ;
+		Py_XDECREF(f) ;
+		Py_XDECREF(atexit) ;
+		if (r == NULL){
+			return NULL ;
+		}
+	}
+	Py_INCREF(ugly_module) ;
+	return ugly_module ;
+}
+#endif

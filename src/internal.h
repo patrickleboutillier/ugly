@@ -23,6 +23,10 @@ struct ugly_ctx {
 	frame *top ;                 /* innermost active call */
 	int depth ;                  /* active frames */
 	ugly_rt *host ;              /* home of this thread's C callables, lists and maps */
+
+	/* Runtimes ugly_rt_get created (deleted with the ctx), and whether it loaded their language. */
+	struct auto_rt { ugly_rt *rt ; ugly_lang *loaded ; } *autos ;
+	size_t nautos, autos_cap ;
 } ;
 
 struct ugly_error {
@@ -42,10 +46,12 @@ struct ugly_lang {
 	int loads ;                  /* outstanding ugly_lang_load calls */
 	int runtimes ;               /* live runtimes */
 	int initialized ;
+	ugly_rt *rts ;               /* live runtimes, linked through ugly_rt.lang_next (langs lock) */
 } ;
 
 struct ugly_rt {
 	ugly_lang *lang ;
+	struct ugly_rt *lang_next ;
 	void *native ;
 	pthread_t thread ;
 	int depth ;                  /* calls into this runtime in progress */
@@ -89,6 +95,10 @@ ugly_status after_call(ugly_ctx *ctx, ugly_rt *rt, ugly_status st, const char *o
 
 /* lang.c */
 ugly_lang *lang_builtin_c(void) ;
+void lang_add_rt(ugly_lang *lang, ugly_rt *rt) ;
+void lang_remove_rt(ugly_lang *lang, ugly_rt *rt) ;
+ugly_lang *lang_find(const char *name) ;
+ugly_rt *lang_find_rt_on_thread(ugly_lang *lang) ;     /* the oldest live runtime owned by this thread */     /* a loaded language, or NULL; no load is counted */
 
 /* host.c: the built-in "c" language (callables, lists, maps) */
 extern const ugly_plugin ugly_c_plugin ;
