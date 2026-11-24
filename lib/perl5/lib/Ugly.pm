@@ -43,6 +43,7 @@ use constant {
     INTERNAL_ERROR => 1,
     RUNTIME_ERROR => 2,
     LIBRARY_ERROR => 3,
+    IN_USE => 4,                # Can't delete: still owns live runtimes or objects
 } ;
 
 

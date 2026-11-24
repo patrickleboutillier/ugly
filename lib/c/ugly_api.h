@@ -49,6 +49,7 @@ const_char*					ugly_value_to_string		(ugly_value *val) ;
 ugly_language* 				ugly_language_init			(ugly_context *ctx, const char *name) ;
 const_char* 				ugly_language_get_name		(const ugly_language *lang) ;
 const_char* 				ugly_language_get_dir		(const ugly_language *lang) ;
+UGLY_IFACE void				ugly_language_delete		(ugly_context *ctx, ugly_language *lang) ;
 
 
 /* ugly_runtime api */
@@ -56,6 +57,7 @@ UGLY_IFACE_V ugly_runtime*	ugly_runtime_new			(ugly_context *ctx, ugly_language 
 const_char*					ugly_runtime_to_string 		(const ugly_runtime *rt) ;
 ugly_language*				ugly_runtime_get_language	(const ugly_runtime *rt) ;
 UGLY_IFACE void 			ugly_runtime_load_library	(ugly_context *ctx, ugly_runtime *rt, const char *lib) ;
+UGLY_IFACE void				ugly_runtime_delete			(ugly_context *ctx, ugly_runtime *rt) ;
 UGLY_IFACE ugly_value*		ugly_runtime_call_function	(ugly_context *ctx, ugly_runtime *rt, ugly_type rtype, const char *func, ugly_value **args, int nb_args, const char *hint) ;
 
 

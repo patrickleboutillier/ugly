@@ -42,10 +42,16 @@ ugly_value *args[] = { ugly_value_new_long(1), ugly_value_new_long(2) };
 ugly_value *v = ugly_object_call_method(ctx, o, UGLY_LONG, "add", args, 2, NULL);
 if (ugly_context_has_error(ctx))
     fprintf(stderr, "%s\n", ugly_context_get_error_msg(ctx));
-else
+else {
     printf("%ld\n", ugly_value_get_long(v));             /* 3 */
+    ugly_value_delete(v);
+}
 
+ugly_value_delete(args[0]);
+ugly_value_delete(args[1]);
 ugly_object_delete(ctx, o);
+ugly_runtime_delete(ctx, rt);                             /* UGLY_IN_USE while objects are alive */
+ugly_language_delete(ctx, lang);                          /* UGLY_IN_USE while runtimes are alive */
 ugly_context_delete(ctx);
 ```
 
@@ -90,7 +96,7 @@ The API follows three conventions:
 | Part | State |
 |---|---|
 | C core | Works. Contexts, values, language loading, runtimes and objects. |
-| Perl 5 plugin | Works end to end, including objects and several runtimes in one process. All 114 tests pass. |
+| Perl 5 plugin | Works end to end, including objects and several runtimes in one process. All 142 tests pass, and the C tests are clean under valgrind (no memory errors, no leaks). |
 | Perl binding (XS) | Context, value, language and runtime (`load_library`). No `call_function` or objects yet. |
 
 The Perl 5 code is frozen as the v1 reference. The next round of work starts
@@ -104,7 +110,6 @@ Known bugs and gaps:
 
 - Several debug and to-string helpers use static buffers, so they are not
   reentrant.
-- There is no `ugly_runtime_delete` and no language teardown, so runtimes leak.
 - The type system has no arrays, maps, bytes or null.
 - There are no callbacks, no cross-runtime ownership rules, no structured
   errors and no thread safety.
@@ -151,7 +156,14 @@ skips rather than failures, so the same suite can run against every plugin.
 make check UGLY_TEST_LANG=lua       # the same suite against another plugin
 make check TESTS=t/object           # one test
 UGLY_DEBUG=3 make check             # with trace output in the logs
+make check-valgrind                 # the C tests under valgrind
 ```
+
+`make check-valgrind` fails a test on any memory error and on any definite,
+indirect or possible leak, so the tests delete everything they create.
+Memory that is still reachable at exit is allowed, because a plugin may keep
+process-wide state for the life of the process. For example, perl can't be
+shut down and started again in one process.
 
 ## License
 

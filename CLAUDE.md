@@ -14,7 +14,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - `ugly_value`: a tagged union of BOOL, LONG, DOUBLE, CHAR, STRING and OBJECT. Every value crossing a language boundary goes through it.
   - `ugly_language`: loads the plugin `libugly_<lang>.so` with `dlopen` and calls `_ugly_<lang>_language_init` to get the plugin's interface vtable.
   - `ugly_runtime`, `ugly_object`: generic wrappers that dispatch through that vtable.
-- **`lang/<x>/`**: language **plugins**. Each embeds that language's interpreter or VM and implements: runtime_new, load_library, call_function, object_new, object_call_method, object_delete.
+- **`lang/<x>/`**: language **plugins**. Each embeds that language's interpreter or VM and implements: language_delete, runtime_new, runtime_delete, load_library, call_function, object_new, object_call_method, object_delete. The vtable is generated from the `UGLY_IFACE` lines in `ugly_api.h`, so a new `UGLY_IFACE` entry forces every plugin to implement it.
   - Each plugin has helper code in its own language (`helper/helper.pm`), loaded at runtime from `UGLY_LANGUAGE_DIR/<lang>`. That path is hardcoded to `/usr/lib/ugly`.
 - **`lib/<x>/`**: host-language **bindings**, so code in that language can drive the C API. Perl uses XS (`lib/perl5/Ugly.xs`).
 - **`test/`**: `make check` runs everything through automake's `tap-driver.sh`. That covers the C programs in `test/t/*.c` and the Perl binding's `lib/perl5/t/*.t`.
@@ -32,17 +32,18 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Perl 5 plugin** works end to end, including objects and two runtimes in one process. It is **frozen as the v1 reference**; don't extend it against the old contract. Bug fixes are fine.
   - Every entry into an embedded perl must save and restore `PERL_GET_CONTEXT` (`UGLY_PERL5_ENTER`/`LEAVE` in `ugly_perl5_priv.h`).
   - `perl_call_helper_function` mortalizes its arguments, so the object handle is passed with `SvREFCNT_inc`.
+  - An `ugly_object` owns exactly one reference to its perl RV (XS `Ugly::Object::wrap`), which `object_delete` releases. Until 2026-11-24, `wrap` took a second reference, so perl objects were never DESTROYed.
+  - `PERL_SYS_INIT3` runs once per process, only if `PL_curinterp` is NULL. A host perl (the binding) already owns that state. `PERL_SYS_TERM` is **never** called: after it, perl can't start again in the same process (`perl_alloc` exits with EBADF). So the perl `language_delete` is a no-op.
+- **Teardown rule (2026-11-24):** `ugly_runtime_delete` and `ugly_language_delete` refuse with `UGLY_IN_USE` while live objects or runtimes remain, and leave the target intact. The core counts these (`nb_objects`, `nb_runtimes` in `ugly_priv.h`). Deleting NULL is a no-op for language, runtime and object. Cascading deletes or a handle registry is left as a v2 ownership decision.
 - **Java has been removed** (2026-11-24). It was scaffolding against JDK 1.7 and survives in tag `v0.01`.
 - The Perl binding wraps context, value, language and runtime (`load_library` only).
-- As of 2026-11-24 everything builds without warnings on GCC/perl 5.34, and `make check` passes 114/114.
-- **Valgrind baseline (2026-11-24, by hand, valgrind 3.18, `PERL_DESTRUCT_LEVEL=2`):**
-  - There are **0 memory errors** in all 5 C tests: no invalid reads or writes, and no uninitialised values.
-  - `t/runtime` and `t/object` each report 183 "possibly lost" records, all inside libperl. They come from embedded interpreters that are never destroyed (there's no `ugly_runtime_delete`).
-  - `t/language` has 1 definite leak: the `ugly_language` struct (`language.c:53`), because there's no language teardown.
+- As of 2026-11-24 everything builds without warnings on GCC/perl 5.34, and `make check` passes 142/142.
+- **Valgrind (2026-11-24, valgrind 3.18):** `make check-valgrind` passes. There are 0 memory errors and 0 definite, indirect or possible leaks in all 5 C tests. About 7 KB is still reachable in `t/runtime` and `t/object`: perl's process-wide state, which is kept on purpose. This doesn't need `PERL_DESTRUCT_LEVEL`, because a MULTIPLICITY perl defaults to destruct level 1.
 
 ### Known bugs
 - `ugly_debug_args`, `ugly_type_to_string` and `ugly_runtime_to_string` use static buffers, so they aren't reentrant. `ugly_debug_args` can also overflow its buffer.
-- There's no `ugly_runtime_delete` and no language teardown, so runtimes leak.
+- `ugly_value_delete(NULL)` crashes, because it calls `ugly_value_to_string` first.
+- `ugly_object_wrap` is declared in `ugly_api.h` but never defined.
 
 ### Housekeeping
 - Stray `.svn` directory in `test/perl5/`.
@@ -51,12 +52,13 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## Where we left off (2026-11-24)
 
-- Work is on branch **`revive-docs-and-tests`**, in 4 commits: Java removal, test suite and fixes, regenerated autotools, docs. It is **not pushed and not merged** into `master`. Tag `v0.01` is local only.
-- **`make check-valgrind` exists (2026-11-24).**
-  - It reruns the 5 C tests only (not the Perl binding tests) under `$(LIBTOOL) --mode=execute $(VALGRIND)`, with `--error-exitcode=99 --errors-for-leak-kinds=none` and `PERL_DESTRUCT_LEVEL=2`. All 5 pass with 0 errors.
-  - It was checked against an injected heap overread: the test is reported as ERROR and make fails.
-  - It overwrites `test/t/*.log`. The summary goes to `test/test-suite-valgrind.log`. `VALGRIND` is optional in `configure.ac`.
-- **Next:** add `ugly_runtime_delete` (perl: `perl_destruct`/`perl_free` under `UGLY_PERL5_ENTER`) and `ugly_language_delete` (`dlclose`). Then drop `--errors-for-leak-kinds=none` from `VALGRIND_FLAGS` in `test/Makefile.am` so that leaks fail too.
+- Work is on branch **`revive-docs-and-tests`**: Java removal, the test suite and fixes, regenerated autotools, docs, `make check-valgrind`, and teardown. It is **not pushed and not merged** into `master`. Tag `v0.01` is local only.
+- **`make check-valgrind`** reruns the 5 C tests (not the Perl binding tests) under `$(LIBTOOL) --mode=execute $(VALGRIND)`.
+  - A test fails on any memory error or any definite, indirect or possible leak (`--errors-for-leak-kinds=definite,indirect,possible`). Still-reachable memory is allowed.
+  - This was checked with an injected heap overread and an injected leak. Both are reported as ERROR, and make fails.
+  - It uses `--keep-debuginfo=yes`, because plugins are `dlclose`d. It overwrites `test/t/*.log`, and the summary goes to `test/test-suite-valgrind.log`.
+- **Teardown is done** (`ugly_runtime_delete`, `ugly_language_delete`). The tests delete everything they create, and cover re-initializing a language in the same process.
+- **Next:** the housekeeping items and the remaining known bugs above. After that, decide whether to push or merge, and whether v2 starts.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.
@@ -84,7 +86,7 @@ Inline::Java solved most of these for the Perl↔Java pair. The open problem is 
 
 1. **Docs first (drafted 2026-11-24).**
    - `README.md` is the main README. `README` is a plain-text pointer that automake's GNU strictness requires.
-   - `doc/design-essay.md` is in the author's first-person voice. Its Inline::Java claims still need the author's verification.
+   - `doc/design-essay.md` is in the author's first-person voice. The author verified its Inline::Java claims on 2026-11-24.
 2. **Possibly later: a small, sharp v2** (not a broad product).
    - Keep the core architecture.
    - Plugin order: Lua first (contract problems show up undisguised), then embedded CPython (GIL and reentrancy), then QuickJS. Perl is ported last, as the neutrality stress test.

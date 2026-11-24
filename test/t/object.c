@@ -49,9 +49,29 @@ int main(void){
 		ok(v == NULL, "undefined method: no value returned") ;
 		has_error(ctx, UGLY_RUNTIME_ERROR, "undefined method: UGLY_RUNTIME_ERROR") ;
 
+		/* A runtime can't go while its objects are alive. */
+		ugly_runtime_delete(ctx, rt) ;
+		has_error(ctx, UGLY_IN_USE, "runtime with a live object: delete refused with UGLY_IN_USE") ;
+		check_add(ctx, o, 7, 8) ;
+
 		ugly_object_delete(ctx, o) ;
 		no_error(ctx, "object deleted") ;
+
+		/* Deleting the handle must release the foreign object, not just the wrapper. */
+		ugly_value *d = ugly_runtime_call_function(ctx, rt, UGLY_LONG, "oocalc::destroyed", NULL, 0, NULL) ;
+		if (no_error(ctx, "oocalc::destroyed() called")){
+			is_long(ugly_value_get_long(d), 1, "the foreign object was destroyed when its handle was deleted") ;
+			ugly_value_delete(d) ;
+		}
 	}
+
+	ugly_object_delete(ctx, NULL) ;
+	no_error(ctx, "deleting a NULL object is a no-op") ;
+
+	ugly_runtime_delete(ctx, rt) ;
+	no_error(ctx, "runtime deleted once its objects are gone") ;
+	ugly_language_delete(ctx, lang) ;
+	no_error(ctx, "language deleted") ;
 
 	ugly_context_delete(ctx) ;
 	return done_testing() ;

@@ -44,11 +44,15 @@ EXTRA_DIST = perl5/calc.pm perl5/oocalc.pm $(PERL_BINDING_TESTS)
 
 # make check-valgrind: rerun the C tests under valgrind (memcheck).
 #
-# Only memory errors (invalid reads/writes, uninitialised values) fail a test,
-# via valgrind's exit status. Leaks are reported in t/*.log but don't fail
-# yet: embedded interpreters are never destroyed because there is no
-# ugly_runtime_delete, and there is no language teardown either. Once those
-# exist, drop --errors-for-leak-kinds=none.
+# A test fails, via valgrind's exit status, on any memory error (invalid
+# reads/writes, uninitialised values) and on any definite, indirect or
+# possible leak. "Still reachable" memory is allowed: a plugin may keep
+# process-wide state that outlives every language handle (perl's
+# PERL_SYS_INIT3 state, which can't be torn down and re-created in the same
+# process). The tests therefore delete everything they create.
+#
+# --keep-debuginfo keeps stack traces readable for code in plugins that
+# ugly_language_delete has already dlclose()d.
 #
 # The Perl binding tests are left out: running perl itself under valgrind is
 # mostly noise about perl, not about UGLY.
@@ -58,16 +62,17 @@ EXTRA_DIST = perl5/calc.pm perl5/oocalc.pm $(PERL_BINDING_TESTS)
 VALGRIND_FLAGS = \
 	--error-exitcode=99 \
 	--leak-check=full \
-	--errors-for-leak-kinds=none \
+	--errors-for-leak-kinds=definite,indirect,possible \
 	--track-origins=yes \
-	--num-callers=30
+	--num-callers=30 \
+	--keep-debuginfo=yes
 
 check-valgrind:
 	@if test -z '$(VALGRIND)'; then \
 	  echo "check-valgrind: valgrind not found; install it and rerun configure" >&2; \
 	  exit 1; \
 	fi
-	PERL_DESTRUCT_LEVEL=2 $(MAKE) $(AM_MAKEFLAGS) check \
+	$(MAKE) $(AM_MAKEFLAGS) check \
 	  TESTS='$(C_TESTS)' \
 	  TEST_SUITE_LOG=test-suite-valgrind.log \
 	  LOG_COMPILER='$(LIBTOOL) --mode=execute $(VALGRIND) $(VALGRIND_FLAGS)'

@@ -419,8 +419,8 @@ wrap(pkg, ctx, rt, ref)
 		/* TODO: Make sure ref is a reference blessed SV sv_isobject , SvSTASH, HvNAME*/
 		if (sv_isobject(ref)){
 			class = HvNAME(SvSTASH(SvRV(ref))) ;
+			/* The ugly_object owns this one reference; ugly_object_delete releases it. */
 			copy = newSVsv(ref) ;
-			SvREFCNT_inc(copy) ;
 			RETVAL = ugly_object_alloc(rt, class, copy) ;
 		}
 		else {

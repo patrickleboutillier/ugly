@@ -34,6 +34,8 @@ void *_ugly_perl5_runtime_new(ugly_context *ctx, ugly_language *lang){
 		ugly_context_set_error(ctx, UGLY_LIBRARY_ERROR, "Can't load perl5 helper module %s/helper/helper.pm: %s",
 			dir, SvPV(ERRSV, n_a)) ;
 		free(buf) ;
+		perl_destruct(my_perl) ;
+		perl_free(my_perl) ;
 		UGLY_PERL5_LEAVE() ;
 		return NULL ;
 	}
@@ -74,3 +76,22 @@ ugly_value *_ugly_perl5_runtime_call_function(ugly_context *ctx, ugly_runtime *r
 }
 
 
+
+
+void _ugly_perl5_runtime_delete(ugly_context *ctx, ugly_runtime *rt){
+	PerlInterpreter *my_perl = (PerlInterpreter *)rt->handle ;
+	ugly_debug(3, "-> Perl runtime delete: %p", my_perl) ;
+
+	/* END blocks and DESTROY methods run here, so this interpreter must be current. */
+	UGLY_PERL5_ENTER(my_perl) ;
+	perl_destruct(my_perl) ;
+	perl_free(my_perl) ;
+	if (_ugly_perl5_saved == my_perl){
+		/* The caller was running in this interpreter: don't restore a freed one. */
+		PERL_SET_CONTEXT(NULL) ;
+	}
+	else {
+		UGLY_PERL5_LEAVE() ;
+	}
+	ugly_debug(3, "<- Perl runtime delete") ;
+}

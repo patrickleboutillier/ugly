@@ -14,6 +14,7 @@ enum _ugly_error {
 	UGLY_INTERNAL_ERROR,
 	UGLY_RUNTIME_ERROR,
 	UGLY_LIBRARY_ERROR,
+	UGLY_IN_USE,		/* Can't delete: it still owns live runtimes or objects */
 } ;
 typedef enum _ugly_error ugly_error ;
 

@@ -12,6 +12,9 @@ ugly_object *ugly_object_alloc(ugly_runtime* rt, const char *class, void *handle
 	o->class = strdup(class) ;
 	o->handle = handle ;
 	o->stringy = NULL ;
+	if (rt != NULL){
+		rt->nb_objects++ ;
+	}
 
 	return o ;
 }
@@ -85,11 +88,15 @@ ugly_value *ugly_object_call_method(ugly_context *ctx, ugly_object *obj, ugly_ty
 
 void ugly_object_delete(ugly_context *ctx, ugly_object *obj){
 	ugly_context_clear_error(ctx) ;
+	if (obj == NULL){
+		return ;
+	}
 
 	ugly_debug(2, "-> Object delete: %s", ugly_object_to_string(obj)) ;
 	const ugly_interface *iface = ugly_language_get_iface(obj->runtime->language) ;
 	iface->object_delete(ctx, obj) ;
 
+	obj->runtime->nb_objects-- ;
 	free(obj->class) ;
 	if (obj->stringy != NULL){
 		free(obj->stringy) ;

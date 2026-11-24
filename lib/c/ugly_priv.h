@@ -62,6 +62,7 @@ struct _ugly_language {
     char *name ;
     char *dir ;
     void *handle ;
+    int nb_runtimes ;		/* live runtimes: the language can't be deleted until 0 */
 
     ugly_interface *iface ;
 } ;
@@ -71,6 +72,7 @@ struct _ugly_language {
 struct _ugly_runtime {
     ugly_language *language ;
     void *handle ;
+    int nb_objects ;		/* live objects: the runtime can't be deleted until 0 */
 } ;
 
 

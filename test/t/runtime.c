@@ -106,6 +106,54 @@ int main(void){
 		}
 	}
 
+	/* Teardown: a language can't go while its runtimes are alive. */
+	ugly_language_delete(ctx, lang) ;
+	has_error(ctx, UGLY_IN_USE, "language with live runtimes: delete refused with UGLY_IN_USE") ;
+
+	ugly_runtime_delete(ctx, rt2) ;
+	no_error(ctx, "second runtime deleted") ;
+	{
+		/* Deleting one runtime leaves the other one working. */
+		ugly_value *args[] = { ugly_value_new_long(2), ugly_value_new_long(3) } ;
+		ugly_value *v = ugly_runtime_call_function(ctx, rt, UGLY_LONG, "calc::add", args, 2, NULL) ;
+		if (no_error(ctx, "first runtime still callable after the second was deleted")){
+			is_long(ugly_value_get_long(v), 5, "add(2, 3) == 5") ;
+			ugly_value_delete(v) ;
+		}
+		ugly_value_delete(args[0]) ;
+		ugly_value_delete(args[1]) ;
+	}
+	ugly_runtime_delete(ctx, rt) ;
+	no_error(ctx, "first runtime deleted") ;
+	ugly_runtime_delete(ctx, NULL) ;
+	no_error(ctx, "deleting a NULL runtime is a no-op") ;
+
+	ugly_language_delete(ctx, lang) ;
+	no_error(ctx, "language deleted once its runtimes are gone") ;
+
+	/* The whole cycle again in the same process: language, runtime, call, teardown. */
+	lang = ugly_language_init(ctx, name) ;
+	if (no_error(ctx, "language %s initialized again", name)){
+		rt = ugly_runtime_new(ctx, lang) ;
+		if (no_error(ctx, "runtime created in the re-initialized language")){
+			ugly_runtime_load_library(ctx, rt, "calc") ;
+			if (no_error(ctx, "library calc loaded again")){
+				ugly_value *args[] = { ugly_value_new_long(20), ugly_value_new_long(22) } ;
+				ugly_value *v = ugly_runtime_call_function(ctx, rt, UGLY_LONG, "calc::add", args, 2, NULL) ;
+				if (no_error(ctx, "calc::add(20, 22) called after re-initialization")){
+					is_long(ugly_value_get_long(v), 42, "add(20, 22) == 42") ;
+					ugly_value_delete(v) ;
+				}
+				ugly_value_delete(args[0]) ;
+				ugly_value_delete(args[1]) ;
+			}
+			ugly_runtime_delete(ctx, rt) ;
+			no_error(ctx, "runtime deleted again") ;
+		}
+		ugly_language_delete(ctx, lang) ;
+		no_error(ctx, "language deleted again") ;
+	}
+
 	ugly_context_delete(ctx) ;
 	return done_testing() ;
 }

@@ -12,8 +12,18 @@ sub new {
 }
 
 
+# Counts destroyed objects, so the tests can check that deleting an
+# ugly_object releases the perl object.
+our $destroyed = 0 ;
+
+
 sub DESTROY {
-	# warn "DESTROY!" ;
+	$destroyed++ ;
+}
+
+
+sub destroyed {
+	return $destroyed ;
 }
 
 
