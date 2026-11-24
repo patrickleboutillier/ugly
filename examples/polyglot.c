@@ -25,15 +25,13 @@ static int failed(ugly_ctx *ctx, ugly_status st, const char *what){
 
 int main(void){
 	ugly_ctx *ctx ;
-	ugly_lang *py, *lua ;
 	ugly_rt *prt, *lrt ;
 	if (ugly_ctx_new(&ctx) != UGLY_OK){
 		return 1 ;
 	}
-	if (failed(ctx, ugly_lang_load(ctx, "python", &py), "load python")
-		|| failed(ctx, ugly_lang_load(ctx, "lua", &lua), "load lua")
-		|| failed(ctx, ugly_rt_new(ctx, py, &prt), "python runtime")
-		|| failed(ctx, ugly_rt_new(ctx, lua, &lrt), "lua runtime")){
+	/* A runtime of each language; the ctx owns them, and deletes them with itself. */
+	if (failed(ctx, ugly_rt_get(ctx, "python", &prt), "python runtime")
+		|| failed(ctx, ugly_rt_get(ctx, "lua", &lrt), "lua runtime")){
 		return 1 ;
 	}
 
@@ -77,10 +75,6 @@ int main(void){
 	ugly_val_release(ctx, &show) ;
 	ugly_val_release(ctx, &sqrt) ;
 	ugly_release(ctx, math) ;
-	ugly_rt_delete(ctx, lrt) ;
-	ugly_rt_delete(ctx, prt) ;
-	ugly_lang_unload(ctx, lua) ;
-	ugly_lang_unload(ctx, py) ;
-	ugly_ctx_delete(ctx) ;
+	ugly_ctx_delete(ctx) ;     /* deletes both runtimes, and unloads both languages */
 	return good ? 0 : 1 ;
 }

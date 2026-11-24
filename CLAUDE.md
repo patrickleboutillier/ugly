@@ -39,7 +39,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - Meson registers each program once per plugin in `test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair of different plugins (suite `pairwise`, env `UGLY_TEST_PEER`).
   - Fixtures are each plugin's `conformance` module, in `tests/lua/` and `tests/python/` (the mock's are built in). The spec is in contract §9.
   - Expectations that depend on the language are "exact or refused". Tests that need a capability a plugin lacks report a SKIP; they never drop checks silently.
-- **`examples/`**: programs built and run as tests by exit status. `polyglot.c` has Lua call Python; README quotes it.
+- **`examples/`**: programs built and run as tests by exit status, which README quotes. `python_from_lua.lua` is a plain Lua script using Python's standard library through the binding (README's lead example). `polyglot.c` is a C host using `ugly_rt_get`.
 - **Binding tests** (suite `bindings`): `tests/python/test_binding.py` runs under the `python3` that Meson found, and `tests/lua/test_binding.lua` under `lua5.4`. Both are TAP, and the Lua one ends with `os.exit(code, true)`, so the state closes and the binding tears down.
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.

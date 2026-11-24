@@ -19,45 +19,48 @@ answers those open questions.
 
 ## What it looks like
 
-A Lua function calls Python's `math.sqrt`. Then Python raises, and the error
-crosses Lua back to C. This is
-[examples/polyglot.c](examples/polyglot.c), with error handling shortened;
-it is built and run by the test suite.
+A plain Lua script using Python's standard library. This is
+[examples/python_from_lua.lua](examples/python_from_lua.lua), which the
+test suite runs:
 
-```c
-#include <ugly.h>
+```lua
+local ugly = require "ugly"
+local python = function(name) return ugly.module("python", name) end
 
-ugly_ctx *ctx;            ugly_ctx_new(&ctx);
-ugly_lang *py, *lua;      ugly_lang_load(ctx, "python", &py);  ugly_lang_load(ctx, "lua", &lua);
-ugly_rt *prt, *lrt;       ugly_rt_new(ctx, py, &prt);          ugly_rt_new(ctx, lua, &lrt);
+local json, statistics = python "json", python "statistics"
+local functools, datetime = python "functools", python "datetime"
 
-ugly_handle math;         ugly_rt_import(ctx, prt, "math", &math);             /* a Python module */
-ugly_val sqrt;            ugly_get_member(ctx, math, "sqrt", UGLY_HANDLE, &sqrt);
+-- Python parses JSON; Lua reads the dict and the list it gives back.
+local data = json.loads('{"name": "ugly", "scores": [3, 1, 4, 1, 5]}')
+print(data.name, #data.scores, data.scores[1])     --> ugly    5    3
 
-const char *code = "return function(f, x) return 'sqrt(' .. x .. ') = ' .. f(x) end";
-ugly_val show;            ugly_rt_eval(ctx, lrt, code, strlen(code), UGLY_HANDLE, &show);  /* a Lua function */
+-- Python computes on its own list...
+print(statistics.mean(data.scores))                 --> 2.8
 
-ugly_val args[] = { sqrt, ugly_int(2) }, out;
-ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out);    /* Lua calls Python */
-puts(out.as.str.ptr);                                     /* sqrt(2) = 1.4142135623731 */
+-- ...and on a Lua table, calling back into a Lua function.
+print(functools.reduce(function(a, b) return a * b end, { 1, 2, 3, 4, 5 }))   --> 120
 
-args[1] = ugly_int(-1);
-if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
-    const ugly_error *e = ugly_last_error(ctx);           /* [python] ValueError: math domain error */
-    printf("[%s] %s: %s\n", ugly_error_language(e), ugly_error_type(e), ugly_error_message(e));
-}
+-- Python objects have methods.
+local day = datetime.date(2026, 11, 24)
+print(day:isoformat(), day.year)                    --> 2026-11-24    2026
+
+-- Python exceptions arrive as errors, with their type and message.
+local ok, err = pcall(json.loads, "{oops")
+print(ok, err.type)                                 --> false   JSONDecodeError
 ```
 
-Inside Lua, `f` is a proxy for the Python function. Inside Python, a Lua
-table or function is a proxy too. A value that travels back to its home
-language arrives as the original object, never as a proxy of a proxy.
+Inside Lua, a Python object is a proxy. Inside Python, a Lua table or
+function is a proxy too, which is how `functools.reduce` iterates the table
+and calls the function. A value that travels back to its home language
+arrives as the original object, never as a proxy of a proxy. Errors keep
+their identity too: an exception raised in Python that crosses Lua is caught
+in Python as the same object.
 
-### From Lua or Python, with no C at all
+### From Python
 
-The same works from a plain `python3` or `lua` program, through each
-language's `ugly` module. These lines come from the binding tests,
-[tests/python/test_binding.py](tests/python/test_binding.py) and
-[tests/lua/test_binding.lua](tests/lua/test_binding.lua):
+The other way round works the same, with `import ugly` in a plain `python3`
+program. These lines come from
+[tests/python/test_binding.py](tests/python/test_binding.py):
 
 ```python
 import ugly
@@ -67,28 +70,43 @@ string.upper("abc")                               # 'ABC'
 
 lua = ugly.module("lua", "conformance")
 lua.apply(lambda x: x * 2, 21)                    # 42: Lua calls a Python lambda
-try:
-    lua.apply(raiser, 1)                          # raiser raises `mine`, across Lua
-except Mine as e:
-    assert e is mine                              # and it comes back as itself
+c = lua.make_counter()                            # a Lua object
+c.inc(); c.count                                  # 1
 ```
 
-```lua
-local ugly = require "ugly"
+Code reached this way can use `ugly` too, and it reaches back into the
+host's own interpreter. For example, Lua called from that Python program
+can `require "ugly"` and use the program's own globals.
 
-local pymath = ugly.module("python", "math")      -- a Python module
-print(pymath.sqrt(2))                             -- 1.4142135623731
+### From C
 
-local py = ugly.module("python", "conformance")
-local c = py.make_counter()                       -- a Python object
-c:inc()                                           -- method calls work with : or .
-print(c.count, #c.items, c.items[1])              -- 1  1  1 (lists are 1-based in Lua)
-print(ugly.eval("python", "6 * 7"))               -- 42
+A C program can host any languages itself and pass values between them.
+[examples/polyglot.c](examples/polyglot.c) gives Python's `math.sqrt` to a
+Lua function, and gets Python's error back when it fails (error handling
+shortened here):
+
+```c
+#include <ugly.h>
+
+ugly_ctx *ctx;            ugly_ctx_new(&ctx);
+ugly_rt *prt, *lrt;       ugly_rt_get(ctx, "python", &prt);    ugly_rt_get(ctx, "lua", &lrt);
+
+ugly_handle math;         ugly_rt_import(ctx, prt, "math", &math);
+ugly_val sqrt;            ugly_get_member(ctx, math, "sqrt", UGLY_HANDLE, &sqrt);
+
+const char *code = "return function(f, x) return 'sqrt(' .. x .. ') = ' .. f(x) end";
+ugly_val show;            ugly_rt_eval(ctx, lrt, code, strlen(code), UGLY_HANDLE, &show);
+
+ugly_val args[] = { sqrt, ugly_int(2) }, out;
+ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out);    /* Lua calls Python */
+puts(out.as.str.ptr);                                     /* sqrt(2) = 1.4142135623731 */
+
+args[1] = ugly_int(-1);                                   /* Python raises, across Lua */
+if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
+    const ugly_error *e = ugly_last_error(ctx);           /* [python] ValueError: math domain error */
+    printf("[%s] %s: %s\n", ugly_error_language(e), ugly_error_type(e), ugly_error_message(e));
+}
 ```
-
-Code embedded this way can use `ugly` too, and it reaches back into the
-host's own interpreter. For example, Python called from that Lua script can
-`import ugly` and use the script's Lua globals.
 
 ## Concepts
 
@@ -120,7 +138,7 @@ host's own interpreter. For example, Python called from that Lua script can
 | `plugins/lua/` | Lua 5.4. `binding/` builds the same source as the Lua module `ugly`. |
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
-| `examples/` | Example programs, built and run as tests. |
+| `examples/` | Example programs (Lua using Python, and a C host), run as tests. |
 | `doc/` | The contract and the design essay. |
 
 ## Status
@@ -173,7 +191,8 @@ Every test is a TAP stream. The full output is in
 - **Bindings** (`tests/python/test_binding.py`, `tests/lua/test_binding.lua`):
   plain `python3` and `lua5.4` processes using each other through `ugly`,
   in attach mode.
-- **Examples** (`examples/`): run, and checked by exit status.
+- **Examples** (`examples/`): run, and checked by exit status. They're the
+  programs README quotes.
 
 ```sh
 meson test -C build --suite conformance-lua   # one plugin
