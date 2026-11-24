@@ -29,7 +29,14 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
     - Every entry does `PyGILState_Ensure`/`Release`.
     - The embedded `ugly` module holds `ugly.Proxy` (cached per handle via weakrefs), `ugly.Error` (`.type`, `.message`, `.language`, `.payload`, and an `_err` capsule that's restored unchanged when it escapes) and `ugly.rethrow`. It is the seed of the Python binding.
     - Conversions are Python's strict ones.
-  - Proxies in both languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
+  - **`js/`** is QuickJS, the language `"js"`, from the pinned wrap `subprojects/quickjs.wrap` (sha256-checked; `subprojects/packagefiles/quickjs/meson.build` builds the engine sources as a static PIC library, with `-w`).
+    - One JSRuntime plus JSContext per ugly runtime. Refs are boxed JSValues; identity is the object pointer.
+    - Proxies are two exotic classes (`proxy_class`, and `proxy_fn_class` with `call`), cached per owned handle in a C hash table that the finalizer clears.
+    - Numbers: integral within ±2^53 → INT, else DOUBLE; larger INTs go in as `BigInt`.
+    - Errors are `error_class` objects inheriting `Error.prototype`.
+    - Modules are ES modules from `UGLY_JS_PATH`, plus the built-in C module `"ugly"` (`module`, `eval`, `isError`, `isProxy`, `gc`).
+    - Jobs run when the outermost call returns (`enter`/`leave`). `JS_FreeRuntime` asserts that nothing is still referenced.
+  - Proxies in all three languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
   - **Bindings** (`plugins/<lang>/binding/`) compile the plugin's own source again with `-DUGLY_BINDING`, as the native module `ugly`: `luaopen_ugly`, and `PyInit_ugly` via `pyinst.extension_module`. They link **no interpreter library**, because Debian's `python3` and `lua5.4` are statically linked and a second interpreter in the process would be fatal.
     - On import, a binding calls `ugly_lang_register` (no dlopen) and `ugly_rt_attach` on the host interpreter. Teardown is a `__gc` sentinel in Lua and `atexit` in Python.
     - Every runtime, embedded or attached, preloads the same `ugly` module: `ugly.module(lang, name)` and `ugly.eval(lang, code)`, which use `ugly_rt_get`, plus `is_error`/`is_proxy` in Lua and `Error`/`Proxy`/`rethrow` in Python.
@@ -60,10 +67,10 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## State (2026-11-24)
 
-- **`master`**: the v2 core, plugins for the mock, Lua and CPython, bindings for Lua and Python, the conformance suite (24 runs: 8 groups × 3 plugins), pairwise (6 ordered pairs), the binding tests (2) and the polyglot example. 33 tests pass, clean under valgrind, and helgrind finds no races.
+- **`master`**: the v2 core, plugins for the mock, Lua, CPython and JS (QuickJS), bindings for Lua and Python, the conformance suite (32 runs: 8 groups × 4 plugins), pairwise (12 ordered pairs), the binding tests (2) and two examples. 48 tests pass, clean under valgrind, and helgrind finds no races.
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
-- **Next: QuickJS**, then the Perl port (see the notes above). See contract.md "Order of work".
+- **QuickJS is done** (2026-11-24). **Next: the Perl port** (see the notes above, and the open questions in TODO.md). See contract.md "Order of work".
 - **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
 
 ## Landscape (2026)

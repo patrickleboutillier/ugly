@@ -1,7 +1,8 @@
 # UGLY: Ultimate Glue LaYer
 
 UGLY is a C library for calling between programming languages **inside one
-process**. It embeds the real interpreters (currently Lua and CPython) and
+process**. It embeds the real interpreters (currently Lua, CPython and
+QuickJS) and
 routes every cross-language call through a small, language-neutral C core.
 
 The goal is to replace pairwise bridges with a hub. N languages need
@@ -137,18 +138,18 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 | `plugins/mock/` | A small language written in C, used to test the core and the contract before any real interpreter. |
 | `plugins/lua/` | Lua 5.4. `binding/` builds the same source as the Lua module `ugly`. |
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
+| `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs (Lua using Python, and a C host), run as tests. |
 | `doc/` | The contract and the design essay. |
 
 ## Status
 
-Lua and CPython pass the whole conformance suite and call each other in one
-process, both from a C host and from a plain `lua` or `python3` program.
-Next on the plan (in [doc/contract.md](doc/contract.md), "Order of work"):
-
-1. **QuickJS.**
-2. **Perl**, ported from the original plugin.
+Lua, CPython and JavaScript (QuickJS) pass the whole conformance suite, and
+every pair of them works in one process. Lua and Python also call each
+other from a plain `lua` or `python3` program. Next on the plan (in
+[doc/contract.md](doc/contract.md), "Order of work") is **Perl**, ported
+from the original plugin.
 
 Other ideas and open work, including embedding in hosts like HAProxy that
 have Lua built in, are in [TODO.md](TODO.md).
@@ -163,9 +164,11 @@ will use the Panama FFM API.
 
 You need a C toolchain, Meson (0.61 or later) and Ninja. Each language
 plugin, and its binding, is built only if its language is found: Lua 5.4
-(`liblua5.4-dev`) and CPython 3.10+ (`python3-dev`). `-Dlua=disabled` and
-`-Dpython=disabled` skip them explicitly. The Lua binding test also needs the
-`lua5.4` interpreter. Valgrind is optional.
+(`liblua5.4-dev`) and CPython 3.10+ (`python3-dev`). QuickJS is built from
+source: Meson downloads its pinned release at setup, and checks the
+checksum. `-Dlua=disabled`, `-Dpython=disabled` and `-Djs=disabled` skip a
+language; `--wrap-mode=nodownload` forbids the download. The Lua binding
+test also needs the `lua5.4` interpreter. Valgrind is optional.
 
 ```sh
 meson setup build

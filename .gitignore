@@ -11,3 +11,9 @@
 # Editors
 *~
 *.swp
+
+# Meson subprojects: downloaded sources and their cache (the .wrap files and
+# packagefiles/ are ours)
+/subprojects/*/
+!/subprojects/packagefiles/
+/subprojects/packagecache/
