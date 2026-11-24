@@ -82,7 +82,8 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **The v2 core, mock plugin and conformance suite are done** (2026-11-24, branch `v2-core`). 8 groups and 180 subtests pass, clean under valgrind (leaks fail) and helgrind. Implementing it pinned down several points (contract.md, "Clarifications"): one ctx per thread, counted loads, rt_delete refused during a call into it, `ugly_fail`, `ugly_rt_native`, `ugly_current_ctx`.
 - **The Lua plugin is done** (2026-11-24, branch `lua-plugin`). It passes all 8 groups, and pairwise mock↔Lua passes; everything is clean under valgrind, and helgrind finds no races.
   - Writing it fixed the contract in three places: the re-entry depth limit (`UGLY_MAX_DEPTH`, `UGLY_ERR_TOO_DEEP`), `ugly_raise_handle`, and language-neutral fixtures.
-- **Next: the CPython plugin** (`plugins/python/`). It needs `python3-dev` (with `python3-embed` pkg-config), which the author installs. Expect the GIL (`PyGILState_*` on every entry) and no `MULTI_RUNTIME` in v2.0. Then QuickJS.
+- **Next: the CPython plugin** (`plugins/python/`). Python 3.10 dev files are already installed (`python3-embed` pkg-config). Expect the GIL (`PyGILState_*` on every entry) and no `MULTI_RUNTIME` in v2.0.
+- **Then (agreed 2026-11-24): bindings for Lua and Python together.** That means an in-language `ugly` module (import/load/runtimes) plus attach mode, so a plain `lua` or `python3` process can use the other language with no C host. Real attach tests go in the suite. Milestone: `python3 script.py` uses a Lua module, and `lua script.lua` uses a Python one. After that QuickJS, then Perl. See contract.md "Order of work".
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.

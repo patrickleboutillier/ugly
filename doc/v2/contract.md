@@ -447,5 +447,15 @@ All of them are in the headers and covered by the conformance suite.
    (`plugins/lua/`, fixtures in `tests/lua/`). It passes all 8 groups, and
    the pairwise suite passes for mock→Lua and Lua→mock, all clean under
    valgrind.
-4. Then CPython, then QuickJS (each adds its pairs to the pairwise suite).
-   Then port Perl.
+4. The CPython plugin. Its pairs join the pairwise suite, so Lua↔Python is
+   tested from day one.
+5. **Bindings: an `ugly` module in each language, and attach mode, for Lua
+   and Python together** (§8). The in-language API wraps loading,
+   runtimes and import, for example
+   `local json = require("ugly").import("python", "json")`. Attach mode lets
+   `require "ugly"` / `import ugly`, run from a plain `lua` or `python3`
+   process, turn the running interpreter into a runtime of the core. The
+   conformance suite gains real attach tests in place of today's skip.
+   Milestone: `python3 script.py` uses a Lua module, and `lua script.lua`
+   uses a Python one, with no C host.
+6. Then QuickJS, then port Perl.
