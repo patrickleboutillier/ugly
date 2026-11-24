@@ -1,0 +1,1542 @@
+/*
+ * The JavaScript plugin, on QuickJS. Each runtime is a JSRuntime with one
+ * JSContext.
+ *
+ * - Native refs are boxed JSValues (one reference each). Identity is the
+ *   object's address.
+ * - Numbers: JS has one number type, so an integral number within +-2^53
+ *   comes out as INT, and other numbers as DOUBLE. INTs beyond 2^53 go in as
+ *   BigInt (so int64 round-trips), and a BigInt comes out as INT if it fits.
+ *   Bytes are ArrayBuffers.
+ * - Foreign values are objects of two classes, proxy (members, elements) and
+ *   proxy function (also call/new), with exotic property handlers. They're
+ *   cached per handle, so the same foreign value is the same object (===).
+ *   A callable member is returned as a method bound to the proxy, so
+ *   proxy.m(x) invokes m with the foreign language's receiver rules.
+ * - A ugly_error raised into JS is an object inheriting Error, with type,
+ *   message, language and payload. It's restored unchanged if it escapes. If
+ *   the payload is a JS value coming home, that value itself is thrown
+ *   (rule 7).
+ * - Modules are ES modules, loaded by name from UGLY_JS_PATH (colon-separated
+ *   directories, "<name>.js"). "ugly" is a built-in module: module(), eval(),
+ *   isError(), isProxy(), gc().
+ * - Pending jobs (promises, FinalizationRegistry callbacks) run when the
+ *   outermost call into the runtime returns.
+ */
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "quickjs.h"
+#include "ugly_plugin.h"
+
+
+#define MAX_SAFE_INT 9007199254740991.0     /* 2^53 - 1 */
+
+typedef struct pcache_entry {
+	ugly_handle h ;
+	void *obj ;                  /* JSObject*, not a reference: removed by the proxy's finalizer */
+	struct pcache_entry *next ;
+} pcache_entry ;
+
+typedef struct jsrt {
+	ugly_rt *urt ;
+	JSRuntime *rt ;
+	JSContext *c ;
+	int depth ;                  /* our entries in progress: jobs run when the outermost returns */
+	JSValue error_proto ;        /* prototype of ugly errors (inherits Error.prototype) */
+	JSValue array_buffer ;       /* the ArrayBuffer constructor */
+	JSAtom to_string_tag ;       /* Symbol.toStringTag */
+	pcache_entry *pcache[64] ;
+} jsrt ;
+
+typedef struct jsproxy {
+	jsrt *r ;
+	ugly_handle h ;              /* one owned reference */
+	uint32_t traits ;
+} jsproxy ;
+
+typedef struct { ugly_error *err ; } errbox ;
+
+static JSClassID proxy_class, proxy_fn_class, error_class ;
+
+
+static jsrt *R(JSContext *c){
+	return JS_GetContextOpaque(c) ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Small helpers                                                    */
+/* ---------------------------------------------------------------- */
+
+static int valid_utf8(const unsigned char *s, size_t len){
+	size_t i = 0 ;
+	while (i < len){
+		unsigned char c = s[i] ;
+		size_t n ;
+		uint32_t cp ;
+		if (c < 0x80){ i++ ; continue ; }
+		else if ((c & 0xE0) == 0xC0){ n = 1 ; cp = c & 0x1F ; }
+		else if ((c & 0xF0) == 0xE0){ n = 2 ; cp = c & 0x0F ; }
+		else if ((c & 0xF8) == 0xF0){ n = 3 ; cp = c & 0x07 ; }
+		else { return 0 ; }
+		if (i + n >= len){
+			return 0 ;
+		}
+		size_t k ;
+		for (k = 1 ; k <= n ; k++){
+			if ((s[i + k] & 0xC0) != 0x80){
+				return 0 ;
+			}
+			cp = (cp << 6) | (s[i + k] & 0x3F) ;
+		}
+		if ((n == 1 && cp < 0x80)||(n == 2 && cp < 0x800)||(n == 3 && cp < 0x10000)||
+			(cp > 0x10FFFF)||((cp >= 0xD800)&&(cp <= 0xDFFF))){
+			return 0 ;     /* overlong, out of range, or a (lone) surrogate */
+		}
+		i += n + 1 ;
+	}
+	return 1 ;
+}
+
+
+static jsproxy *proxy_of(JSValueConst v){
+	jsproxy *p = JS_GetOpaque(v, proxy_class) ;
+	return (p != NULL ? p : JS_GetOpaque(v, proxy_fn_class)) ;
+}
+
+
+static int is_array_buffer(jsrt *r, JSValueConst v){
+	return JS_IsObject(v) && (JS_IsInstanceOf(r->c, v, r->array_buffer) > 0) ;
+}
+
+
+static void drop_exception(JSContext *c){
+	JS_FreeValue(c, JS_GetException(c)) ;
+}
+
+
+static void run_jobs(jsrt *r){
+	JSContext *jc ;
+	while (JS_IsJobPending(r->rt)){
+		if (JS_ExecutePendingJob(r->rt, &jc) < 0){
+			drop_exception(jc) ;     /* an unhandled rejection in a job has nowhere to go */
+		}
+	}
+}
+
+
+static void enter(jsrt *r){
+	r->depth++ ;
+}
+
+
+static ugly_status leave(jsrt *r, ugly_status st){
+	if (--r->depth == 0){
+		run_jobs(r) ;
+	}
+	return st ;
+}
+
+
+static ugly_status fail(ugly_ctx *ctx, jsrt *r, ugly_status st, const char *type, const char *msg){
+	return ugly_fail(ctx, r->urt, st, type, msg) ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* The proxy cache: owned handle -> proxy object                    */
+/* ---------------------------------------------------------------- */
+
+static size_t pc_bucket(ugly_handle h){
+	return (size_t)((h * 0x9E3779B97F4A7C15ull) >> 58) ;    /* 64 buckets */
+}
+
+
+static void *pc_find(jsrt *r, ugly_handle h){
+	pcache_entry *e ;
+	for (e = r->pcache[pc_bucket(h)] ; e != NULL ; e = e->next){
+		if (e->h == h){
+			return e->obj ;
+		}
+	}
+	return NULL ;
+}
+
+
+static void pc_add(jsrt *r, ugly_handle h, void *obj){
+	pcache_entry *e = malloc(sizeof(pcache_entry)) ;
+	if (e == NULL){
+		return ;
+	}
+	e->h = h ;
+	e->obj = obj ;
+	e->next = r->pcache[pc_bucket(h)] ;
+	r->pcache[pc_bucket(h)] = e ;
+}
+
+
+static void pc_remove(jsrt *r, ugly_handle h, void *obj){
+	pcache_entry **p ;
+	for (p = &r->pcache[pc_bucket(h)] ; *p != NULL ; p = &(*p)->next){
+		if (((*p)->h == h)&&((*p)->obj == obj)){
+			pcache_entry *e = *p ;
+			*p = e->next ;
+			free(e) ;
+			return ;
+		}
+	}
+}
+
+
+/* ---------------------------------------------------------------- */
+/* JS -> ugly_val                                                   */
+/* ---------------------------------------------------------------- */
+
+/* Exports a JS value as an owned handle; our own proxies unwrap to their handle (rule 5). */
+static ugly_status export_val(ugly_ctx *ctx, jsrt *r, JSValueConst v, ugly_handle *out){
+	jsproxy *p = proxy_of(v) ;
+	if (p != NULL){
+		return ugly_dup(ctx, p->h, out) ;
+	}
+	JSValue *box = malloc(sizeof(JSValue)) ;
+	if (box == NULL){
+		return UGLY_ERR_NOMEM ;
+	}
+	*box = JS_DupValue(r->c, v) ;
+	uintptr_t identity = (JS_VALUE_HAS_REF_COUNT(v) ? (uintptr_t)JS_VALUE_GET_PTR(v) : 0) ;
+	return ugly_export(ctx, r->urt, box, identity, out) ;
+}
+
+
+static ugly_status type_error(ugly_ctx *ctx, jsrt *r, const char *to){
+	char msg[96] ;
+	snprintf(msg, sizeof(msg), "can't convert this JS value to %s", to) ;
+	return fail(ctx, r, UGLY_ERR_TYPE, "TypeError", msg) ;
+}
+
+
+static ugly_status js_failure(ugly_ctx *ctx, jsrt *r) ;
+
+/* A JS value as a result of kind 'want', by JS's own rules (lenient where JS itself is: number -> string). */
+static ugly_status to_val(ugly_ctx *ctx, jsrt *r, JSValueConst v, ugly_kind want, ugly_val *out){
+	JSContext *c = r->c ;
+	int tag = JS_VALUE_GET_NORM_TAG(v) ;
+	int is_bigint = JS_IsBigInt(c, v) ;
+	*out = ugly_null() ;
+
+	if (want == UGLY_ANY){
+		if ((tag == JS_TAG_NULL)||(tag == JS_TAG_UNDEFINED)){
+			return UGLY_OK ;
+		}
+		else if (tag == JS_TAG_BOOL){
+			want = UGLY_BOOL ;
+		}
+		else if (tag == JS_TAG_INT){
+			want = UGLY_INT ;
+		}
+		else if (tag == JS_TAG_FLOAT64){
+			double d = JS_VALUE_GET_FLOAT64(v) ;
+			want = ((isfinite(d))&&(d == floor(d))&&(fabs(d) <= MAX_SAFE_INT)&&(! ((d == 0)&&(signbit(d))))
+				? UGLY_INT : UGLY_DOUBLE) ;
+		}
+		else if (is_bigint){
+			want = UGLY_INT ;
+		}
+		else if (JS_IsString(v)){
+			want = UGLY_STRING ;
+		}
+		else if (is_array_buffer(r, v)){
+			want = UGLY_BYTES ;
+		}
+		else {
+			want = UGLY_HANDLE ;
+		}
+	}
+
+	switch (want){
+		case UGLY_NULL:
+			return (((tag == JS_TAG_NULL)||(tag == JS_TAG_UNDEFINED)) ? UGLY_OK : type_error(ctx, r, "null")) ;
+		case UGLY_BOOL: {
+			int b = JS_ToBool(c, v) ;     /* JS truthiness */
+			if (b < 0){
+				return js_failure(ctx, r) ;
+			}
+			*out = ugly_bool(b) ;
+			return UGLY_OK ;
+		}
+		case UGLY_INT: {
+			if (tag == JS_TAG_INT){
+				*out = ugly_int(JS_VALUE_GET_INT(v)) ;
+				return UGLY_OK ;
+			}
+			if (tag == JS_TAG_FLOAT64){
+				double d = JS_VALUE_GET_FLOAT64(v) ;
+				if ((d == floor(d))&&(d >= -9223372036854775808.0)&&(d < 9223372036854775808.0)){
+					*out = ugly_int((int64_t)d) ;
+					return UGLY_OK ;
+				}
+				return type_error(ctx, r, "an integer") ;
+			}
+			if (is_bigint){
+				/* JS_ToBigInt64 wraps around: check that the value really fits. */
+				int64_t i ;
+				if (JS_ToBigInt64(c, &i, v) < 0){
+					return js_failure(ctx, r) ;
+				}
+				const char *s = JS_ToCString(c, v) ;
+				char buf[32] ;
+				snprintf(buf, sizeof(buf), "%lld", (long long)i) ;
+				int fits = ((s != NULL)&&(strcmp(s, buf) == 0)) ;
+				JS_FreeCString(c, s) ;
+				if (! fits){
+					return fail(ctx, r, UGLY_ERR_TYPE, "RangeError", "BigInt doesn't fit in int64") ;
+				}
+				*out = ugly_int(i) ;
+				return UGLY_OK ;
+			}
+			return type_error(ctx, r, "an integer") ;     /* no implicit string -> number */
+		}
+		case UGLY_DOUBLE: {
+			if (! JS_IsNumber(v)){
+				return type_error(ctx, r, "a double") ;
+			}
+			double d ;
+			JS_ToFloat64(c, &d, v) ;
+			*out = ugly_double(d) ;
+			return UGLY_OK ;
+		}
+		case UGLY_STRING: {
+			if ((! JS_IsString(v))&&(! JS_IsNumber(v))&&(! is_bigint)){
+				return type_error(ctx, r, "a string") ;     /* numbers stringify, like "" + n */
+			}
+			size_t len ;
+			const char *s = JS_ToCStringLen(c, &len, v) ;
+			if (s == NULL){
+				return js_failure(ctx, r) ;
+			}
+			ugly_status st = (valid_utf8((const unsigned char *)s, len)
+				? ugly_val_set_string(ctx, out, s, len)
+				: fail(ctx, r, UGLY_ERR_TYPE, "TypeError", "string has a lone surrogate")) ;
+			JS_FreeCString(c, s) ;
+			return st ;
+		}
+		case UGLY_BYTES: {
+			size_t len ;
+			uint8_t *p = (is_array_buffer(r, v) ? JS_GetArrayBuffer(c, &len, v) : NULL) ;
+			if (p == NULL){
+				if (JS_HasException(c)){
+					drop_exception(c) ;     /* a detached buffer */
+				}
+				return type_error(ctx, r, "bytes") ;
+			}
+			return ugly_val_set_bytes(ctx, out, p, len) ;
+		}
+		case UGLY_HANDLE: {
+			if (! JS_VALUE_HAS_REF_COUNT(v)||JS_IsString(v)||is_bigint){
+				return type_error(ctx, r, "a handle") ;
+			}
+			ugly_handle h ;
+			ugly_status st = export_val(ctx, r, v, &h) ;
+			if (st == UGLY_OK){
+				*out = ugly_hval(h) ;
+			}
+			return st ;
+		}
+		default:
+			return UGLY_ERR_USAGE ;
+	}
+}
+
+
+/* ---------------------------------------------------------------- */
+/* ugly_val -> JS                                                   */
+/* ---------------------------------------------------------------- */
+
+static JSValue throw_ugly(JSContext *c, ugly_ctx *ctx, ugly_status st) ;
+
+/* A proxy for a foreign handle: one per value (cached), owning one reference. */
+static JSValue proxy_for(ugly_ctx *ctx, jsrt *r, ugly_handle borrowed){
+	JSContext *c = r->c ;
+	ugly_handle h ;
+	ugly_status st = ugly_dup(ctx, borrowed, &h) ;     /* the owned handle: the same id for the same value */
+	if (st != UGLY_OK){
+		return throw_ugly(c, ctx, st) ;
+	}
+	void *cached = pc_find(r, h) ;
+	if (cached != NULL){
+		ugly_release(ctx, h) ;     /* the cached proxy holds its own reference */
+		return JS_DupValue(c, JS_MKPTR(JS_TAG_OBJECT, cached)) ;
+	}
+	uint32_t traits = 0 ;
+	ugly_val tn ;
+	if (ugly_describe(ctx, h, &traits, &tn) == UGLY_OK){
+		ugly_val_release(ctx, &tn) ;
+	}
+	int fn = ((traits & (UGLY_TRAIT_CALLABLE | UGLY_TRAIT_INSTANTIABLE)) != 0) ;
+	JSValue obj = JS_NewObjectClass(c, (int)(fn ? proxy_fn_class : proxy_class)) ;
+	jsproxy *p = malloc(sizeof(jsproxy)) ;
+	if (JS_IsException(obj)||(p == NULL)){
+		free(p) ;
+		ugly_release(ctx, h) ;
+		return (JS_IsException(obj) ? obj : JS_ThrowOutOfMemory(c)) ;
+	}
+	p->r = r ;
+	p->h = h ;
+	p->traits = traits ;
+	JS_SetOpaque(obj, p) ;
+	if (traits & UGLY_TRAIT_INSTANTIABLE){
+		JS_SetConstructorBit(c, obj, 1) ;
+	}
+	pc_add(r, h, JS_VALUE_GET_PTR(obj)) ;
+	return obj ;
+}
+
+
+/* An argument (borrowed) as a new JS value: ours resolve to the original (rule 5). JS_EXCEPTION on failure. */
+static JSValue from_val(ugly_ctx *ctx, jsrt *r, ugly_val v){
+	JSContext *c = r->c ;
+	switch (v.kind){
+		case UGLY_NULL: return JS_NULL ;
+		case UGLY_BOOL: return JS_NewBool(c, v.as.b) ;
+		case UGLY_INT:
+			return ((v.as.i >= -(int64_t)MAX_SAFE_INT)&&(v.as.i <= (int64_t)MAX_SAFE_INT)
+				? JS_NewInt64(c, v.as.i) : JS_NewBigInt64(c, v.as.i)) ;
+		case UGLY_DOUBLE: return JS_NewFloat64(c, v.as.d) ;
+		case UGLY_STRING: return JS_NewStringLen(c, v.as.str.ptr, v.as.str.len) ;
+		case UGLY_BYTES: return JS_NewArrayBufferCopy(c, v.as.bytes.ptr, v.as.bytes.len) ;
+		case UGLY_HANDLE: {
+			void *ref = NULL ;
+			ugly_status st = ugly_resolve(ctx, r->urt, v.as.h, &ref) ;
+			if (st != UGLY_OK){
+				return throw_ugly(c, ctx, st) ;
+			}
+			if (ref != NULL){
+				return JS_DupValue(c, *(JSValue *)ref) ;
+			}
+			return proxy_for(ctx, r, v.as.h) ;
+		}
+		default:
+			return JS_ThrowTypeError(c, "ugly: invalid value") ;
+	}
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Errors at the boundary                                           */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Throws the ctx's current error in JS: the original value if its payload
+ * is ours coming home (rule 7), otherwise an ugly error object. Returns
+ * JS_EXCEPTION.
+ */
+static JSValue throw_ugly(JSContext *c, ugly_ctx *ctx, ugly_status st){
+	jsrt *r = R(c) ;
+	if (ugly_last_error(ctx) == NULL){
+		ugly_fail(ctx, r->urt, st, "Error", "operation failed") ;
+	}
+	ugly_error *err = ugly_take_error(ctx) ;
+	if (err == NULL){
+		return JS_ThrowInternalError(c, "ugly: operation failed") ;
+	}
+	ugly_handle payload = UGLY_NO_HANDLE ;
+	ugly_error_payload(ctx, err, &payload) ;
+	void *ref = NULL ;
+	if ((payload != UGLY_NO_HANDLE)&&(ugly_resolve(ctx, r->urt, payload, &ref) == UGLY_OK)&&(ref != NULL)){
+		/* Take our reference first: releasing the error may free the box 'ref' points to. */
+		JSValue original = JS_DupValue(c, *(JSValue *)ref) ;
+		ugly_release(ctx, payload) ;
+		ugly_error_free(err) ;
+		return JS_Throw(c, original) ;
+	}
+
+	JSValue e = JS_NewObjectProtoClass(c, r->error_proto, error_class) ;
+	errbox *b = malloc(sizeof(errbox)) ;
+	if (JS_IsException(e)||(b == NULL)){
+		free(b) ;
+		ugly_release(ctx, payload) ;
+		ugly_error_free(err) ;
+		return (JS_IsException(e) ? e : JS_ThrowOutOfMemory(c)) ;
+	}
+	b->err = err ;
+	JS_SetOpaque(e, b) ;
+	JS_DefinePropertyValueStr(c, e, "name", JS_NewString(c, ugly_error_type(err)), JS_PROP_C_W_E) ;
+	JS_DefinePropertyValueStr(c, e, "type", JS_NewString(c, ugly_error_type(err)), JS_PROP_C_W_E) ;
+	JS_DefinePropertyValueStr(c, e, "message", JS_NewString(c, ugly_error_message(err)), JS_PROP_C_W_E) ;
+	JS_DefinePropertyValueStr(c, e, "language", JS_NewString(c, ugly_error_language(err)), JS_PROP_C_W_E) ;
+	JSValue pv = JS_UNDEFINED ;
+	if (payload != UGLY_NO_HANDLE){
+		pv = from_val(ctx, r, ugly_hval(payload)) ;
+		if (JS_IsException(pv)){
+			drop_exception(c) ;
+			pv = JS_UNDEFINED ;
+		}
+		ugly_release(ctx, payload) ;
+	}
+	JS_DefinePropertyValueStr(c, e, "payload", pv, JS_PROP_C_W_E) ;
+	return JS_Throw(c, e) ;
+}
+
+
+/* A string property of an object, copied into buf (empty if absent). */
+static void str_prop(JSContext *c, JSValueConst obj, const char *name, char *buf, size_t size){
+	buf[0] = '\0' ;
+	JSValue v = JS_GetPropertyStr(c, obj, name) ;
+	if (JS_IsException(v)){
+		drop_exception(c) ;
+		return ;
+	}
+	if (JS_IsString(v)){
+		const char *s = JS_ToCString(c, v) ;
+		if (s != NULL){
+			snprintf(buf, size, "%s", s) ;
+			JS_FreeCString(c, s) ;
+		}
+	}
+	JS_FreeValue(c, v) ;
+}
+
+
+/* The JS exception that is pending, escaping to the core (rule 7). Clears it. */
+static ugly_status js_failure(ugly_ctx *ctx, jsrt *r){
+	JSContext *c = r->c ;
+	JSValue e = JS_GetException(c) ;
+
+	/* Our own error object, not yet consumed: the original error, unchanged. */
+	errbox *b = JS_GetOpaque(e, error_class) ;
+	if ((b != NULL)&&(b->err != NULL)){
+		ugly_error *err = b->err ;
+		b->err = NULL ;
+		JS_FreeValue(c, e) ;
+		return ugly_restore_error(ctx, err) ;
+	}
+
+	/* A rethrown foreign value: the payload is that value itself. */
+	jsproxy *p = proxy_of(e) ;
+	if (p != NULL){
+		ugly_handle h ;
+		ugly_status st = ugly_dup(ctx, p->h, &h) ;
+		JS_FreeValue(c, e) ;
+		return ugly_raise_handle(ctx, r->urt, "ForeignError", "rethrown foreign value", (st == UGLY_OK ? h : UGLY_NO_HANDLE)) ;
+	}
+
+	/* A JS exception: an Error's name and message, or the thrown value itself. */
+	char type[96] = "error", message[512] = "" ;
+	if (JS_IsError(c, e)){
+		str_prop(c, e, "name", type, sizeof(type)) ;
+		str_prop(c, e, "message", message, sizeof(message)) ;
+		if (type[0] == '\0'){
+			snprintf(type, sizeof(type), "Error") ;
+		}
+	}
+	else {
+		const char *s = JS_ToCString(c, e) ;
+		if (s != NULL){
+			snprintf(message, sizeof(message), "%s", s) ;
+			JS_FreeCString(c, s) ;
+		}
+		else {
+			drop_exception(c) ;
+		}
+		if (! JS_IsString(e)){
+			snprintf(type, sizeof(type), "%s", JS_IsObject(e) ? "object" : "value") ;
+		}
+	}
+	if (JS_IsNull(e)||JS_IsUndefined(e)){
+		JS_FreeValue(c, e) ;
+		return ugly_raise_native(ctx, r->urt, type, message, NULL, 0) ;
+	}
+	JSValue *box = malloc(sizeof(JSValue)) ;
+	if (box == NULL){
+		JS_FreeValue(c, e) ;
+		return ugly_raise_native(ctx, r->urt, type, message, NULL, 0) ;
+	}
+	*box = e ;     /* the payload owns the exception's reference */
+	uintptr_t identity = (JS_VALUE_HAS_REF_COUNT(e) ? (uintptr_t)JS_VALUE_GET_PTR(e) : 0) ;
+	return ugly_raise_native(ctx, r->urt, type, message, box, identity) ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Proxies: foreign values inside JS                                */
+/* ---------------------------------------------------------------- */
+
+static ugly_ctx *need_ctx(JSContext *c){
+	ugly_ctx *ctx = ugly_current_ctx() ;
+	if (ctx == NULL){
+		JS_ThrowInternalError(c, "ugly: no ctx on this thread") ;
+	}
+	return ctx ;
+}
+
+
+/* JS args -> owned ugly_vals. Returns how many were made; on failure, -1 with a JS exception pending. */
+static int js_args(JSContext *c, ugly_ctx *ctx, int argc, JSValueConst *argv, ugly_val **out){
+	*out = calloc((size_t)argc + 1, sizeof(ugly_val)) ;
+	int i ;
+	for (i = 0 ; i < argc ; i++){
+		ugly_status st = to_val(ctx, R(c), argv[i], UGLY_ANY, &(*out)[i]) ;
+		if (st != UGLY_OK){
+			int j ;
+			for (j = 0 ; j < i ; j++){
+				ugly_val_release(ctx, &(*out)[j]) ;
+			}
+			free(*out) ;
+			*out = NULL ;
+			throw_ugly(c, ctx, st) ;
+			return -1 ;
+		}
+	}
+	return argc ;
+}
+
+
+static void free_args(ugly_ctx *ctx, ugly_val *args, int n){
+	int i ;
+	for (i = 0 ; i < n ; i++){
+		ugly_val_release(ctx, &args[i]) ;
+	}
+	free(args) ;
+}
+
+
+/* A core result as a JS value (and releases it), or throws. */
+static JSValue result(JSContext *c, ugly_ctx *ctx, ugly_status st, ugly_val *out){
+	if (st != UGLY_OK){
+		return throw_ugly(c, ctx, st) ;
+	}
+	JSValue v = from_val(ctx, R(c), *out) ;
+	ugly_val_release(ctx, out) ;
+	return v ;
+}
+
+
+/* proxy(...) and new proxy(...). */
+static JSValue proxy_call(JSContext *c, JSValueConst func, JSValueConst this_val, int argc, JSValueConst *argv,
+	int flags){
+
+	(void)this_val ;
+	jsproxy *p = proxy_of(func) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return JS_EXCEPTION ;
+	}
+	ugly_val *a ;
+	int n = js_args(c, ctx, argc, argv, &a) ;
+	if (n < 0){
+		return JS_EXCEPTION ;
+	}
+	ugly_val out = ugly_null() ;
+	ugly_status st ;
+	if (flags & JS_CALL_FLAG_CONSTRUCTOR){
+		ugly_handle h ;
+		st = ugly_new(ctx, p->h, a, (size_t)n, &h) ;
+		out = ugly_hval(h) ;
+	}
+	else {
+		st = ugly_call(ctx, p->h, a, (size_t)n, UGLY_ANY, &out) ;
+	}
+	free_args(ctx, a, n) ;
+	return result(c, ctx, st, &out) ;
+}
+
+
+/* A method of a foreign object, bound to it: data = { proxy, name }. */
+static JSValue proxy_method(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv, int magic,
+	JSValue *data){
+
+	(void)this_val ; (void)magic ;
+	jsproxy *p = proxy_of(data[0]) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	const char *name = JS_ToCString(c, data[1]) ;
+	if ((p == NULL)||(ctx == NULL)||(name == NULL)){
+		JS_FreeCString(c, name) ;
+		return JS_EXCEPTION ;
+	}
+	ugly_val *a ;
+	int n = js_args(c, ctx, argc, argv, &a) ;
+	ugly_val out = ugly_null() ;
+	ugly_status st = UGLY_OK ;
+	if (n >= 0){
+		st = ugly_invoke(ctx, p->h, name, a, (size_t)n, UGLY_ANY, &out) ;
+		free_args(ctx, a, n) ;
+	}
+	JS_FreeCString(c, name) ;
+	return (n < 0 ? JS_EXCEPTION : result(c, ctx, st, &out)) ;
+}
+
+
+/* An array index atom ("0", "1", ...) as a number, or -1. */
+static int64_t atom_index(JSContext *c, JSAtom atom){
+	JSValue v = JS_AtomToValue(c, atom) ;
+	int64_t i = -1 ;
+	if (JS_IsNumber(v)){
+		double d ;
+		JS_ToFloat64(c, &d, v) ;
+		if ((d >= 0)&&(d == floor(d))&&(d < 4294967295.0)){
+			i = (int64_t)d ;
+		}
+	}
+	else if (JS_IsString(v)){
+		const char *s = JS_ToCString(c, v) ;
+		if ((s != NULL)&&(s[0] >= '0')&&(s[0] <= '9')&&((s[0] != '0')||(s[1] == '\0'))){
+			char *end ;
+			long long n = strtoll(s, &end, 10) ;
+			if (*end == '\0'){
+				i = n ;
+			}
+		}
+		JS_FreeCString(c, s) ;
+	}
+	JS_FreeValue(c, v) ;
+	return i ;
+}
+
+
+/* [[GetOwnProperty]]: elements by index, "length" for element collections, members by name. */
+static int proxy_get_own_property(JSContext *c, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom atom){
+	jsproxy *p = proxy_of(obj) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return -1 ;
+	}
+	JSValue key = JS_AtomToValue(c, atom) ;
+	int symbol = JS_IsSymbol(key) ;
+	JS_FreeValue(c, key) ;
+	if (symbol){
+		return 0 ;     /* symbols (Symbol.iterator, toPrimitive...) come from the prototype */
+	}
+
+	ugly_val out = ugly_null() ;
+	ugly_status st ;
+	JSValue v = JS_UNDEFINED ;
+	int64_t i = atom_index(c, atom) ;
+	const char *name = NULL ;
+	if ((i >= 0)&&(p->traits & UGLY_TRAIT_ELEMENTS)){
+		st = ugly_get_index(ctx, p->h, i, UGLY_ANY, &out) ;
+	}
+	else {
+		name = JS_AtomToCString(c, atom) ;
+		if (name == NULL){
+			return -1 ;
+		}
+		if ((strcmp(name, "length") == 0)&&(p->traits & UGLY_TRAIT_ELEMENTS)){
+			int64_t n = 0 ;
+			st = ugly_length(ctx, p->h, &n) ;
+			out = ugly_int(n) ;
+		}
+		else {
+			st = ugly_get_member(ctx, p->h, name, UGLY_ANY, &out) ;
+		}
+	}
+	if ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)){
+		JS_FreeCString(c, name) ;
+		return 0 ;     /* not there: JS goes on to the prototype */
+	}
+	if (st != UGLY_OK){
+		JS_FreeCString(c, name) ;
+		throw_ugly(c, ctx, st) ;
+		return -1 ;
+	}
+
+	/* A callable member is a method: bind it to the proxy (receiver rules are the foreign language's). */
+	uint32_t traits = 0 ;
+	ugly_val tn ;
+	if ((name != NULL)&&(out.kind == UGLY_HANDLE)&&(ugly_describe(ctx, out.as.h, &traits, &tn) == UGLY_OK)){
+		ugly_val_release(ctx, &tn) ;
+	}
+	if ((name != NULL)&&(traits & UGLY_TRAIT_CALLABLE)){
+		ugly_val_release(ctx, &out) ;
+		JSValue data[2] = { JS_DupValue(c, obj), JS_NewString(c, name) } ;
+		v = JS_NewCFunctionData(c, proxy_method, 0, 0, 2, data) ;
+		JS_FreeValue(c, data[0]) ;
+		JS_FreeValue(c, data[1]) ;
+	}
+	else {
+		v = result(c, ctx, UGLY_OK, &out) ;
+	}
+	JS_FreeCString(c, name) ;
+	if (JS_IsException(v)){
+		return -1 ;
+	}
+	if (desc != NULL){
+		desc->flags = JS_PROP_C_W_E ;
+		desc->value = v ;
+		desc->getter = JS_UNDEFINED ;
+		desc->setter = JS_UNDEFINED ;
+	}
+	else {
+		JS_FreeValue(c, v) ;
+	}
+	return 1 ;
+}
+
+
+/* [[DefineOwnProperty]] (assignment ends up here): set_index or set_member. */
+static int proxy_define_own_property(JSContext *c, JSValueConst obj, JSAtom atom, JSValueConst val,
+	JSValueConst getter, JSValueConst setter, int flags){
+
+	(void)getter ; (void)setter ; (void)flags ;
+	jsproxy *p = proxy_of(obj) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return -1 ;
+	}
+	ugly_val v ;
+	ugly_status st = to_val(ctx, R(c), val, UGLY_ANY, &v) ;
+	if (st == UGLY_OK){
+		int64_t i = atom_index(c, atom) ;
+		if ((i >= 0)&&(p->traits & UGLY_TRAIT_ELEMENTS)){
+			st = ugly_set_index(ctx, p->h, i, v) ;
+		}
+		else {
+			const char *name = JS_AtomToCString(c, atom) ;
+			st = (name != NULL ? ugly_set_member(ctx, p->h, name, v) : UGLY_ERR_USAGE) ;
+			JS_FreeCString(c, name) ;
+		}
+		ugly_val_release(ctx, &v) ;
+	}
+	if (st != UGLY_OK){
+		throw_ugly(c, ctx, st) ;
+		return -1 ;
+	}
+	return 1 ;
+}
+
+
+static int proxy_get_own_property_names(JSContext *c, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj){
+	jsproxy *p = proxy_of(obj) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	*ptab = NULL ;
+	*plen = 0 ;
+	if ((p == NULL)||(ctx == NULL)){
+		return -1 ;
+	}
+	ugly_handle names ;
+	if (ugly_member_names(ctx, p->h, &names) != UGLY_OK){
+		return 0 ;     /* no members */
+	}
+	int64_t n = 0 ;
+	ugly_length(ctx, names, &n) ;
+	JSPropertyEnum *tab = js_malloc(c, sizeof(JSPropertyEnum) * (size_t)(n > 0 ? n : 1)) ;
+	if (tab == NULL){
+		ugly_release(ctx, names) ;
+		return -1 ;
+	}
+	uint32_t k = 0 ;
+	int64_t i ;
+	for (i = 0 ; i < n ; i++){
+		ugly_val s ;
+		if (ugly_get_index(ctx, names, i, UGLY_STRING, &s) == UGLY_OK){
+			tab[k].is_enumerable = 1 ;
+			tab[k].atom = JS_NewAtomLen(c, s.as.str.ptr, s.as.str.len) ;
+			k++ ;
+			ugly_val_release(ctx, &s) ;
+		}
+	}
+	ugly_release(ctx, names) ;
+	*ptab = tab ;
+	*plen = k ;
+	return 0 ;
+}
+
+
+static int proxy_delete_property(JSContext *c, JSValueConst obj, JSAtom atom){
+	(void)c ; (void)obj ; (void)atom ;
+	return 0 ;     /* foreign members can't be deleted */
+}
+
+
+static void proxy_finalizer(JSRuntime *rt, JSValue val){
+	(void)rt ;
+	jsproxy *p = proxy_of(val) ;
+	if (p != NULL){
+		pc_remove(p->r, p->h, JS_VALUE_GET_PTR(val)) ;
+		ugly_release(ugly_current_ctx(), p->h) ;
+		free(p) ;
+	}
+}
+
+
+static void error_finalizer(JSRuntime *rt, JSValue val){
+	(void)rt ;
+	errbox *b = JS_GetOpaque(val, error_class) ;
+	if (b != NULL){
+		ugly_error_free(b->err) ;
+		free(b) ;
+	}
+}
+
+
+static JSClassExoticMethods proxy_exotic = {
+	.get_own_property = proxy_get_own_property,
+	.get_own_property_names = proxy_get_own_property_names,
+	.delete_property = proxy_delete_property,
+	.define_own_property = proxy_define_own_property,
+} ;
+
+static JSClassDef proxy_def = { "ugly.Proxy", .finalizer = proxy_finalizer, .exotic = &proxy_exotic } ;
+static JSClassDef proxy_fn_def = { "ugly.Proxy", .finalizer = proxy_finalizer, .call = proxy_call, .exotic = &proxy_exotic } ;
+static JSClassDef error_def = { "ugly.Error", .finalizer = error_finalizer } ;
+
+
+/* ---------------------------------------------------------------- */
+/* The "ugly" module                                                */
+/* ---------------------------------------------------------------- */
+
+static ugly_rt *other(JSContext *c, ugly_ctx *ctx, JSValueConst lang_val, const char **lang){
+	*lang = JS_ToCString(c, lang_val) ;
+	if (*lang == NULL){
+		return NULL ;
+	}
+	if (strcmp(*lang, "js") == 0){
+		JS_ThrowTypeError(c, "ugly: use import and eval for JS itself") ;
+		return NULL ;
+	}
+	ugly_rt *rt ;
+	ugly_status st = ugly_rt_get(ctx, *lang, &rt) ;
+	if (st != UGLY_OK){
+		throw_ugly(c, ctx, st) ;
+		return NULL ;
+	}
+	return rt ;
+}
+
+
+/* ugly.module(lang, name): a module of another language. */
+static JSValue api_module(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((ctx == NULL)||(argc < 2)){
+		return (ctx == NULL ? JS_EXCEPTION : JS_ThrowTypeError(c, "ugly.module(lang, name)")) ;
+	}
+	const char *lang = NULL ;
+	ugly_rt *rt = other(c, ctx, argv[0], &lang) ;
+	const char *name = (rt != NULL ? JS_ToCString(c, argv[1]) : NULL) ;
+	JSValue ret = JS_EXCEPTION ;
+	if (name != NULL){
+		ugly_handle h ;
+		ugly_status st = ugly_rt_import(ctx, rt, name, &h) ;
+		ugly_val v = ugly_hval(h) ;
+		ret = result(c, ctx, st, &v) ;
+	}
+	JS_FreeCString(c, lang) ;
+	JS_FreeCString(c, name) ;
+	return ret ;
+}
+
+
+/* ugly.eval(lang, code): the value of code in another language. */
+static JSValue api_eval(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((ctx == NULL)||(argc < 2)){
+		return (ctx == NULL ? JS_EXCEPTION : JS_ThrowTypeError(c, "ugly.eval(lang, code)")) ;
+	}
+	const char *lang = NULL ;
+	ugly_rt *rt = other(c, ctx, argv[0], &lang) ;
+	size_t len ;
+	const char *code = (rt != NULL ? JS_ToCStringLen(c, &len, argv[1]) : NULL) ;
+	JSValue ret = JS_EXCEPTION ;
+	if (code != NULL){
+		ugly_val out = ugly_null() ;
+		ugly_status st = ugly_rt_eval(ctx, rt, code, len, UGLY_ANY, &out) ;
+		ret = result(c, ctx, st, &out) ;
+	}
+	JS_FreeCString(c, lang) ;
+	JS_FreeCString(c, code) ;
+	return ret ;
+}
+
+
+static JSValue api_is_error(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	return JS_NewBool(c, (argc > 0)&&(JS_GetOpaque(argv[0], error_class) != NULL)) ;
+}
+
+
+static JSValue api_is_proxy(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	return JS_NewBool(c, (argc > 0)&&(proxy_of(argv[0]) != NULL)) ;
+}
+
+
+/* ugly.gc(): collect now, and run the finalization callbacks this queued (QuickJS queues them only at GC). */
+static JSValue api_gc(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ; (void)argc ; (void)argv ;
+	jsrt *r = R(c) ;
+	JS_RunGC(r->rt) ;
+	run_jobs(r) ;
+	return JS_UNDEFINED ;
+}
+
+
+static const JSCFunctionListEntry api[] = {
+	JS_CFUNC_DEF("module", 2, api_module),
+	JS_CFUNC_DEF("eval", 2, api_eval),
+	JS_CFUNC_DEF("isError", 1, api_is_error),
+	JS_CFUNC_DEF("isProxy", 1, api_is_proxy),
+	JS_CFUNC_DEF("gc", 0, api_gc),
+} ;
+
+
+static int api_init(JSContext *c, JSModuleDef *m){
+	return JS_SetModuleExportList(c, m, api, sizeof(api) / sizeof(api[0])) ;
+}
+
+
+/* Loads module 'name': "ugly" is built in; others are <dir>/<name>.js for a dir in UGLY_JS_PATH. */
+static JSModuleDef *module_loader(JSContext *c, const char *name, void *opaque){
+	(void)opaque ;
+	if (strcmp(name, "ugly") == 0){
+		JSModuleDef *m = JS_NewCModule(c, "ugly", api_init) ;
+		if (m != NULL){
+			JS_AddModuleExportList(c, m, api, sizeof(api) / sizeof(api[0])) ;
+		}
+		return m ;
+	}
+
+	const char *env = getenv("UGLY_JS_PATH") ;
+	char *search = strdup(env != NULL ? env : "") ;
+	char *save = NULL, *dir ;
+	char *src = NULL ;
+	size_t len = 0 ;
+	for (dir = strtok_r(search, ":", &save) ; (dir != NULL)&&(src == NULL) ; dir = strtok_r(NULL, ":", &save)){
+		char path[4096] ;
+		size_t nl = strlen(name) ;
+		snprintf(path, sizeof(path), "%s/%s%s", dir, name, ((nl > 3)&&(strcmp(name + nl - 3, ".js") == 0)) ? "" : ".js") ;
+		FILE *f = fopen(path, "rb") ;
+		if (f == NULL){
+			continue ;
+		}
+		fseek(f, 0, SEEK_END) ;
+		long size = ftell(f) ;
+		fseek(f, 0, SEEK_SET) ;
+		src = (size >= 0 ? malloc((size_t)size + 1) : NULL) ;
+		if ((src != NULL)&&(fread(src, 1, (size_t)size, f) == (size_t)size)){
+			src[size] = '\0' ;     /* JS_Eval needs a terminated buffer */
+			len = (size_t)size ;
+		}
+		else {
+			free(src) ;
+			src = NULL ;
+		}
+		fclose(f) ;
+	}
+	free(search) ;
+	if (src == NULL){
+		JS_ThrowReferenceError(c, "could not load module '%s' (not in UGLY_JS_PATH)", name) ;
+		return NULL ;
+	}
+	JSValue fn = JS_Eval(c, src, len, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY) ;
+	free(src) ;
+	if (JS_IsException(fn)){
+		return NULL ;
+	}
+	JSModuleDef *m = JS_VALUE_GET_PTR(fn) ;
+	JS_FreeValue(c, fn) ;
+	return m ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Operations                                                       */
+/* ---------------------------------------------------------------- */
+
+static jsrt *RT(ugly_rt *rt){
+	return ugly_rt_native(rt) ;
+}
+
+
+/* Finishes an operation that produced v (consumed), or a pending exception. */
+static ugly_status out_val(ugly_ctx *ctx, jsrt *r, JSValue v, ugly_kind want, ugly_val *out){
+	if (JS_IsException(v)){
+		return js_failure(ctx, r) ;
+	}
+	ugly_status st = to_val(ctx, r, v, want, out) ;
+	JS_FreeValue(r->c, v) ;
+	return st ;
+}
+
+
+/* Converts args to JS values (new references). NULL with st set on failure. */
+static JSValue *js_values(ugly_ctx *ctx, jsrt *r, const ugly_val *args, size_t n, ugly_status *st){
+	JSValue *a = calloc(n + 1, sizeof(JSValue)) ;
+	size_t i ;
+	*st = UGLY_OK ;
+	for (i = 0 ; i < n ; i++){
+		a[i] = from_val(ctx, r, args[i]) ;
+		if (JS_IsException(a[i])){
+			size_t j ;
+			for (j = 0 ; j < i ; j++){
+				JS_FreeValue(r->c, a[j]) ;
+			}
+			free(a) ;
+			*st = js_failure(ctx, r) ;
+			return NULL ;
+		}
+	}
+	return a ;
+}
+
+
+static void free_values(jsrt *r, JSValue *a, size_t n){
+	size_t i ;
+	for (i = 0 ; i < n ; i++){
+		JS_FreeValue(r->c, a[i]) ;
+	}
+	free(a) ;
+}
+
+
+static ugly_status js_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_val *out){
+	jsrt *r = RT(rt) ;
+	JSContext *c = r->c ;
+	enter(r) ;
+	/* Loading evaluates the module: a promise of its namespace, settled once the jobs run. */
+	JSValue promise = JS_LoadModule(c, "", name) ;
+	if (JS_IsException(promise)){
+		return leave(r, js_failure(ctx, r)) ;
+	}
+	run_jobs(r) ;
+	ugly_status st ;
+	switch (JS_PromiseState(c, promise)){
+		case JS_PROMISE_FULFILLED:
+			st = out_val(ctx, r, JS_PromiseResult(c, promise), UGLY_HANDLE, out) ;
+			break ;
+		case JS_PROMISE_REJECTED:
+			JS_Throw(c, JS_PromiseResult(c, promise)) ;
+			st = js_failure(ctx, r) ;
+			break ;
+		default:
+			st = fail(ctx, r, UGLY_ERR_INTERNAL, "Error", "module evaluation didn't settle") ;
+	}
+	JS_FreeValue(c, promise) ;
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_globals(ugly_ctx *ctx, ugly_rt *rt, ugly_val *out){
+	jsrt *r = RT(rt) ;
+	enter(r) ;
+	return leave(r, out_val(ctx, r, JS_GetGlobalObject(r->c), UGLY_HANDLE, out)) ;
+}
+
+
+static ugly_status js_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t len, ugly_kind want, ugly_val *out){
+	jsrt *r = RT(rt) ;
+	char *src = malloc(len + 1) ;     /* JS_Eval needs a terminated buffer */
+	if (src == NULL){
+		return UGLY_ERR_NOMEM ;
+	}
+	memcpy(src, code, len) ;
+	src[len] = '\0' ;
+	enter(r) ;
+	ugly_status st = out_val(ctx, r, JS_Eval(r->c, src, len, "<eval>", JS_EVAL_TYPE_GLOBAL), want, out) ;
+	free(src) ;
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
+	jsrt *r = RT(rt) ;
+	JSContext *c = r->c ;
+	JSValueConst v = *(JSValue *)ref ;
+	enter(r) ;
+	uint32_t t = 0 ;
+	if (JS_IsObject(v)){
+		t |= UGLY_TRAIT_MEMBERS ;
+		if (JS_IsArray(c, v) > 0){
+			t |= UGLY_TRAIT_ELEMENTS ;
+		}
+		if (JS_IsFunction(c, v)){
+			t |= UGLY_TRAIT_CALLABLE ;
+		}
+		if (JS_IsConstructor(c, v)){
+			t |= UGLY_TRAIT_INSTANTIABLE ;
+		}
+	}
+	*traits = t ;
+
+	/* A module namespace is "module"; other objects are their constructor's name. */
+	char name[96] = "" ;
+	if (JS_IsObject(v)){
+		JSValue tag = JS_GetProperty(c, v, r->to_string_tag) ;
+		if (JS_IsString(tag)){
+			const char *s = JS_ToCString(c, tag) ;
+			if ((s != NULL)&&(strcmp(s, "Module") == 0)){
+				snprintf(name, sizeof(name), "module") ;
+			}
+			JS_FreeCString(c, s) ;
+		}
+		JS_FreeValue(c, tag) ;
+		if (name[0] == '\0'){
+			JSValue ctor = JS_GetPropertyStr(c, v, "constructor") ;
+			if (JS_IsObject(ctor)){
+				str_prop(c, ctor, "name", name, sizeof(name)) ;
+			}
+			JS_FreeValue(c, ctor) ;
+		}
+		if (JS_HasException(c)){
+			drop_exception(c) ;
+		}
+	}
+	if (name[0] == '\0'){
+		snprintf(name, sizeof(name), "%s", JS_IsSymbol(v) ? "symbol" : (JS_IsObject(v) ? "object" : "value")) ;
+	}
+	return leave(r, ugly_val_set_string(ctx, type_name, name, strlen(name))) ;
+}
+
+
+/* Looks up member 'name' (own or inherited). 0: absent, 1: present (*val set), -1: exception. */
+static int member(jsrt *r, JSValueConst obj, const char *name, JSValue *val){
+	JSContext *c = r->c ;
+	JSAtom atom = JS_NewAtom(c, name) ;
+	int has = JS_HasProperty(c, obj, atom) ;
+	if (has > 0){
+		*val = JS_GetProperty(c, obj, atom) ;
+		if (JS_IsException(*val)){
+			has = -1 ;
+		}
+	}
+	JS_FreeAtom(c, atom) ;
+	return has ;
+}
+
+
+static ugly_status js_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_kind want, ugly_val *out){
+	jsrt *r = RT(rt) ;
+	JSValueConst obj = *(JSValue *)ref ;
+	if (! JS_IsObject(obj)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
+	}
+	enter(r) ;
+	JSValue v ;
+	int has = member(r, obj, name, &v) ;
+	ugly_status st = (has < 0 ? js_failure(ctx, r)
+		: has == 0 ? fail(ctx, r, UGLY_ERR_NOT_FOUND, "ReferenceError", name)
+		: out_val(ctx, r, v, want, out)) ;
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_val v){
+	jsrt *r = RT(rt) ;
+	JSValueConst obj = *(JSValue *)ref ;
+	if (! JS_IsObject(obj)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
+	}
+	enter(r) ;
+	JSValue jv = from_val(ctx, r, v) ;
+	ugly_status st = UGLY_OK ;
+	if (JS_IsException(jv)||(JS_SetPropertyStr(r->c, obj, name, jv) < 0)){
+		st = js_failure(ctx, r) ;
+	}
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	jsrt *r = RT(rt) ;
+	JSContext *c = r->c ;
+	JSValueConst obj = *(JSValue *)ref ;
+	if (! JS_IsObject(obj)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
+	}
+	enter(r) ;
+	JSPropertyEnum *tab = NULL ;
+	uint32_t n = 0, i ;
+	if (JS_GetOwnPropertyNames(c, &tab, &n, obj, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0){
+		return leave(r, js_failure(ctx, r)) ;
+	}
+	ugly_val *names = calloc(n + 1, sizeof(ugly_val)) ;
+	const char **strs = calloc(n + 1, sizeof(char *)) ;
+	for (i = 0 ; i < n ; i++){
+		size_t len = 0 ;
+		strs[i] = JS_AtomToCStringLen(c, &len, tab[i].atom) ;
+		names[i] = ugly_str(strs[i] != NULL ? strs[i] : "", strs[i] != NULL ? len : 0) ;
+	}
+	ugly_status st = ugly_list_new(ctx, names, n, out) ;
+	for (i = 0 ; i < n ; i++){
+		JS_FreeCString(c, strs[i]) ;
+	}
+	free(strs) ;
+	free(names) ;
+	JS_FreePropertyEnum(c, tab, n) ;
+	return leave(r, st) ;
+}
+
+
+/* An array's length, or -1 (not an array) / -2 (exception). */
+static int64_t array_length(jsrt *r, JSValueConst obj){
+	JSContext *c = r->c ;
+	if (JS_IsArray(c, obj) <= 0){
+		return -1 ;
+	}
+	JSValue lv = JS_GetPropertyStr(c, obj, "length") ;
+	int64_t n = -2 ;
+	if (! JS_IsException(lv)){
+		if (JS_ToInt64Ext(c, &n, lv) < 0){
+			n = -2 ;
+		}
+		JS_FreeValue(c, lv) ;
+	}
+	return n ;
+}
+
+
+static ugly_status js_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
+	jsrt *r = RT(rt) ;
+	enter(r) ;
+	int64_t n = array_length(r, *(JSValue *)ref) ;
+	ugly_status st = (n == -2 ? js_failure(ctx, r)
+		: n == -1 ? fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements")
+		: UGLY_OK) ;
+	if (st == UGLY_OK){
+		*out = n ;
+	}
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want, ugly_val *out){
+	jsrt *r = RT(rt) ;
+	JSValueConst obj = *(JSValue *)ref ;
+	enter(r) ;
+	int64_t n = array_length(r, obj) ;
+	ugly_status st ;
+	if (n == -2){
+		st = js_failure(ctx, r) ;
+	}
+	else if (n == -1){
+		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements") ;
+	}
+	else if ((i < 0)||(i >= n)){
+		st = fail(ctx, r, UGLY_ERR_NOT_FOUND, "RangeError", "index out of range") ;
+	}
+	else {
+		st = out_val(ctx, r, JS_GetPropertyUint32(r->c, obj, (uint32_t)i), want, out) ;
+	}
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_val v){
+	jsrt *r = RT(rt) ;
+	JSValueConst obj = *(JSValue *)ref ;
+	enter(r) ;
+	int64_t n = array_length(r, obj) ;
+	ugly_status st = UGLY_OK ;
+	if (n == -2){
+		st = js_failure(ctx, r) ;
+	}
+	else if (n == -1){
+		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements") ;
+	}
+	else if ((i < 0)||(i > n)){
+		st = fail(ctx, r, UGLY_ERR_NOT_FOUND, "RangeError", "index out of range") ;
+	}
+	else {
+		JSValue jv = from_val(ctx, r, v) ;     /* one past the end appends */
+		if (JS_IsException(jv)||(JS_SetPropertyInt64(r->c, obj, i, jv) < 0)){
+			st = js_failure(ctx, r) ;
+		}
+	}
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_kind want, ugly_val *out){
+
+	jsrt *r = RT(rt) ;
+	JSValueConst f = *(JSValue *)ref ;
+	if (! JS_IsFunction(r->c, f)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not callable") ;
+	}
+	enter(r) ;
+	ugly_status st ;
+	JSValue *a = js_values(ctx, r, args, nargs, &st) ;
+	if (a != NULL){
+		st = out_val(ctx, r, JS_Call(r->c, f, JS_UNDEFINED, (int)nargs, a), want, out) ;
+		free_values(r, a, nargs) ;
+	}
+	return leave(r, st) ;
+}
+
+
+/* obj.method(args), with obj as 'this'. */
+static ugly_status js_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, ugly_kind want, ugly_val *out){
+
+	jsrt *r = RT(rt) ;
+	JSValueConst obj = *(JSValue *)ref ;
+	if (! JS_IsObject(obj)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no methods") ;
+	}
+	enter(r) ;
+	JSValue f ;
+	int has = member(r, obj, method, &f) ;
+	ugly_status st ;
+	if (has < 0){
+		st = js_failure(ctx, r) ;
+	}
+	else if (has == 0){
+		st = fail(ctx, r, UGLY_ERR_NOT_FOUND, "ReferenceError", method) ;
+	}
+	else if (! JS_IsFunction(r->c, f)){
+		JS_FreeValue(r->c, f) ;
+		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "member is not a method") ;
+	}
+	else {
+		JSValue *a = js_values(ctx, r, args, nargs, &st) ;
+		if (a != NULL){
+			st = out_val(ctx, r, JS_Call(r->c, f, obj, (int)nargs, a), want, out) ;
+			free_values(r, a, nargs) ;
+		}
+		JS_FreeValue(r->c, f) ;
+	}
+	return leave(r, st) ;
+}
+
+
+static ugly_status js_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_handle *out){
+
+	jsrt *r = RT(rt) ;
+	JSValueConst cls = *(JSValue *)ref ;
+	if (! JS_IsConstructor(r->c, cls)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not a constructor") ;
+	}
+	enter(r) ;
+	ugly_status st ;
+	JSValue *a = js_values(ctx, r, args, nargs, &st) ;
+	if (a != NULL){
+		ugly_val v = ugly_null() ;
+		st = out_val(ctx, r, JS_CallConstructor(r->c, cls, (int)nargs, a), UGLY_HANDLE, &v) ;
+		if (st == UGLY_OK){
+			*out = v.as.h ;
+		}
+		free_values(r, a, nargs) ;
+	}
+	return leave(r, st) ;
+}
+
+
+static void js_release(ugly_rt *rt, void *ref){
+	jsrt *r = RT(rt) ;
+	JS_FreeValue(r->c, *(JSValue *)ref) ;
+	free(ref) ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Lifecycle                                                        */
+/* ---------------------------------------------------------------- */
+
+static ugly_status js_init(ugly_ctx *ctx, const char *dir){
+	(void)ctx ; (void)dir ;
+	if (proxy_class == 0){
+		JS_NewClassID(&proxy_class) ;
+		JS_NewClassID(&proxy_fn_class) ;
+		JS_NewClassID(&error_class) ;
+	}
+	return UGLY_OK ;
+}
+
+
+static ugly_status js_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
+	jsrt *r = calloc(1, sizeof(jsrt)) ;
+	if (r == NULL){
+		return UGLY_ERR_NOMEM ;
+	}
+	r->urt = rt ;
+	r->rt = JS_NewRuntime() ;
+	r->c = (r->rt != NULL ? JS_NewContext(r->rt) : NULL) ;
+	if (r->c == NULL){
+		if (r->rt != NULL){
+			JS_FreeRuntime(r->rt) ;
+		}
+		free(r) ;
+		return ugly_fail(ctx, rt, UGLY_ERR_NOMEM, "InternalError", "can't create a QuickJS runtime") ;
+	}
+	JSContext *c = r->c ;
+	JS_SetRuntimeOpaque(r->rt, r) ;
+	JS_SetContextOpaque(c, r) ;
+	JS_NewClass(r->rt, proxy_class, &proxy_def) ;
+	JS_NewClass(r->rt, proxy_fn_class, &proxy_fn_def) ;
+	JS_NewClass(r->rt, error_class, &error_def) ;
+	JS_SetModuleLoaderFunc(r->rt, NULL, module_loader, r) ;
+
+	/* Ugly errors inherit Error.prototype, so they're Errors in JS (instanceof, stack). */
+	JSValue global = JS_GetGlobalObject(c) ;
+	JSValue error = JS_GetPropertyStr(c, global, "Error") ;
+	JSValue error_proto = JS_GetPropertyStr(c, error, "prototype") ;
+	r->error_proto = JS_NewObjectProto(c, error_proto) ;
+	JS_FreeValue(c, error_proto) ;
+	JS_FreeValue(c, error) ;
+	r->array_buffer = JS_GetPropertyStr(c, global, "ArrayBuffer") ;
+	JSValue symbol = JS_GetPropertyStr(c, global, "Symbol") ;
+	JSValue tag = JS_GetPropertyStr(c, symbol, "toStringTag") ;
+	r->to_string_tag = JS_ValueToAtom(c, tag) ;
+	JS_FreeValue(c, tag) ;
+	JS_FreeValue(c, symbol) ;
+	JS_FreeValue(c, global) ;
+
+	*native = r ;
+	return UGLY_OK ;
+}
+
+
+static ugly_status js_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
+	(void)ctx ; (void)rt ;
+	jsrt *r = native ;
+	JSContext *c = r->c ;
+	JS_FreeValue(c, r->error_proto) ;
+	JS_FreeValue(c, r->array_buffer) ;
+	JS_FreeAtom(c, r->to_string_tag) ;
+	JS_FreeContext(c) ;
+	JS_FreeRuntime(r->rt) ;     /* runs the remaining finalizers: proxies release their handles */
+	size_t i ;
+	for (i = 0 ; i < sizeof(r->pcache) / sizeof(r->pcache[0]) ; i++){
+		while (r->pcache[i] != NULL){
+			pcache_entry *e = r->pcache[i] ;
+			r->pcache[i] = e->next ;
+			free(e) ;
+		}
+	}
+	free(r) ;
+	return UGLY_OK ;
+}
+
+
+static const ugly_plugin plugin = {
+	.abi = UGLY_PLUGIN_ABI,
+	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_RESTARTABLE | UGLY_CAP_EVAL,
+	.name = "js",
+	.init = js_init,
+	.rt_new = js_rt_new,
+	.rt_delete = js_rt_delete,
+	.import = js_import,
+	.globals = js_globals,
+	.eval = js_eval,
+	.describe = js_describe,
+	.get_member = js_get_member,
+	.set_member = js_set_member,
+	.member_names = js_member_names,
+	.length = js_length,
+	.get_index = js_get_index,
+	.set_index = js_set_index,
+	.call = js_call,
+	.invoke = js_invoke,
+	.new_instance = js_new_instance,
+	.release = js_release,
+} ;
+
+
+const ugly_plugin *ugly_plugin_js(void){
+	return &plugin ;
+}

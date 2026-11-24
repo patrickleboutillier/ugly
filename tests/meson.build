@@ -18,6 +18,7 @@ test_env_vars = {
   'PYTHONPATH': meson.current_source_dir() / 'python',
   'PYTHONMALLOC': 'malloc',
   'PYTHONDONTWRITEBYTECODE': '1',
+  'UGLY_JS_PATH': meson.current_source_dir() / 'js',
 }
 test_env_base = environment(test_env_vars)
 

@@ -6,8 +6,8 @@ this list is everything else, plus the reasons behind each item.
 
 ## Now
 
-- [ ] **QuickJS plugin** (in progress). It's the third real language, with a
-  third object model: prototypes, `this`, `undefined`, and a job queue.
+- [x] **QuickJS plugin** (done 2026-11-24: `plugins/js/`).
+- [ ] **Perl**, ported from tag `v0.02` (see "Languages").
 
 ## Embedding in real hosts: HAProxy and friends
 
@@ -72,9 +72,17 @@ All additive; none of it breaks existing plugins (contract, "Scope").
 
 ## Languages
 
-- [ ] **QuickJS** (now, see above).
+- [x] **QuickJS** (done).
 - [ ] **Perl**, ported from tag `v0.02`. The lessons learned are in
-  CLAUDE.md ("Notes for the Perl port").
+  CLAUDE.md ("Notes for the Perl port"). It's worth it for codebases that
+  are stuck in Perl and need to be called from elsewhere.
+  - `/usr/bin/perl` is statically linked, so its binding registers the
+    plugin, like Lua and Python.
+  - Open questions: list vs scalar context (likely a call option beside
+    `want`), dualvars, byte vs character strings, `DESTROY` timing.
+- [ ] **A JS binding**, for programs that embed QuickJS themselves. There's
+  no standard QuickJS host executable to attach to, the way there is for
+  Lua and Python, so this waits for a real host.
 - [ ] **Java** through Panama FFM, only if there's a reason. Creating the
   JVM still needs the JNI invocation API.
 

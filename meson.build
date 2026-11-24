@@ -40,6 +40,7 @@ subdir('src')
 subdir('plugins/mock')
 subdir('plugins/lua')
 subdir('plugins/python')
+subdir('plugins/js')
 subdir('tests')
 subdir('examples')
 

@@ -386,17 +386,17 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 How each language maps onto the contract. "Proxy finalizer" is where a
 proxy releases its handle reference.
 
-| | Lua 5.4 | CPython 3.10+ | QuickJS | Perl 5 |
+| | Lua 5.4 | CPython 3.10+ | QuickJS (`js`) | Perl 5 |
 |---|---|---|---|---|
-| null | `nil` | `None` | `null`, `undefined` | `undef` |
-| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and `want` allows | IV / NV, using SV flags |
-| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string / `ArrayBuffer` | UTF-8 flag: on → STRING, off → STRING decoded as Latin-1, or BYTES if wanted |
-| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties | hash keys; for methods, `can` |
+| null | `nil` | `None` | `null`, `undefined` (NULL goes in as `null`) | `undef` |
+| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IV / NV, using SV flags |
+| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag: on → STRING, off → STRING decoded as Latin-1, or BYTES if wanted |
+| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | hash keys; for methods, `can` |
 | elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays |
 | `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant |
-| proxy finalizer | userdata `__gc` | `tp_dealloc` of `ugly.Proxy` | class finalizer | `DESTROY` |
+| proxy finalizer | userdata `__gc` | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` |
 | foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | |
-| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | context, job queue | `PERL_SET_CONTEXT`, `G_EVAL` |
+| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT`, `G_EVAL` |
 | restartable | yes | no | yes | no |
 | multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY) |
 
@@ -480,6 +480,11 @@ All of them are in the headers and covered by the conformance suite.
   home plugin then applies its own receiver rule. Lua passes `self` only to
   methods found through the metatable, so a module's plain functions work
   from Python too.
+- **QuickJS** (2026-11-24) needed no change to the contract.
+  - It's built from a pinned, checksummed release (`subprojects/quickjs.wrap`), because it isn't commonly packaged.
+  - Its `FinalizationRegistry` callbacks are queued only when the GC runs, so its `ugly` module has `gc()` (collect, then run them), and the `finalized()` fixture uses it.
+  - `JS_FreeRuntime` asserts that nothing is still referenced, which makes every test's runtime deletion a leak check for the plugin.
+  - The valgrind run found a use-after-free in its rule-7 path: it released the error before taking its own reference to the payload's value. That warning is now part of rule 7 in `ugly_plugin.h`.
 - **Rule 7, completed** (found by the bindings). When an error returns to
   the language its payload came from, that language raises the original
   value or exception object, not a wrapper. A Python exception that crosses
@@ -517,7 +522,10 @@ All of them are in the headers and covered by the conformance suite.
    (`tests/python/test_binding.py`, `tests/lua/test_binding.lua`, suite
    `bindings`). Attach mode is tested there, since a C test can't host an
    interpreter it doesn't link.
-6. Then QuickJS, then port Perl.
+6. ~~QuickJS~~ (`plugins/js/`, fixtures in `tests/js/`). Done 2026-11-24.
+   It passes all 8 groups, and all 12 ordered pairs of mock, Lua, Python and
+   JS pass, clean under valgrind and helgrind.
+7. Port Perl.
 
 v1 (the 2013 contract, its Perl plugin and XS binding) was removed from the
 tree on 2026-11-24, once v2 had two real languages calling each other. It is

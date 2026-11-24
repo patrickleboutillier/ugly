@@ -2,3 +2,5 @@ option('lua', type: 'feature', value: 'auto',
   description: 'The Lua 5.4 plugin (needs liblua5.4-dev)')
 option('python', type: 'feature', value: 'auto',
   description: 'The CPython plugin (needs python3-dev)')
+option('js', type: 'feature', value: 'auto',
+  description: 'The JavaScript plugin (QuickJS, built from the release in subprojects/quickjs.wrap)')

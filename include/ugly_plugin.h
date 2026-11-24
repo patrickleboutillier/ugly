@@ -53,7 +53,9 @@ extern "C" {
  *     raised into the language is thrown natively as a wrapper (ugly_take_error)
  *     that the plugin recognises on the way out and returns unchanged. If the
  *     payload's home is this runtime, the original exception object is
- *     thrown instead.
+ *     thrown instead. Take your own reference to that native value before
+ *     releasing the payload handle or freeing the error: either may drop the
+ *     last reference, and the core then releases the ref you resolved.
  *  8. Threads: the core has already checked that the caller is the runtime's
  *     thread. 'release' is the one exception (see below).
  */
