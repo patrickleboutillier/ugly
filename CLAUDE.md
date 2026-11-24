@@ -54,7 +54,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - Checked with an injected heap overread and an injected leak: both show as ERROR (exit status 99).
   - It uses `--keep-debuginfo=yes`, because plugins are `dlclose`d.
 - **Teardown** (`ugly_runtime_delete`, `ugly_language_delete`): the tests delete everything they create, and cover re-initializing a language in the same process.
-- **Next, agreed:** the v2 contract, an API header plus a spec written before any Lua code. The author reviews the draft header.
+- **v2 contract drafted (2026-11-24), awaiting the author's review**, on branch `v2-contract`: `doc/v2/contract.md` (the spec, with 8 open questions), `doc/v2/ugly.h` (public API) and `doc/v2/ugly_plugin.h` (plugin contract). They aren't built yet. After approval: a core with a mock C plugin, then the conformance suite, then Lua.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.

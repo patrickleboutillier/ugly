@@ -1,0 +1,266 @@
+/*
+ * UGLY v2 public API: DRAFT for review. See doc/v2/contract.md.
+ *
+ * This is what a host program (or a language binding acting as one) uses.
+ * Plugins implement doc/v2/ugly_plugin.h.
+ *
+ * Conventions:
+ * - Every call takes the calling thread's ugly_ctx and returns a ugly_status.
+ *   On anything other than UGLY_OK, ugly_last_error() describes it.
+ * - Results come back through out-parameters and are owned by the caller:
+ *   release them with ugly_val_release() / ugly_release().
+ * - Arguments are borrowed: the callee copies what it keeps, including
+ *   handles (ugly_dup()).
+ */
+#ifndef UGLY_H
+#define UGLY_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define UGLY_API_VERSION 2
+
+
+/* ------------------------------------------------------------------ */
+/* Status codes                                                       */
+/* ------------------------------------------------------------------ */
+
+typedef enum ugly_status {
+	UGLY_OK = 0,
+	UGLY_ERR_RAISED,           /* a language raised an exception: see the error's payload */
+	UGLY_ERR_TYPE,             /* a value can't be converted to the kind asked for */
+	UGLY_ERR_NOT_FOUND,        /* no such member, index, library or language */
+	UGLY_ERR_NOT_CAPABLE,      /* the handle lacks the trait the operation needs */
+	UGLY_ERR_STALE_HANDLE,     /* released, revoked (borrow ended) or its runtime is gone */
+	UGLY_ERR_WRONG_THREAD,     /* runtime or ctx used from a thread that doesn't own it */
+	UGLY_ERR_IN_USE,           /* can't delete: still has live dependents */
+	UGLY_ERR_NOT_SUPPORTED,    /* the language can't do this */
+	UGLY_ERR_NOT_IMPLEMENTED,  /* the language could, the plugin doesn't (yet) */
+	UGLY_ERR_USAGE,            /* invalid arguments to the API itself */
+	UGLY_ERR_NOMEM,
+	UGLY_ERR_INTERNAL
+} ugly_status;
+
+
+/* ------------------------------------------------------------------ */
+/* Opaque types                                                       */
+/* ------------------------------------------------------------------ */
+
+typedef struct ugly_ctx ugly_ctx;           /* per thread: error slot, call frames */
+typedef struct ugly_lang ugly_lang;         /* a loaded plugin */
+typedef struct ugly_rt ugly_rt;             /* one interpreter / VM instance */
+typedef struct ugly_error ugly_error;       /* a structured error */
+
+/*
+ * A handle names a non-primitive value (object, function, list, map, module,
+ * class...) that lives in some runtime, its "home". It is an index plus a
+ * generation into the core's handle table, never a pointer: a stale handle is
+ * detected (UGLY_ERR_STALE_HANDLE), not dereferenced.
+ */
+typedef uint64_t ugly_handle;
+#define UGLY_NO_HANDLE ((ugly_handle)0)
+
+
+/* ------------------------------------------------------------------ */
+/* Values                                                             */
+/* ------------------------------------------------------------------ */
+
+typedef enum ugly_kind {
+	UGLY_ANY = 0,      /* only as a "want": let the home language pick */
+	UGLY_NULL,
+	UGLY_BOOL,
+	UGLY_INT,          /* int64 */
+	UGLY_DOUBLE,
+	UGLY_STRING,       /* UTF-8, explicit length, may contain NUL */
+	UGLY_BYTES,
+	UGLY_HANDLE
+} ugly_kind;
+
+/*
+ * Primitives cross by value; everything else crosses as a handle. Passed by
+ * value, no allocation for primitives. String and bytes pointers in arguments
+ * are borrowed for the duration of the call; in results they point to memory
+ * owned by the value (free it with ugly_val_release()).
+ */
+typedef struct ugly_val {
+	ugly_kind kind;
+	union {
+		bool b;
+		int64_t i;
+		double d;
+		struct { const char *ptr; size_t len; } str;
+		struct { const uint8_t *ptr; size_t len; } bytes;
+		ugly_handle h;
+	} as;
+} ugly_val;
+
+/* Constructors for arguments: nothing is copied or allocated. */
+static inline ugly_val ugly_null(void){ ugly_val v = { UGLY_NULL, { .i = 0 } } ; return v ; }
+static inline ugly_val ugly_bool(bool b){ ugly_val v = { UGLY_BOOL, { .b = b } } ; return v ; }
+static inline ugly_val ugly_int(int64_t i){ ugly_val v = { UGLY_INT, { .i = i } } ; return v ; }
+static inline ugly_val ugly_double(double d){ ugly_val v = { UGLY_DOUBLE, { .d = d } } ; return v ; }
+static inline ugly_val ugly_str(const char *p, size_t len){ ugly_val v = { UGLY_STRING, { .str = { p, len } } } ; return v ; }
+static inline ugly_val ugly_bytes(const uint8_t *p, size_t len){ ugly_val v = { UGLY_BYTES, { .bytes = { p, len } } } ; return v ; }
+static inline ugly_val ugly_hval(ugly_handle h){ ugly_val v = { UGLY_HANDLE, { .h = h } } ; return v ; }
+
+/* Releases what a result value owns (string/bytes memory, a handle). Sets it to NULL. */
+void ugly_val_release(ugly_ctx *ctx, ugly_val *v) ;
+
+
+/* ------------------------------------------------------------------ */
+/* Contexts and errors                                                */
+/* ------------------------------------------------------------------ */
+
+/* A ctx belongs to the thread that created it. */
+ugly_status ugly_ctx_new(ugly_ctx **out) ;
+void ugly_ctx_delete(ugly_ctx *ctx) ;
+
+/* The error from the last call on ctx, or NULL. Valid until the next call on ctx. */
+const ugly_error *ugly_last_error(const ugly_ctx *ctx) ;
+
+ugly_status ugly_error_status(const ugly_error *err) ;
+const char *ugly_error_language(const ugly_error *err) ;  /* "lua", "python", "perl5", "core", "c"... */
+const char *ugly_error_type(const ugly_error *err) ;      /* in that language's terms, e.g. "ZeroDivisionError" */
+const char *ugly_error_message(const ugly_error *err) ;
+
+/*
+ * The original exception object, as an owned handle, or UGLY_NO_HANDLE.
+ * When it travels back to its home runtime, the home plugin rethrows that
+ * object itself, so its identity survives the round trip.
+ */
+ugly_status ugly_error_payload(ugly_ctx *ctx, const ugly_error *err, ugly_handle *out) ;
+
+/*
+ * For a C callable (ugly_callable_new) failing: records an error in ctx with
+ * language "c" and returns 'status', so a callback can 'return ugly_raise(...)'.
+ * Ownership of 'payload' (or UGLY_NO_HANDLE) moves to the error.
+ */
+ugly_status ugly_raise(ugly_ctx *ctx, ugly_status status, const char *type, const char *message,
+	ugly_handle payload) ;
+
+
+/* ------------------------------------------------------------------ */
+/* Languages and runtimes                                             */
+/* ------------------------------------------------------------------ */
+
+/* What a plugin can do. Tests skip by capability instead of failing. */
+#define UGLY_CAP_MULTI_RUNTIME  (1u << 0)  /* several runtimes per process */
+#define UGLY_CAP_RESTARTABLE    (1u << 1)  /* can unload and load again in one process */
+#define UGLY_CAP_ATTACH         (1u << 2)  /* can attach to an interpreter it didn't create */
+#define UGLY_CAP_EVAL           (1u << 3)  /* supports ugly_rt_eval */
+
+/* Loads <plugin dir>/ugly_<name>.so by full path (UGLY_PLUGIN_DIR overrides the dir). */
+ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out) ;
+const char *ugly_lang_name(const ugly_lang *lang) ;
+uint32_t ugly_lang_caps(const ugly_lang *lang) ;
+/* UGLY_ERR_IN_USE while runtimes are alive. A plugin without UGLY_CAP_RESTARTABLE stays mapped. */
+ugly_status ugly_lang_unload(ugly_ctx *ctx, ugly_lang *lang) ;
+
+/* A new interpreter, owned by (and bound to) the calling thread. */
+ugly_status ugly_rt_new(ugly_ctx *ctx, ugly_lang *lang, ugly_rt **out) ;
+
+/*
+ * Wraps an interpreter that already exists (the host's own), so its values
+ * can be exported as handles. This is how a language binding works: a binding
+ * is that language's plugin in attach mode. 'native' is plugin-specific
+ * (a PerlInterpreter*, a lua_State*, ...). Requires UGLY_CAP_ATTACH.
+ */
+ugly_status ugly_rt_attach(ugly_ctx *ctx, ugly_lang *lang, void *native, ugly_rt **out) ;
+
+/*
+ * Destroys the interpreter (or detaches). Every handle whose home is rt
+ * becomes stale; proxies for them in other runtimes fail with
+ * UGLY_ERR_STALE_HANDLE from then on. Not refused for live handles: see
+ * contract.md, "Runtime teardown".
+ */
+ugly_status ugly_rt_delete(ugly_ctx *ctx, ugly_rt *rt) ;
+ugly_lang *ugly_rt_lang(const ugly_rt *rt) ;
+
+/* Loads a library/module ("calc", "os.path", "./x.js") and returns it as a handle. */
+ugly_status ugly_rt_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_handle *out) ;
+/* The runtime's global namespace (Lua _G, Python __main__, JS globalThis, Perl main::). */
+ugly_status ugly_rt_globals(ugly_ctx *ctx, ugly_rt *rt, ugly_handle *out) ;
+/* Optional (UGLY_CAP_EVAL). */
+ugly_status ugly_rt_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t len, ugly_kind want, ugly_val *out) ;
+
+
+/* ------------------------------------------------------------------ */
+/* Handles: ownership                                                 */
+/* ------------------------------------------------------------------ */
+
+/* Another owned reference to the same value (for keeping a borrowed handle). */
+ugly_status ugly_dup(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
+/* Drops an owned reference. Safe from any thread: off the home thread it is deferred. */
+void ugly_release(ugly_ctx *ctx, ugly_handle h) ;
+/* Whether two handles (owned or borrowed) name the same value. */
+ugly_status ugly_same(ugly_ctx *ctx, ugly_handle a, ugly_handle b, bool *out) ;
+
+
+/* ------------------------------------------------------------------ */
+/* Handles: the interop protocol                                      */
+/* ------------------------------------------------------------------ */
+
+/* What a handle supports. A value can have several traits (a Python list has ELEMENTS and MEMBERS). */
+#define UGLY_TRAIT_MEMBERS       (1u << 0)  /* string-keyed: fields, methods, dict/hash/table entries */
+#define UGLY_TRAIT_ELEMENTS      (1u << 1)  /* integer-indexed, with a length */
+#define UGLY_TRAIT_CALLABLE      (1u << 2)  /* ugly_call */
+#define UGLY_TRAIT_INSTANTIABLE  (1u << 3)  /* ugly_new: classes, constructors */
+
+/* Traits, plus the type name in the home language's terms ("dict", "HASH", "table"). */
+ugly_status ugly_describe(ugly_ctx *ctx, ugly_handle h, uint32_t *traits, ugly_val *type_name) ;
+
+ugly_status ugly_get_member(ugly_ctx *ctx, ugly_handle h, const char *name, ugly_kind want, ugly_val *out) ;
+ugly_status ugly_set_member(ugly_ctx *ctx, ugly_handle h, const char *name, ugly_val v) ;
+/* The member names, as a core list handle of strings. */
+ugly_status ugly_member_names(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
+
+ugly_status ugly_length(ugly_ctx *ctx, ugly_handle h, int64_t *out) ;
+ugly_status ugly_get_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_kind want, ugly_val *out) ;
+ugly_status ugly_set_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_val v) ;
+
+/*
+ * 'want' is the kind the caller needs back. UGLY_ANY lets the home language
+ * pick its natural kind; anything else is converted by the home plugin with
+ * that language's own rules (a Perl "42" becomes INT; a Python "42" is
+ * UGLY_ERR_TYPE).
+ */
+ugly_status ugly_call(ugly_ctx *ctx, ugly_handle fn, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out) ;
+/* A method call, with the language's own receiver semantics (self, this, invocant, ':'). */
+ugly_status ugly_invoke(ugly_ctx *ctx, ugly_handle obj, const char *method, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out) ;
+/* Constructs an instance (Python Class(), JS new, Perl Class->new, Lua Class.new). */
+ugly_status ugly_new(ugly_ctx *ctx, ugly_handle cls, const ugly_val *args, size_t nargs, ugly_handle *out) ;
+
+
+/* ------------------------------------------------------------------ */
+/* Values made by the host                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A C function as a callable handle: the callback mechanism. Any runtime can
+ * call it like a native function. Its home is the calling thread's host
+ * runtime. free_data runs when the last reference is released.
+ */
+typedef ugly_status (*ugly_c_fn)(ugly_ctx *ctx, void *data, const ugly_val *args, size_t nargs,
+	ugly_kind want, ugly_val *out) ;
+ugly_status ugly_callable_new(ugly_ctx *ctx, ugly_c_fn fn, void *data, void (*free_data)(void *),
+	ugly_handle *out) ;
+
+/* Core-owned containers that implement the protocol, so a host can pass a list or a map to any runtime. */
+ugly_status ugly_list_new(ugly_ctx *ctx, const ugly_val *items, size_t n, ugly_handle *out) ;
+ugly_status ugly_map_new(ugly_ctx *ctx, ugly_handle *out) ;
+
+/* For a C function returning a value it computed: copies into memory the result owns. */
+ugly_status ugly_val_set_string(ugly_ctx *ctx, ugly_val *out, const char *p, size_t len) ;
+ugly_status ugly_val_set_bytes(ugly_ctx *ctx, ugly_val *out, const uint8_t *p, size_t len) ;
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
