@@ -17,11 +17,15 @@
 #define RETURN_NULL_IF_NULL(c)		if (c == NULL){return NULL ;}
 
 
-/* 
- * The head directory where langauge plugins can look for there helper code
- * in there own language plugin language.
-*/ 
-#define UGLY_LANGUAGE_DIR		"/usr/lib/ugly"
+/*
+ * The directory under which each language plugin finds its helper code, in
+ * <dir>/<lang>/. The build sets it to $(pkglibdir); at runtime the
+ * UGLY_LANGUAGE_DIR environment variable overrides it (the test suite points
+ * it at the source tree's lang/ directory).
+*/
+#ifndef UGLY_LANGUAGE_DIR
+#define UGLY_LANGUAGE_DIR		"/usr/local/lib/ugly"
+#endif
 
 
 struct _ugly_interface ;

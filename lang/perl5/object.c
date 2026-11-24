@@ -39,7 +39,8 @@ ugly_value* _ugly_perl5_object_call_method(ugly_context *ctx, ugly_object *obj, 
 
 	int extra = 3 ;
 	SV **svs = UGLY_MALLOC_N(SV *, nb_args + extra) ;
-	svs[0] = ugly_object_get_handle(obj) ;
+	/* perl_call_helper_function() mortalizes its arguments: the object keeps its own reference. */
+	svs[0] = SvREFCNT_inc((SV *)ugly_object_get_handle(obj)) ;
 	svs[1] = newSViv(rtype) ;
 	svs[2] = newSVpv(method, 0) ;
 	int i = 0 ;
@@ -62,7 +63,10 @@ void _ugly_perl5_object_delete(ugly_context *ctx, ugly_object *obj){
 	PerlInterpreter *my_perl = (PerlInterpreter *)(ugly_object_get_runtime(obj)->handle) ;
 	ugly_debug(4, "%p", ugly_object_get_handle(obj)) ;
 
+	/* Dropping the last reference may run DESTROY, so this interpreter must be current. */
+	UGLY_PERL5_ENTER(my_perl) ;
 	SvREFCNT_dec((SV *)ugly_object_get_handle(obj)) ;
+	UGLY_PERL5_LEAVE() ;
 	ugly_debug(3, "<- Perl object delete") ;
 }
 

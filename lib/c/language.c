@@ -38,8 +38,12 @@ ugly_language *ugly_language_init(ugly_context *ctx, const char *name){
 	free(buf) ;
 
 	/* Build the dir name where the plugin helper files can be. */
-	char *dir = (char *)malloc((strlen(UGLY_LANGUAGE_DIR) + strlen(name) + 32) * sizeof(char)) ;
-	sprintf(dir, "%s/%s", UGLY_LANGUAGE_DIR, name) ;
+	const char *base = getenv("UGLY_LANGUAGE_DIR") ;
+	if ((base == NULL)||(base[0] == '\0')){
+		base = UGLY_LANGUAGE_DIR ;
+	}
+	char *dir = (char *)malloc((strlen(base) + strlen(name) + 32) * sizeof(char)) ;
+	sprintf(dir, "%s/%s", base, name) ;
 	ugly_interface *iface = (*init)(ctx, name) ;
 	if (ugly_context_has_error(ctx)){
 		free(dir) ;

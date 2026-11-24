@@ -132,8 +132,9 @@ const char *ugly_value_to_string(ugly_value *val){
 	switch (val->type){
 		case UGLY_BOOL: {
 			char b[32] ;
-			snprintf(b, 31, "BOOL(%s)", val->v.l ? "true" : "false") ;
+			snprintf(b, sizeof(b), "BOOL(%s)", val->v.c ? "true" : "false") ;
 			val->stringy = strdup(b) ;
+			return val->stringy ;
 		}
 		case UGLY_LONG: {
 			char num[1024] ;
@@ -148,8 +149,8 @@ const char *ugly_value_to_string(ugly_value *val){
 			return val->stringy ;
 		}
 		case UGLY_CHAR: {
-			char c[8] ;
-			snprintf(c, 1, "CHAR(%c)", val->v.c) ;
+			char c[16] ;
+			snprintf(c, sizeof(c), "CHAR(%c)", val->v.c) ;
 			val->stringy = strdup(c) ;
 			return val->stringy ;
 		}

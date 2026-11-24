@@ -5,7 +5,8 @@ AC_PREREQ(2.59)
 AC_INIT(UGLY, 0.01)
 AC_CONFIG_SRCDIR([lib/c/ugly.h])
 AM_CONFIG_HEADER([config.h])
-AM_INIT_AUTOMAKE
+AM_INIT_AUTOMAKE([subdir-objects])
+AC_REQUIRE_AUX_FILE([tap-driver.sh])
 AC_CONFIG_MACRO_DIR([m4])
 LT_INIT
 
@@ -15,6 +16,11 @@ AC_LANG_C
 AC_PROG_CC
 AM_PROG_CC_C_O
 AC_PROG_MAKE_SET
+AC_PROG_AWK
+AC_PATH_PROG([PERL], [perl])
+AS_IF([test -z "$PERL"], [AC_MSG_ERROR([perl is required])])
+AC_MSG_CHECKING([for ExtUtils::Embed])
+AS_IF([$PERL -MExtUtils::Embed -e 1 2>/dev/null], [AC_MSG_RESULT([yes])], [AC_MSG_ERROR([ExtUtils::Embed is required to build the perl5 plugin])])
 
 # Checks for libraries.
 AC_CHECK_LIB([dl], [dlopen])

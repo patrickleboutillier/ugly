@@ -334,8 +334,25 @@ new(pkg, ctx, lang)
 		RETVAL
 
 
-# ugly_language*				ugly_runtime_get_language	(const ugly_runtime *rt) ;
-# UGLY_IFACE void 			ugly_runtime_load_library	(ugly_context *ctx, ugly_runtime *rt, const char *lib) ;
+ugly_language *
+get_language(this)
+	ugly_runtime *this
+	CODE:
+		RETVAL = ugly_runtime_get_language(this) ;
+	OUTPUT:
+		RETVAL
+
+
+void
+load_library(this, ctx, lib)
+	ugly_runtime *this
+	ugly_context *ctx
+	const char *lib
+	CODE:
+		ugly_runtime_load_library(ctx, this, lib) ;
+
+
+
 # UGLY_IFACE ugly_value*		ugly_runtime_call_function	(ugly_context *ctx, ugly_runtime *rt, const char *func, ugly_value **args, int nb_args, const char *hint) ;
 
 

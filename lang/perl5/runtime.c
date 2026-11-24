@@ -16,6 +16,8 @@ void *_ugly_perl5_runtime_new(ugly_context *ctx, ugly_language *lang){
 	PerlInterpreter *my_perl = NULL ;
 	char *embedding[] = { "", "-e", "0" } ;
 
+	/* perl_alloc() makes the new interpreter current: restore the caller's on the way out. */
+	PerlInterpreter *_ugly_perl5_saved = PERL_GET_CONTEXT ;
 	my_perl = perl_alloc() ;
 	perl_construct(my_perl) ;
 	perl_parse(my_perl, xs_init, 3, embedding, NULL) ;
@@ -24,17 +26,21 @@ void *_ugly_perl5_runtime_new(ugly_context *ctx, ugly_language *lang){
 
 	const char *dir = ugly_language_get_dir(lang) ;
 	char *buf = (char *)malloc((strlen(dir) + 64) * sizeof(char)) ;
-	sprintf(buf, "require '%s/helper.pm' ;", dir) ;
-	ugly_debug(3, "Loading helper perl5 module %s/helper.pm", dir) ;
+	sprintf(buf, "require '%s/helper/helper.pm' ;", dir) ;
+	ugly_debug(3, "Loading helper perl5 module %s/helper/helper.pm", dir) ;
 	eval_pv(buf, FALSE) ;
 	if (SvTRUE(ERRSV)){
 		STRLEN n_a ;
-		ugly_context_set_error(ctx, UGLY_LIBRARY_ERROR, "Can't load perl5 helper module %s/helper.pm: %s",
+		ugly_context_set_error(ctx, UGLY_LIBRARY_ERROR, "Can't load perl5 helper module %s/helper/helper.pm: %s",
 			dir, SvPV(ERRSV, n_a)) ;
+		free(buf) ;
+		UGLY_PERL5_LEAVE() ;
 		return NULL ;
 	}
-	ugly_debug(3, "Helper perl5 module %s/helper.pm loaded", dir) ;
+	ugly_debug(3, "Helper perl5 module %s/helper/helper.pm loaded", dir) ;
+	free(buf) ;
 
+	UGLY_PERL5_LEAVE() ;
 	return my_perl ;
 }
 

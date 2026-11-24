@@ -56,7 +56,7 @@ ugly_value *ugly_runtime_call_function(ugly_context *ctx, ugly_runtime *rt, ugly
 
 	ugly_context_clear_error(ctx) ;
 
-	ugly_debug(2, "-> Runtime call_function: (%s)%s::%s()", ugly_type_to_string(rtype), 
+	ugly_debug(2, "-> Runtime call_function: (%s)%s::%s(%s)", ugly_type_to_string(rtype), 
 		ugly_runtime_to_string(rt), func, ugly_debug_args(args, nb_args)) ;
 	const ugly_interface *iface = ugly_language_get_iface(ugly_runtime_get_language(rt)) ;
 	ugly_value *value = iface->runtime_call_function(ctx, rt, rtype, func, args, nb_args, hint) ;
