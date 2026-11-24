@@ -10,7 +10,7 @@
 # LD_LIBRARY_PATH and PERL5LIB at the source and build trees.
 
 project('ugly', 'c',
-  version: '0.01',
+  version: '0.02',
   license: 'GPL-3.0-or-later',
   meson_version: '>= 0.61',
   default_options: [

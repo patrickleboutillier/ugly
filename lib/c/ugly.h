@@ -2,7 +2,7 @@
 #define _UGLY_H_
 
 
-#define UGLY_VERSION "0.01"
+#define UGLY_VERSION "0.02"
 
 
 /* Error codes */
