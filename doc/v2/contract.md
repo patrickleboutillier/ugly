@@ -1,6 +1,6 @@
 # UGLY v2: the contract
 
-*Draft for review, 2026-11-24. This document sits alongside
+*Approved 2026-11-24. This document sits alongside
 [`ugly.h`](ugly.h) (the public API) and [`ugly_plugin.h`](ugly_plugin.h)
 (the plugin contract). Neither header is built yet. The v1 reference is
 tag `v0.02`.*
@@ -352,33 +352,27 @@ proxy releases its handle reference.
 | restartable | yes | no | yes | no |
 | multiple runtimes | yes | no in v2.0 (subinterpreters later) | yes | yes (MULTIPLICITY) |
 
-## Open questions for review
+## Decisions
 
-My recommendation is given first for each.
+The review questions, decided on 2026-11-24 (the recommendation was taken
+in every case):
 
-1. **Borrow revocation** (§3). Enforce borrows with revoked slots, or only
-   document them? I recommend enforcing. Inline::Java's experience suggests
-   that lifetime bugs found at run time cost far more than a table
-   operation per argument. Is that right?
-2. **Runtime delete** (§7). Invalidate the runtime's handles (recommended),
-   or keep v1's refusal?
-3. **Bindings as attach mode** (§8). Is one adapter with two modes right,
-   or did the separation in Inline::Java exist for a reason that applies
-   here?
-4. **`want` coercion** (§1). Native rules in the home plugin (recommended),
-   or neutral rules in the core?
-5. **Integer overflow.** Python integers wider than int64 and Perl NVs that
-   hold integers: give `UGLY_ERR_TYPE` (recommended), or fall back to a
-   DOUBLE or a decimal STRING?
-6. **Perl strings without the UTF-8 flag.** Decode as Latin-1 into STRING
-   (recommended, because that's what perl itself assumes), or return BYTES?
-7. **Draining deferred releases.** Drain only on entry into the home
-   runtime (recommended), or also on an explicit `ugly_rt_collect`, for
-   hosts that hold a runtime idle?
-8. **The hash protocol** for non-string keys. Keep it out of v2.0
-   (recommended), or include it?
+1. **Borrows are enforced:** each handle argument gets a borrow slot,
+   revoked when the call returns (§3).
+2. **Runtime delete invalidates** that runtime's handles. It is no longer
+   refused (§7).
+3. **A binding is its language's plugin in attach mode** (§8).
+4. **`want` is applied by the home plugin, using the language's own rules**
+   (§1).
+5. **Integers that don't fit in int64 give `UGLY_ERR_TYPE`.** There is no
+   silent fallback to DOUBLE or to a string.
+6. **Perl strings without the UTF-8 flag are decoded as Latin-1 into
+   STRING.** They become BYTES only when `want` asks for bytes.
+7. **Deferred releases are drained only on entry into the home runtime.**
+   There is no `ugly_rt_collect`.
+8. **No hash protocol in v2.0.**
 
-## After approval
+## Order of work
 
 1. Implement the core from `ugly.h`: handle table, frames, borrows, errors
    and thread checks. Test it against a **mock plugin** written in C. That
