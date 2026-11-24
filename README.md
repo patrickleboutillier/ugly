@@ -150,6 +150,9 @@ Next on the plan (in [doc/contract.md](doc/contract.md), "Order of work"):
 1. **QuickJS.**
 2. **Perl**, ported from the original plugin.
 
+Other ideas and open work, including embedding in hosts like HAProxy that
+have Lua built in, are in [TODO.md](TODO.md).
+
 History is in the tags. `v0.01` is the original 2013–2014 code, including an
 early Java plugin and a JNA binding. `v0.02` is that first design brought
 up to date: a Perl 5 plugin and an XS binding, with an autotools-free build

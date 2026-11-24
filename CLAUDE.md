@@ -64,6 +64,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
 - **Next: QuickJS**, then the Perl port (see the notes above). See contract.md "Order of work".
+- **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
 
 ## Landscape (2026)
 
