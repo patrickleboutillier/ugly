@@ -660,6 +660,7 @@ ac_subst_vars='am__EXEEXT_FALSE
 am__EXEEXT_TRUE
 LTLIBOBJS
 LIB@&t@OBJS
+VALGRIND
 PERL
 LT_SYS_LIBRARY_PATH
 OTOOL64
@@ -13537,6 +13538,52 @@ printf "%s\n" "yes" >&6; }
 else $as_nop
   as_fn_error $? "ExtUtils::Embed is required to build the perl5 plugin" "$LINENO" 5
 fi
+# Optional: only needed for 'make check-valgrind'.
+# Extract the first word of "valgrind", so it can be a program name with args.
+set dummy valgrind; ac_word=$2
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+printf %s "checking for $ac_word... " >&6; }
+if test ${ac_cv_path_VALGRIND+y}
+then :
+  printf %s "(cached) " >&6
+else $as_nop
+  case $VALGRIND in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_VALGRIND="$VALGRIND" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  case $as_dir in #(((
+    '') as_dir=./ ;;
+    */) ;;
+    *) as_dir=$as_dir/ ;;
+  esac
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir$ac_word$ac_exec_ext"; then
+    ac_cv_path_VALGRIND="$as_dir$ac_word$ac_exec_ext"
+    printf "%s\n" "$as_me:${as_lineno-$LINENO}: found $as_dir$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+VALGRIND=$ac_cv_path_VALGRIND
+if test -n "$VALGRIND"; then
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $VALGRIND" >&5
+printf "%s\n" "$VALGRIND" >&6; }
+else
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+fi
+
+
 
 # Checks for libraries.
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for dlopen in -ldl" >&5

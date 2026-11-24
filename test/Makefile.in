@@ -471,6 +471,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+VALGRIND = @VALGRIND@
 VERSION = @VERSION@
 abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
@@ -556,6 +557,28 @@ AM_TESTS_ENVIRONMENT = \
 	export PERL5LIB;
 
 EXTRA_DIST = perl5/calc.pm perl5/oocalc.pm $(PERL_BINDING_TESTS)
+
+# make check-valgrind: rerun the C tests under valgrind (memcheck).
+#
+# Only memory errors (invalid reads/writes, uninitialised values) fail a test,
+# via valgrind's exit status. Leaks are reported in t/*.log but don't fail
+# yet: embedded interpreters are never destroyed because there is no
+# ugly_runtime_delete, and there is no language teardown either. Once those
+# exist, drop --errors-for-leak-kinds=none.
+#
+# The Perl binding tests are left out: running perl itself under valgrind is
+# mostly noise about perl, not about UGLY.
+#
+# This overwrites the t/*.log files from a plain 'make check'; the summary
+# goes to test-suite-valgrind.log.
+VALGRIND_FLAGS = \
+	--error-exitcode=99 \
+	--leak-check=full \
+	--errors-for-leak-kinds=none \
+	--track-origins=yes \
+	--num-callers=30
+
+MOSTLYCLEANFILES = test-suite-valgrind.log
 all: all-am
 
 .SUFFIXES:
@@ -981,6 +1004,7 @@ install-strip:
 	    "INSTALL_PROGRAM_ENV=STRIPPROG='$(STRIP)'" install; \
 	fi
 mostlyclean-generic:
+	-test -z "$(MOSTLYCLEANFILES)" || rm -f $(MOSTLYCLEANFILES)
 	-test -z "$(TEST_LOGS)" || rm -f $(TEST_LOGS)
 	-test -z "$(TEST_LOGS:.log=.trs)" || rm -f $(TEST_LOGS:.log=.trs)
 	-test -z "$(TEST_SUITE_LOG)" || rm -f $(TEST_SUITE_LOG)
@@ -1093,6 +1117,18 @@ uninstall-am:
 
 .PRECIOUS: Makefile
 
+
+check-valgrind:
+	@if test -z '$(VALGRIND)'; then \
+	  echo "check-valgrind: valgrind not found; install it and rerun configure" >&2; \
+	  exit 1; \
+	fi
+	PERL_DESTRUCT_LEVEL=2 $(MAKE) $(AM_MAKEFLAGS) check \
+	  TESTS='$(C_TESTS)' \
+	  TEST_SUITE_LOG=test-suite-valgrind.log \
+	  LOG_COMPILER='$(LIBTOOL) --mode=execute $(VALGRIND) $(VALGRIND_FLAGS)'
+
+.PHONY: check-valgrind
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

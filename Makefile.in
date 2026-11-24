@@ -159,7 +159,7 @@ am__define_uniq_tagged_files = \
 DIST_SUBDIRS = $(SUBDIRS)
 am__DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/config.h.in AUTHORS \
 	COPYING ChangeLog INSTALL NEWS README compile config.guess \
-	config.sub install-sh ltmain.sh missing tap-driver.sh
+	config.sub depcomp install-sh ltmain.sh missing tap-driver.sh
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 distdir = $(PACKAGE)-$(VERSION)
 top_distdir = $(distdir)
@@ -269,6 +269,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+VALGRIND = @VALGRIND@
 VERSION = @VERSION@
 abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
@@ -815,6 +816,12 @@ uninstall-am:
 
 .PRECIOUS: Makefile
 
+
+# The C tests again, under valgrind. See test/Makefile.am.
+check-valgrind: all
+	cd test && $(MAKE) $(AM_MAKEFLAGS) check-valgrind
+
+.PHONY: check-valgrind
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.
