@@ -117,28 +117,28 @@ The last two lines are not small gaps. They are the substance of the
 
 ## Building and testing
 
-You need a C toolchain with autotools and libtool, plus perl with
-`ExtUtils::Embed` and its embedding library (`libperl-dev` on Debian/Ubuntu).
-There are no other dependencies.
+You need a C toolchain, Meson and Ninja, plus perl with `ExtUtils::Embed` and
+its embedding library. On Debian/Ubuntu that's `meson`, `ninja-build` and
+`libperl-dev`. There are no other dependencies. Valgrind is optional.
 
 ```sh
-autoreconf -fi      # only after editing configure.ac or a Makefile.am
-./configure
-make                # libugly, the perl5 plugin, and the Perl XS binding
-make check          # the C tests and the Perl binding tests
+meson setup build
+meson compile -C build      # libugly, the perl5 plugin, and the Perl XS binding
+meson test -C build         # the C tests and the Perl binding tests
 ```
 
-Build in the source tree: `lib/c` runs `./gen_iface.sh` by relative path, so
-out-of-tree builds don't work yet. `make check` needs no install step.
-`make install` puts plugin helpers under `$(pkglibdir)`
-(`/usr/local/lib/ugly/<lang>/` by default), and `UGLY_LANGUAGE_DIR` overrides
-that location at runtime. The XS binding installs separately, with
-`make -C lib/perl5 install`.
+The tests need no install step. `meson install -C build` installs:
+
+- `libugly` and the plugins into `libdir`;
+- the plugin helpers under `<libdir>/ugly/<lang>/`, a location that
+  `UGLY_LANGUAGE_DIR` overrides at runtime;
+- the Perl binding into perl's site directory, which the `perl_installdir`
+  option overrides.
 
 ### The test suite
 
-Each test is a TAP stream run by automake's `tap-driver.sh`. The full output
-of each test goes to `test/<name>.log`.
+Each test is a TAP stream, and Meson runs it with `protocol: 'tap'`. The full
+output is in `build/meson-logs/testlog.txt`.
 
 - `test/t/*.c` are C programs that exercise the API: contexts, values,
   language loading, runtimes and objects. They use `test/ugly_test.h`, a small
@@ -151,13 +151,14 @@ A plugin that answers `UGLY_NOT_SUPPORTED` or `UGLY_NOT_IMPLEMENTED` gets
 skips rather than failures, so the same suite can run against every plugin.
 
 ```sh
-make check UGLY_TEST_LANG=lua       # the same suite against another plugin
-make check TESTS=t/object           # one test
-UGLY_DEBUG=3 make check             # with trace output in the logs
-make check-valgrind                 # the C tests under valgrind
+UGLY_TEST_LANG=lua meson test -C build    # the same suite against another plugin
+meson test -C build object                # one test
+meson test -C build --suite c             # only the C tests
+UGLY_DEBUG=3 meson test -C build          # with trace output in the log
+meson test -C build --setup valgrind      # the C tests under valgrind
 ```
 
-`make check-valgrind` fails a test on any memory error and on any definite,
+The valgrind setup fails a test on any memory error and on any definite,
 indirect or possible leak, so the tests delete everything they create.
 Memory that is still reachable at exit is allowed, because a plugin may keep
 process-wide state for the life of the process. For example, perl can't be

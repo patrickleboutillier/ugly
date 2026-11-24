@@ -76,6 +76,8 @@ void ugly_value_delete(ugly_value *val){
 				free(val->v.s) ;
 			}
 			break ;
+		default:
+			break ;
     }
 	if (val->stringy != NULL){
 		free(val->stringy) ;

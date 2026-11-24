@@ -1,0 +1,2 @@
+option('perl_installdir', type: 'string', value: '',
+  description: 'Where to install the Perl binding (Ugly.pm, auto/Ugly/Ugly.so). Default: perl\'s $Config{installsitearch}.')

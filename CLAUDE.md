@@ -15,16 +15,17 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - `ugly_language`: loads the plugin `libugly_<lang>.so` with `dlopen` and calls `_ugly_<lang>_language_init` to get the plugin's interface vtable.
   - `ugly_runtime`, `ugly_object`: generic wrappers that dispatch through that vtable.
 - **`lang/<x>/`**: language **plugins**. Each embeds that language's interpreter or VM and implements: language_delete, runtime_new, runtime_delete, load_library, call_function, object_new, object_call_method, object_delete. The vtable is generated from the `UGLY_IFACE` lines in `ugly_api.h`, so a new `UGLY_IFACE` entry forces every plugin to implement it.
-  - Each plugin has helper code in its own language (`helper/helper.pm`), loaded at runtime from `UGLY_LANGUAGE_DIR/<lang>`. That path is hardcoded to `/usr/lib/ugly`.
+  - Each plugin has helper code in its own language (`helper/helper.pm`), loaded at runtime from `<UGLY_LANGUAGE_DIR>/<lang>/helper/`.
 - **`lib/<x>/`**: host-language **bindings**, so code in that language can drive the C API. Perl uses XS (`lib/perl5/Ugly.xs`).
-- **`test/`**: `make check` runs everything through automake's `tap-driver.sh`. That covers the C programs in `test/t/*.c` and the Perl binding's `lib/perl5/t/*.t`.
+- **`test/`**: `meson test -C build` runs every test as TAP (`protocol: 'tap'`). That covers the C programs in `test/t/*.c` (suite `c`) and the Perl binding's `lib/perl5/t/*.t` (suite `perl`).
   - The C tests use `test/ugly_test.h`, a small vendored TAP header with `ok`, `is_long`/`is_double`/`is_string`, `no_error`/`has_error` and `done_testing`. There are no external dependencies.
   - `no_error` turns `UGLY_NOT_SUPPORTED`/`UGLY_NOT_IMPLEMENTED` into skips, so one suite can run against every plugin.
-  - The plugin is chosen with `UGLY_TEST_LANG` (default `perl5`), and the test libraries `calc`/`oocalc` live in `test/<lang>/`.
-  - `AM_TESTS_ENVIRONMENT` in `test/Makefile.am` sets `UGLY_LANGUAGE_DIR` to the source tree's `lang/`, plus `LD_LIBRARY_PATH` and `PERL5LIB`, so no install is needed.
-- **`UGLY_LANGUAGE_DIR`**: the compiled-in default is `$(pkglibdir)`, and the environment variable overrides it. Helpers live at `<dir>/<lang>/helper/` (perl5: `helper/helper.pm`).
-- **Perl XS binding**: built by MakeMaker from `lib/Makefile.am` (`all-local`), after `lib/c`.
-- **Build:** autotools, with the generated files committed (regenerated 2026-11-24). Only in-tree builds work, because `gen_iface.sh` is run by relative path. Linking the Perl plugin needs `libperl-dev`. `UGLY_DEBUG=<n>` turns on debug tracing.
+  - The plugin is chosen with `UGLY_TEST_LANG`. It is deliberately not set by Meson, so the caller's value passes through. Both the C tests (`ugly_test_lang()`) and the `.t` files default to `perl5`. The test libraries `calc`/`oocalc` live in `test/<lang>/`.
+  - `test_env` in `test/meson.build` sets `UGLY_LANGUAGE_DIR` to the source tree's `lang/`. It also sets `LD_LIBRARY_PATH` to every plugin's build dir (each `lang/<x>/meson.build` appends to `plugins`/`plugin_dirs`) and `PERL5LIB`, so no install is needed.
+  - `meson test -C build --setup valgrind` runs the C suite under valgrind. See "Where we left off".
+- **`UGLY_LANGUAGE_DIR`**: the compiled-in default is `<prefix>/<libdir>/ugly`, and the environment variable overrides it. Helpers live at `<dir>/<lang>/helper/` (perl5: `helper/helper.pm`).
+- **Perl XS binding**: no MakeMaker. `xsubpp` generates `Ugly.c` (`lib/perl5/meson.build`), and `lib/perl5/auto/Ugly/meson.build` builds it, so the module lands at `build/lib/perl5/auto/Ugly/Ugly.so`, where XSLoader finds it through `@INC`. Install goes to `$Config{installsitearch}`, which the `perl_installdir` option overrides.
+- **Build:** Meson (≥ 0.61) and Ninja: `meson setup build && meson compile -C build`. Builds are out-of-tree. It uses `-Wall` (`warning_level=1`) and is warning-free. `gen_iface.sh <path to ugly_api.h>` is a `custom_target`. Linking the Perl plugin needs `libperl-dev`. `UGLY_DEBUG=<n>` turns on debug tracing.
 - **Tag `v0.01`**: the original 2013–2014 state, including the Java plugin (`lang/java`), the JNA binding (`lib/java`) and `test/java`.
 
 ## Current state (assessed 2026-11-24)
@@ -37,26 +38,23 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Teardown rule (2026-11-24):** `ugly_runtime_delete` and `ugly_language_delete` refuse with `UGLY_IN_USE` while live objects or runtimes remain, and leave the target intact. The core counts these (`nb_objects`, `nb_runtimes` in `ugly_priv.h`). Deleting NULL is a no-op for language, runtime and object. Cascading deletes or a handle registry is left as a v2 ownership decision.
 - **Java has been removed** (2026-11-24). It was scaffolding against JDK 1.7 and survives in tag `v0.01`.
 - The Perl binding wraps context, value, language and runtime (`load_library` only).
-- As of 2026-11-24 everything builds without warnings on GCC/perl 5.34, and `make check` passes 147/147.
-- **Valgrind (2026-11-24, valgrind 3.18):** `make check-valgrind` passes. There are 0 memory errors and 0 definite, indirect or possible leaks in all 5 C tests. About 7 KB is still reachable in `t/runtime` and `t/object`: perl's process-wide state, which is kept on purpose. This doesn't need `PERL_DESTRUCT_LEVEL`, because a MULTIPLICITY perl defaults to destruct level 1.
+- As of 2026-11-24 everything builds without warnings (`-Wall`) on GCC 11/perl 5.34, and `meson test` passes 9 tests with 147 subtests.
+- **Valgrind (2026-11-24, valgrind 3.18):** `meson test --setup valgrind` passes. There are 0 memory errors and 0 definite, indirect or possible leaks in all 5 C tests. About 7 KB is still reachable in `t/runtime` and `t/object`: perl's process-wide state, which is kept on purpose. This doesn't need `PERL_DESTRUCT_LEVEL`, because a MULTIPLICITY perl defaults to destruct level 1.
 
 ### Known issues
 - `ugly_debug_args` returns a per-thread buffer, valid until the next call in the same thread, and cuts long output with "...". Every other to-string is either a literal or cached per value, object or runtime. This was fixed on 2026-11-24, along with a buffer overflow in `ugly_debug_args`.
-- Out-of-tree (VPATH) builds fail: `lib/c` runs `./gen_iface.sh`, which reads `ugly_api.h` relative to the current directory. The Meson port makes this moot.
-- Generated autotools output is committed (`configure`, `Makefile.in`, `autom4te.cache`, …). The Meson port removes it.
+- The Perl binding's typemap used to leave a pointer unset when it was passed undef. `get_language` and `load_library` had no `= NULL` PREINIT to hide that. The typemap now sets NULL itself (fixed 2026-11-24).
 
 ## Where we left off (2026-11-24)
 
-- Work is on branch **`revive-docs-and-tests`**: Java removal, the test suite and fixes, regenerated autotools, docs, `make check-valgrind`, and teardown. It is **pushed** (`origin/revive-docs-and-tests`) but **not merged** into `master`. Tag `v0.01` is local only.
-- **`make check-valgrind`** reruns the 5 C tests (not the Perl binding tests) under `$(LIBTOOL) --mode=execute $(VALGRIND)`.
-  - A test fails on any memory error or any definite, indirect or possible leak (`--errors-for-leak-kinds=definite,indirect,possible`). Still-reachable memory is allowed.
-  - This was checked with an injected heap overread and an injected leak. Both are reported as ERROR, and make fails.
-  - It uses `--keep-debuginfo=yes`, because plugins are `dlclose`d. It overwrites `test/t/*.log`, and the summary goes to `test/test-suite-valgrind.log`.
-- **Teardown is done** (`ugly_runtime_delete`, `ugly_language_delete`). The tests delete everything they create, and cover re-initializing a language in the same process.
-- **v1 cleanup is done (2026-11-24).** The static buffers, `ugly_value_delete(NULL)`, the undefined `ugly_object_wrap` (removed from the API) and the stray `.svn` directory are all fixed. That commit is the **v1 reference point**. The author still has to decide on merging it into `master` and on a tag name (`v0.02` or `v1-reference`).
-- **Next, agreed:**
-  1. Port the build to **Meson**, on a branch cut from the v1 reference. Autotools and all its generated files go, with no dual build. The XS binding is built with `xsubpp` and `shared_module`, without MakeMaker. "Done" means the same tests pass, the valgrind setup is clean, and an injected leak still fails it.
-  2. Then the v2 contract: an API header plus a spec, written before any Lua code.
+- **`master`** (pushed, 2026-11-24) holds the revival up to the v1 cleanup (`76a1266`): Java removal, the TAP test suite and fixes, docs, check-valgrind, teardown and cleanup. That commit is the **v1 reference point**. A tag name for it is still to be decided (`v0.02` or `v1-reference`). Tag `v0.01` is local only.
+- **Branch `meson-build`** (from `76a1266`): the build was ported from autotools to Meson. Autotools, all its generated files, MakeMaker and the GNU boilerplate files are gone, with no dual build.
+- **The valgrind setup** (`add_test_setup('valgrind', ...)` in `test/meson.build`) runs only the C suite (`exclude_suites: ['perl']`), directly with no libtool wrappers.
+  - A test fails on any memory error or any definite, indirect or possible leak. Still-reachable memory is allowed.
+  - Checked with an injected heap overread and an injected leak: both show as ERROR (exit status 99).
+  - It uses `--keep-debuginfo=yes`, because plugins are `dlclose`d.
+- **Teardown** (`ugly_runtime_delete`, `ugly_language_delete`): the tests delete everything they create, and cover re-initializing a language in the same process.
+- **Next, agreed:** the v2 contract, an API header plus a spec written before any Lua code. The author reviews the draft header.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.
@@ -83,13 +81,12 @@ Inline::Java solved most of these for the Perl↔Java pair. The open problem is 
 ## Direction agreed
 
 1. **Docs first (drafted 2026-11-24).**
-   - `README.md` is the main README. `README` is a plain-text pointer that automake's GNU strictness requires.
+   - `README.md` is the only README.
    - `doc/design-essay.md` is in the author's first-person voice. The author verified its Inline::Java claims on 2026-11-24.
 2. **Possibly later: a small, sharp v2** (not a broad product).
    - Keep the core architecture.
    - Plugin order: Lua first (contract problems show up undisguised), then embedded CPython (GIL and reentrancy), then QuickJS. Perl is ported last, as the neutrality stress test.
    - Use Panama FFM instead of JNI/JNA if Java returns. Creating the JVM still needs the JNI invocation API.
    - Make callbacks, ownership rules and structured errors first-class in `ugly_value` and the API from day one.
-   - Replace autotools with Meson or CMake.
-   - Fix the known bugs above.
-   - Each new plugin must pass the existing `make check UGLY_TEST_LANG=<lang>` suite. That suite is the start of the conformance tests.
+   - Build: Meson (done on 2026-11-24, branch `meson-build`).
+   - Each new plugin must pass the existing suite (`UGLY_TEST_LANG=<lang> meson test -C build`). That suite is the start of the conformance tests.

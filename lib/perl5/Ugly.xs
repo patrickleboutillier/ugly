@@ -17,6 +17,7 @@ new(pkg)
 	PREINIT:
 		pkg = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_context_new() ;
 	OUTPUT:
 		RETVAL
@@ -103,6 +104,7 @@ new_bool(pkg, val)
 	PREINIT:
 		pkg = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_value_new_bool(val) ;
 	OUTPUT:
 		RETVAL
@@ -115,6 +117,7 @@ new_long(pkg, val)
 	PREINIT:
 		pkg = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_value_new_long(val) ;
 	OUTPUT:
 		RETVAL
@@ -127,6 +130,7 @@ new_double(pkg, val)
 	PREINIT:
 		pkg = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_value_new_double(val) ;
 	OUTPUT:
 		RETVAL
@@ -139,6 +143,7 @@ new_char(pkg, val)
 	PREINIT:
 		pkg = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_value_new_char(val) ;
 	OUTPUT:
 		RETVAL
@@ -152,6 +157,7 @@ new_string(pkg, val)
 		pkg = NULL ;
 		char *val_str = NULL ;
 	CODE:
+		(void)pkg ;
 		if (SvOK(val)){
 			val_str = SvPV_nolen(val) ;
 		}
@@ -168,6 +174,7 @@ new_object(pkg, val)
 		pkg = NULL ;
 		val = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_value_new_object(val) ;
 	OUTPUT:
 		RETVAL
@@ -284,6 +291,7 @@ init(pkg, ctx, name)
 		pkg = NULL ;
 		ctx = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_language_init(ctx, name) ;
 	OUTPUT:
 		RETVAL
@@ -326,6 +334,7 @@ new(pkg, ctx, lang)
 		ctx = NULL ;
 		lang = NULL ;
 	CODE:
+		(void)pkg ;
 		RETVAL = ugly_runtime_new(ctx, lang) ;
 		if (RETVAL == NULL){
 			RETVAL = NULL ;
@@ -416,6 +425,8 @@ wrap(pkg, ctx, rt, ref)
 		ctx = NULL ;
 		rt = NULL ;
 	CODE:
+		(void)pkg ;
+		(void)ctx ;
 		/* TODO: Make sure ref is a reference blessed SV sv_isobject , SvSTASH, HvNAME*/
 		if (sv_isobject(ref)){
 			class = HvNAME(SvSTASH(SvRV(ref))) ;

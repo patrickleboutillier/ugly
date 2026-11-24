@@ -29,11 +29,15 @@
 #include "ugly.h"
 
 
+/* Not every test uses every helper. */
+#define _UT_FN static __attribute__((unused))
+
+
 static int _ut_count = 0 ;
 static int _ut_failed = 0 ;
 
 
-static void _ut_line(int pass, const char *directive, const char *reason, const char *fmt, va_list ap){
+_UT_FN void _ut_line(int pass, const char *directive, const char *reason, const char *fmt, va_list ap){
 	printf("%s %d", (pass ? "ok" : "not ok"), ++_ut_count) ;
 	if ((fmt != NULL)&&(fmt[0] != '\0')){
 		printf(" - ") ;
@@ -54,7 +58,7 @@ static void _ut_line(int pass, const char *directive, const char *reason, const 
 
 
 /* Print a diagnostic line (a TAP comment). */
-static void diag(const char *fmt, ...){
+_UT_FN void diag(const char *fmt, ...){
 	va_list ap ;
 	va_start(ap, fmt) ;
 	printf("# ") ;
@@ -65,7 +69,7 @@ static void diag(const char *fmt, ...){
 }
 
 
-static int _ut_ok(const char *file, int line, int pass, const char *fmt, ...){
+_UT_FN int _ut_ok(const char *file, int line, int pass, const char *fmt, ...){
 	va_list ap ;
 	va_start(ap, fmt) ;
 	_ut_line(pass, NULL, NULL, fmt, ap) ;
@@ -77,7 +81,7 @@ static int _ut_ok(const char *file, int line, int pass, const char *fmt, ...){
 }
 
 
-static int _ut_is_long(const char *file, int line, long got, long expected, const char *fmt, ...){
+_UT_FN int _ut_is_long(const char *file, int line, long got, long expected, const char *fmt, ...){
 	int pass = (got == expected) ;
 	va_list ap ;
 	va_start(ap, fmt) ;
@@ -92,7 +96,7 @@ static int _ut_is_long(const char *file, int line, long got, long expected, cons
 }
 
 
-static int _ut_is_double(const char *file, int line, double got, double expected, const char *fmt, ...){
+_UT_FN int _ut_is_double(const char *file, int line, double got, double expected, const char *fmt, ...){
 	int pass = (fabs(got - expected) <= 1e-9 * fmax(1.0, fabs(expected))) ;
 	va_list ap ;
 	va_start(ap, fmt) ;
@@ -107,7 +111,7 @@ static int _ut_is_double(const char *file, int line, double got, double expected
 }
 
 
-static int _ut_is_string(const char *file, int line, const char *got, const char *expected, const char *fmt, ...){
+_UT_FN int _ut_is_string(const char *file, int line, const char *got, const char *expected, const char *fmt, ...){
 	int pass = (got == NULL || expected == NULL) ? (got == expected) : (strcmp(got, expected) == 0) ;
 	va_list ap ;
 	va_start(ap, fmt) ;
@@ -129,7 +133,7 @@ static int _ut_is_string(const char *file, int line, const char *got, const char
 
 
 /* Record one skipped test. */
-static void skip(const char *reason, const char *fmt, ...){
+_UT_FN void skip(const char *reason, const char *fmt, ...){
 	va_list ap ;
 	va_start(ap, fmt) ;
 	_ut_line(1, "SKIP", reason, fmt, ap) ;
@@ -137,7 +141,7 @@ static void skip(const char *reason, const char *fmt, ...){
 }
 
 
-static int _ut_no_error(const char *file, int line, const ugly_context *ctx, const char *fmt, ...){
+_UT_FN int _ut_no_error(const char *file, int line, const ugly_context *ctx, const char *fmt, ...){
 	va_list ap ;
 	va_start(ap, fmt) ;
 	ugly_error err = ugly_context_get_error(ctx) ;
@@ -159,7 +163,7 @@ static int _ut_no_error(const char *file, int line, const ugly_context *ctx, con
 }
 
 
-static int _ut_has_error(const char *file, int line, const ugly_context *ctx, ugly_error expected, const char *fmt, ...){
+_UT_FN int _ut_has_error(const char *file, int line, const ugly_context *ctx, ugly_error expected, const char *fmt, ...){
 	va_list ap ;
 	va_start(ap, fmt) ;
 	ugly_error err = ugly_context_get_error(ctx) ;
@@ -191,14 +195,14 @@ static int _ut_has_error(const char *file, int line, const ugly_context *ctx, ug
 
 
 /* The language plugin under test. */
-static const char *ugly_test_lang(void){
+_UT_FN const char *ugly_test_lang(void){
 	const char *l = getenv("UGLY_TEST_LANG") ;
 	return ((l != NULL)&&(l[0] != '\0')) ? l : "perl5" ;
 }
 
 
 /* Print the plan and return the process exit status. */
-static int done_testing(void){
+_UT_FN int done_testing(void){
 	printf("1..%d\n", _ut_count) ;
 	fflush(stdout) ;
 	return (_ut_failed > 0 ? 1 : 0) ;

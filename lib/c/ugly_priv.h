@@ -2,7 +2,6 @@
 #define _UGLY_PRIV_H_
 
 
-#include "../../config.h"
 #include "ugly.h"
 
 

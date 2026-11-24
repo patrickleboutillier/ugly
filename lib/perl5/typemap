@@ -22,18 +22,18 @@ T_PTROBJ_UGLY_OBJECT
 INPUT
 T_PTROBJ_UGLY_CONTEXT
 	if (sv_derived_from($arg, \"Ugly::Context\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
-	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Context\") ; } }
+	else { $var = NULL ; if (SvOK($arg)){ croak(\"$var is not of type Ugly::Context\") ; } }
 T_PTROBJ_UGLY_LANGUAGE
 	if (sv_derived_from($arg, \"Ugly::Language\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
-	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Language\") ; } }
+	else { $var = NULL ; if (SvOK($arg)){ croak(\"$var is not of type Ugly::Language\") ; } }
 T_PTROBJ_UGLY_VALUE
 	if (sv_derived_from($arg, \"Ugly::Value\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
-	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Value\") ; } }
+	else { $var = NULL ; if (SvOK($arg)){ croak(\"$var is not of type Ugly::Value\") ; } }
 T_PTROBJ_UGLY_RUNTIME
 	if (sv_derived_from($arg, \"Ugly::Runtime\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
-	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Runtime\") ; } }
+	else { $var = NULL ; if (SvOK($arg)){ croak(\"$var is not of type Ugly::Runtime\") ; } }
 T_PTROBJ_UGLY_OBJECT
 	if (sv_derived_from($arg, \"Ugly::Object\")){ $var = ($type)SvIV((SV*)SvRV($arg)) ; }
-	else { if (SvOK($arg)){ croak(\"$var is not of type Ugly::Object\") ; } }
+	else { $var = NULL ; if (SvOK($arg)){ croak(\"$var is not of type Ugly::Object\") ; } }
 
 

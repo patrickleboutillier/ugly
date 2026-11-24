@@ -1,52 +1,13 @@
-# Object files
+# Meson build directories (meson setup build)
+/build*/
+/_build*/
+
+# In-source build products, in case anything compiles in the tree
 *.o
-
-# Libraries
-*.lib
-*.a
-*.class
-
-# Shared objects (inc. Windows DLLs)
-*.dll
 *.so
 *.so.*
-*.dylib
-*.lo
-*.la
-.deps
-.libs
+*.a
 
-# Executables
-*.exe
-*.out
-*.app
-
-
-# Autotools build output (the generated configure/Makefile.in are committed)
-Makefile
-!lib/perl5/Makefile.PL
-config.h
-config.log
-config.status
-libtool
-stamp-h1
-lib/c/ugly_iface.h
-
-# Test output
-*.log
-*.trs
-test/t/context
-test/t/value
-test/t/language
-test/t/runtime
-test/t/object
-test/t/.dirstamp
-
-# Perl XS binding (ExtUtils::MakeMaker)
-lib/perl5/Makefile.old
-lib/perl5/MYMETA.*
-lib/perl5/blib/
-lib/perl5/pm_to_blib
-lib/perl5/Ugly.c
-lib/perl5/Ugly.bs
+# Editors
 *~
+*.swp
