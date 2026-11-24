@@ -47,45 +47,44 @@ void ugly_debug(int level, const char *fmt, ...){
 }
 
 
+/*
+ * Formats args for debug messages. The result lives in a per-thread buffer and
+ * is valid until the next call in the same thread. Output that doesn't fit is
+ * cut and ends with "...".
+*/
 const char *ugly_debug_args(ugly_value **args, int nb_args){
-		static char s[1024] ;
+	static _Thread_local char s[UGLY_MAX_DEBUG_MSG_LENGTH] ;
+	const size_t max = sizeof(s) ;
+	const char *ellipsis = "..." ;
+	size_t len = 0 ;
 
-		s[0] = '\0' ;
-	    int i = 0 ;
-	    for (i = 0; i < nb_args ; i++){	
-			if (i > 0){
-				strcat(s, ",") ;
-			}
+	s[0] = '\0' ;
+	int i = 0 ;
+	for (i = 0 ; i < nb_args ; i++){
+		const char *n = ugly_value_to_string(args[i]) ;
+		size_t need = strlen(n) + (i > 0 ? 1 : 0) ;
+		if (len + need >= max){
+			/* Doesn't fit: end with the ellipsis, overwriting the tail if necessary. */
+			size_t at = (len + strlen(ellipsis) < max ? len : max - strlen(ellipsis) - 1) ;
+			strcpy(s + at, ellipsis) ;
+			break ;
+		}
+		len += snprintf(s + len, max - len, "%s%s", (i > 0 ? "," : ""), n) ;
+	}
 
-			const char *n = ugly_value_to_string(args[i]) ;
-			if ((strlen(n) + strlen(s)) <= 1023){
-				strcat(s, ugly_value_to_string(args[i])) ;
-			}
-	    }
-
-		return s ;
+	return s ;
 }
 
 
 const char *ugly_type_to_string(ugly_type t){
-	static char s[32] ;
-
-    switch (t){
-        case UGLY_BOOL:
-			strcpy(s, "BOOL") ; break ;
-        case UGLY_LONG:
-			strcpy(s, "LONG") ; break ;
-        case UGLY_DOUBLE:
-			strcpy(s, "DOUBLE") ;break ;
-        case UGLY_CHAR:
-			strcpy(s, "CHAR") ; break ;
-        case UGLY_STRING:
-			strcpy(s, "STRING") ; break ;
-        case UGLY_OBJECT:
-			strcpy(s, "OBJECT") ; break ;
-		default:
-			strcpy(s, "???") ;
+	switch (t){
+		case UGLY_BOOL:		return "BOOL" ;
+		case UGLY_LONG:		return "LONG" ;
+		case UGLY_DOUBLE:	return "DOUBLE" ;
+		case UGLY_CHAR:		return "CHAR" ;
+		case UGLY_STRING:	return "STRING" ;
+		case UGLY_OBJECT:	return "OBJECT" ;
 	}
 
-	return s ;
+	return "???" ;
 }

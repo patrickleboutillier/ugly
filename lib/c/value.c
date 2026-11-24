@@ -66,6 +66,9 @@ ugly_value *ugly_value_new_object(ugly_object *val){
 
 
 void ugly_value_delete(ugly_value *val){
+	if (val == NULL){
+		return ;
+	}
 	ugly_debug(2, "-> Value delete: %s", ugly_value_to_string(val)) ;
 	switch (val->type){
 		case UGLY_STRING:

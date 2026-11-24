@@ -78,5 +78,33 @@ int main(void){
 		ugly_value_delete(v) ;
 	}
 
+	ugly_value_delete(NULL) ;
+	ok(1, "deleting a NULL value is a no-op") ;
+
+	{
+		/* ugly_debug_args: joined with commas, and cut with "..." when too long. */
+		ugly_value *args[] = { ugly_value_new_long(1), ugly_value_new_string("two") } ;
+		is_string(ugly_debug_args(args, 2), "LONG(1),STRING(two)", "debug_args: values joined with commas") ;
+		is_string(ugly_debug_args(args, 0), "", "debug_args: no args") ;
+		ugly_value_delete(args[0]) ;
+		ugly_value_delete(args[1]) ;
+
+		char big[300] ;
+		memset(big, 'x', sizeof(big) - 1) ;
+		big[sizeof(big) - 1] = '\0' ;
+		ugly_value *many[10] ;
+		int i ;
+		for (i = 0 ; i < 10 ; i++){
+			many[i] = ugly_value_new_string(big) ;
+		}
+		const char *s = ugly_debug_args(many, 10) ;
+		size_t len = strlen(s) ;
+		ok(len < 1024, "debug_args: long output stays within its buffer (%zu chars)", len) ;
+		ok((len >= 3)&&(strcmp(s + len - 3, "...") == 0), "debug_args: long output ends with ...") ;
+		for (i = 0 ; i < 10 ; i++){
+			ugly_value_delete(many[i]) ;
+		}
+	}
+
 	return done_testing() ;
 }

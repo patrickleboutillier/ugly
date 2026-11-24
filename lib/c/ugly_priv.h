@@ -73,6 +73,7 @@ struct _ugly_runtime {
     ugly_language *language ;
     void *handle ;
     int nb_objects ;		/* live objects: the runtime can't be deleted until 0 */
+    char *stringy ;			/* ugly_runtime_to_string, built once at creation */
 } ;
 
 

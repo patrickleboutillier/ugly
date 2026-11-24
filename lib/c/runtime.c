@@ -21,6 +21,10 @@ ugly_runtime *ugly_runtime_new(ugly_context *ctx, ugly_language *lang){
 	rt->language = lang ;
 	rt->handle = runtime ;
 	rt->nb_objects = 0 ;
+	const char *name = ugly_language_get_name(lang) ;
+	size_t len = strlen(name) + 64 ;
+	rt->stringy = (char *)malloc(len * sizeof(char)) ;
+	snprintf(rt->stringy, len, "%s::rt(%p)", name, (void *)rt) ;
 	lang->nb_runtimes++ ;
 
 	ugly_debug(2, "<- Runtime new") ;
@@ -62,6 +66,7 @@ void ugly_runtime_delete(ugly_context *ctx, ugly_runtime *rt){
 	}
 
 	rt->language->nb_runtimes-- ;
+	free(rt->stringy) ;
 	free(rt) ;
 	ugly_debug(2, "<- Runtime delete") ;
 }
@@ -73,11 +78,7 @@ ugly_language *ugly_runtime_get_language(const ugly_runtime *rt){
 
 
 const char *ugly_runtime_to_string(const ugly_runtime *rt){
-	static char s[128] ;
-
-	sprintf(s, "%s::rt(%p)", ugly_language_get_name(ugly_runtime_get_language(rt)), rt) ;
-
-	return s ;
+	return rt->stringy ;
 }
 
 

@@ -37,28 +37,26 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Teardown rule (2026-11-24):** `ugly_runtime_delete` and `ugly_language_delete` refuse with `UGLY_IN_USE` while live objects or runtimes remain, and leave the target intact. The core counts these (`nb_objects`, `nb_runtimes` in `ugly_priv.h`). Deleting NULL is a no-op for language, runtime and object. Cascading deletes or a handle registry is left as a v2 ownership decision.
 - **Java has been removed** (2026-11-24). It was scaffolding against JDK 1.7 and survives in tag `v0.01`.
 - The Perl binding wraps context, value, language and runtime (`load_library` only).
-- As of 2026-11-24 everything builds without warnings on GCC/perl 5.34, and `make check` passes 142/142.
+- As of 2026-11-24 everything builds without warnings on GCC/perl 5.34, and `make check` passes 147/147.
 - **Valgrind (2026-11-24, valgrind 3.18):** `make check-valgrind` passes. There are 0 memory errors and 0 definite, indirect or possible leaks in all 5 C tests. About 7 KB is still reachable in `t/runtime` and `t/object`: perl's process-wide state, which is kept on purpose. This doesn't need `PERL_DESTRUCT_LEVEL`, because a MULTIPLICITY perl defaults to destruct level 1.
 
-### Known bugs
-- `ugly_debug_args`, `ugly_type_to_string` and `ugly_runtime_to_string` use static buffers, so they aren't reentrant. `ugly_debug_args` can also overflow its buffer.
-- `ugly_value_delete(NULL)` crashes, because it calls `ugly_value_to_string` first.
-- `ugly_object_wrap` is declared in `ugly_api.h` but never defined.
-
-### Housekeeping
-- Stray `.svn` directory in `test/perl5/`.
-- Out-of-tree (VPATH) builds fail: `lib/c` runs `./gen_iface.sh`, which reads `ugly_api.h` relative to the current directory.
-- Generated autotools output is committed (`configure`, `Makefile.in`, `autom4te.cache`, …).
+### Known issues
+- `ugly_debug_args` returns a per-thread buffer, valid until the next call in the same thread, and cuts long output with "...". Every other to-string is either a literal or cached per value, object or runtime. This was fixed on 2026-11-24, along with a buffer overflow in `ugly_debug_args`.
+- Out-of-tree (VPATH) builds fail: `lib/c` runs `./gen_iface.sh`, which reads `ugly_api.h` relative to the current directory. The Meson port makes this moot.
+- Generated autotools output is committed (`configure`, `Makefile.in`, `autom4te.cache`, …). The Meson port removes it.
 
 ## Where we left off (2026-11-24)
 
-- Work is on branch **`revive-docs-and-tests`**: Java removal, the test suite and fixes, regenerated autotools, docs, `make check-valgrind`, and teardown. It is **not pushed and not merged** into `master`. Tag `v0.01` is local only.
+- Work is on branch **`revive-docs-and-tests`**: Java removal, the test suite and fixes, regenerated autotools, docs, `make check-valgrind`, and teardown. It is **pushed** (`origin/revive-docs-and-tests`) but **not merged** into `master`. Tag `v0.01` is local only.
 - **`make check-valgrind`** reruns the 5 C tests (not the Perl binding tests) under `$(LIBTOOL) --mode=execute $(VALGRIND)`.
   - A test fails on any memory error or any definite, indirect or possible leak (`--errors-for-leak-kinds=definite,indirect,possible`). Still-reachable memory is allowed.
   - This was checked with an injected heap overread and an injected leak. Both are reported as ERROR, and make fails.
   - It uses `--keep-debuginfo=yes`, because plugins are `dlclose`d. It overwrites `test/t/*.log`, and the summary goes to `test/test-suite-valgrind.log`.
 - **Teardown is done** (`ugly_runtime_delete`, `ugly_language_delete`). The tests delete everything they create, and cover re-initializing a language in the same process.
-- **Next:** the housekeeping items and the remaining known bugs above. After that, decide whether to push or merge, and whether v2 starts.
+- **v1 cleanup is done (2026-11-24).** The static buffers, `ugly_value_delete(NULL)`, the undefined `ugly_object_wrap` (removed from the API) and the stray `.svn` directory are all fixed. That commit is the **v1 reference point**. The author still has to decide on merging it into `master` and on a tag name (`v0.02` or `v1-reference`).
+- **Next, agreed:**
+  1. Port the build to **Meson**, on a branch cut from the v1 reference. Autotools and all its generated files go, with no dual build. The XS binding is built with `xsubpp` and `shared_module`, without MakeMaker. "Done" means the same tests pass, the valgrind setup is clean, and an injected leak still fails it.
+  2. Then the v2 contract: an API header plus a spec, written before any Lua code.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.

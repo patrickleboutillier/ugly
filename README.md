@@ -96,7 +96,7 @@ The API follows three conventions:
 | Part | State |
 |---|---|
 | C core | Works. Contexts, values, language loading, runtimes and objects. |
-| Perl 5 plugin | Works end to end, including objects and several runtimes in one process. All 142 tests pass, and the C tests are clean under valgrind (no memory errors, no leaks). |
+| Perl 5 plugin | Works end to end, including objects and several runtimes in one process. All 147 tests pass, and the C tests are clean under valgrind (no memory errors, no leaks). |
 | Perl binding (XS) | Context, value, language and runtime (`load_library`). No `call_function` or objects yet. |
 
 The Perl 5 code is frozen as the v1 reference. The next round of work starts
@@ -108,8 +108,6 @@ Panama FFM API.
 
 Known bugs and gaps:
 
-- Several debug and to-string helpers use static buffers, so they are not
-  reentrant.
 - The type system has no arrays, maps, bytes or null.
 - There are no callbacks, no cross-runtime ownership rules, no structured
   errors and no thread safety.
