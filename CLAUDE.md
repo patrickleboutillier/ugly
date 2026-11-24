@@ -52,11 +52,11 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 ## Where we left off (2026-11-24)
 
 - Work is on branch **`revive-docs-and-tests`**, in 4 commits: Java removal, test suite and fixes, regenerated autotools, docs. It is **not pushed and not merged** into `master`. Tag `v0.01` is local only.
-- **Paused at the author's request: a `make check-valgrind` target.** The plan:
-  - Add `AC_PATH_PROG([VALGRIND], [valgrind])` (optional) to `configure.ac`.
-  - In `test/Makefile.am`, rerun `check` with `LOG_COMPILER="$(LIBTOOL) --mode=execute $(VALGRIND) --error-exitcode=99 …"` and `PERL_DESTRUCT_LEVEL=2`. Possibly also wrap `T_LOG_COMPILER` (perl) for the binding tests.
-  - Fail on memory errors only, not on leaks (`--errors-for-leak-kinds=none`, or a suppressions file for libperl), until `ugly_runtime_delete` and language teardown exist.
-- A natural follow-up: add `ugly_runtime_delete` (perl: `perl_destruct`/`perl_free` under `UGLY_PERL5_ENTER`) and `ugly_language_delete` (`dlclose`). Then make leaks fail the valgrind target too.
+- **`make check-valgrind` exists (2026-11-24).**
+  - It reruns the 5 C tests only (not the Perl binding tests) under `$(LIBTOOL) --mode=execute $(VALGRIND)`, with `--error-exitcode=99 --errors-for-leak-kinds=none` and `PERL_DESTRUCT_LEVEL=2`. All 5 pass with 0 errors.
+  - It was checked against an injected heap overread: the test is reported as ERROR and make fails.
+  - It overwrites `test/t/*.log`. The summary goes to `test/test-suite-valgrind.log`. `VALGRIND` is optional in `configure.ac`.
+- **Next:** add `ugly_runtime_delete` (perl: `perl_destruct`/`perl_free` under `UGLY_PERL5_ENTER`) and `ugly_language_delete` (`dlclose`). Then drop `--errors-for-leak-kinds=none` from `VALGRIND_FLAGS` in `test/Makefile.am` so that leaks fail too.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.
