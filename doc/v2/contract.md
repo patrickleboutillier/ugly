@@ -1,8 +1,8 @@
 # UGLY v2: the contract
 
 *Approved 2026-11-24. This document sits alongside
-[`ugly.h`](ugly.h) (the public API) and [`ugly_plugin.h`](ugly_plugin.h)
-(the plugin contract). Neither header is built yet. The v1 reference is
+[`ugly.h`](../../include/ugly.h) (the public API) and [`ugly_plugin.h`](../../include/ugly_plugin.h)
+(the plugin contract). The headers live in `include/`. The v1 reference is
 tag `v0.02`.*
 
 The [design essay](../design-essay.md) ends with this point: "written once"
@@ -241,7 +241,7 @@ This is essay point 5. The rule is the simplest one that is true:
 - **A runtime belongs to the thread that created it.**
 - **A ctx belongs to the thread that created it.**
 
-The core checks both on every call and returns `UGLY_ERR_WRONG_THREAD`. The
+A thread has at most one ctx. The core checks both on every call and returns `UGLY_ERR_WRONG_THREAD`. The
 only exception is `ugly_release`, for the reason given in §3.
 
 This rules out handing a runtime between threads, even with external
@@ -372,11 +372,49 @@ in every case):
    There is no `ugly_rt_collect`.
 8. **No hash protocol in v2.0.**
 
+## Clarifications from the first implementation
+
+The core and the mock plugin (2026-11-24) needed these points pinned down.
+All of them are in the headers and covered by the conformance suite.
+
+- **One ctx per thread.** A second `ugly_ctx_new` on the same thread is
+  `UGLY_ERR_USAGE`. Plugins get the current one with `ugly_current_ctx()`,
+  for native code such as a proxy's `__call` that wasn't handed one.
+- **Releasing doesn't touch the error.** `ugly_release`, `ugly_val_release`
+  and `ugly_error_payload` leave the ctx's error alone, so cleanup after a
+  failure can't erase it. `ugly_release` accepts a NULL ctx, for finalizer
+  threads that have none.
+- **Plugin lookup** uses `UGLY_PLUGIN_PATH`, a colon-separated search path,
+  then the compiled-in plugin directory. Plugins are loaded with
+  `RTLD_GLOBAL`, because modules loaded by an embedded interpreter (XS, C
+  extensions) need its symbols.
+- **Loads are counted.** Loading a language that is already loaded returns
+  the same `ugly_lang`. Only the last `ugly_lang_unload` is refused while
+  runtimes are alive.
+- **Runtime deletion** is refused (`UGLY_ERR_IN_USE`) during a call into
+  that runtime. Otherwise it releases every live value first, while the
+  interpreter still runs, so finalizers run. It repeats this while
+  finalizers create new values, and then destroys the interpreter.
+- **Host values have a home.** Every ctx owns a runtime of the built-in "c"
+  language, which is the home of `ugly_callable_new` callables and of core
+  lists and maps. It is a plugin like any other, so the core has no special
+  cases for it.
+- **Plugin services added:**
+  - `ugly_rt_native()`, the plugin's per-runtime state;
+  - `ugly_fail()`, a failure with a chosen status in the plugin's language
+    and no payload. A missing member is `UGLY_ERR_NOT_FOUND`, not
+    `UGLY_ERR_RAISED`.
+- **The mock plugin** (`plugins/mock/`) is a small language written in C,
+  with lenient, Perl-like conversions. It implements every rule of
+  `ugly_plugin.h` and every conformance fixture.
+
 ## Order of work
 
-1. Implement the core from `ugly.h`: handle table, frames, borrows, errors
-   and thread checks. Test it against a **mock plugin** written in C. That
-   tests the contract before any real language is involved.
-2. Write the conformance suite against the mock plugin.
+1. ~~Implement the core from `ugly.h`: handle table, frames, borrows,
+   errors and thread checks. Test it against a **mock plugin** written in
+   C.~~ Done 2026-11-24 (`src/`, `plugins/mock/`).
+2. ~~Write the conformance suite against the mock plugin.~~ Done
+   2026-11-24 (`tests/`): 8 groups and 180 subtests, clean under valgrind
+   and helgrind.
 3. Write the Lua plugin and make it pass the suite.
 4. Then CPython, then QuickJS, then run the pairwise suite. Then port Perl.

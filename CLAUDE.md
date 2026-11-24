@@ -8,6 +8,25 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## Architecture
 
+### v2 (the approved contract, `doc/v2/contract.md`): in progress on master
+
+- **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract. The plugin vtable is written by hand; nothing is generated.
+- **`src/`** is the core (`libugly`, version 2.0.0):
+  - `handles.c`: the handle table. A handle is a slot index plus a generation. It also holds borrow slots, the (home, identity) index and the per-runtime queues of deferred releases, all under one lock. Plugin code never runs under that lock.
+  - `ctx.c`: one ctx per thread (`_Thread_local current`) and errors.
+  - `rt.c`: runtimes and frames. `rt_enter`/`rt_leave` check the thread, drain deferred releases and revoke borrows. `after_call` normalizes plugin results.
+  - `protocol.c`: the operations.
+  - `lang.c`: plugin loading through `UGLY_PLUGIN_PATH`, with `RTLD_GLOBAL` and counted loads.
+  - `host.c`: the built-in "c" language, which is the home of C callables and core lists and maps. Each ctx has one runtime of it.
+- **`plugins/<lang>/`** holds the plugins, built as `ugly_<lang>.so` and exporting `ugly_plugin_<lang>()`. **`plugins/mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
+- **`tests/`** is the conformance suite: 8 C programs (suite `conformance`) plus `conformance.h` (TAP and fixture). It runs against the plugin named by `UGLY_TEST_PLUGIN` (default `mock`). Each plugin provides a `conformance` module with the fixtures of contract §9.
+- Rules that are easy to get wrong:
+  - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
+  - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
+  - A plugin reports a non-exception failure with `ugly_fail` (chosen status) and an exception with `ugly_raise_native` (`RAISED` plus a payload).
+
+### v1 (frozen, tag `v0.02`): still built and tested, not installed
+
 - **`lib/c/`**: the core library (`libugly`).
   - `ugly.h` holds the types and `ugly_api.h` holds the public API. `ugly_api.h` is parsed by `gen_iface.sh` to generate `ugly_iface.h`, so keep its formatting rules: one token for the return type, one function per line.
   - `ugly_context`: errors go here (error code + message), not into exceptions. Every API call clears it first.
@@ -54,7 +73,9 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - Checked with an injected heap overread and an injected leak: both show as ERROR (exit status 99).
   - It uses `--keep-debuginfo=yes`, because plugins are `dlclose`d.
 - **Teardown** (`ugly_runtime_delete`, `ugly_language_delete`): the tests delete everything they create, and cover re-initializing a language in the same process.
-- **v2 contract drafted (2026-11-24), awaiting the author's review**, on branch `v2-contract`: `doc/v2/contract.md` (the spec, with 8 open questions), `doc/v2/ugly.h` (public API) and `doc/v2/ugly_plugin.h` (plugin contract). They aren't built yet. After approval: a core with a mock C plugin, then the conformance suite, then Lua.
+- **The v2 contract was approved on 2026-11-24** (PR #1). The author took the recommendation on all 8 review questions; the decisions are listed in `contract.md`.
+- **The v2 core, mock plugin and conformance suite are done** (2026-11-24, branch `v2-core`). 8 groups and 180 subtests pass, clean under valgrind (leaks fail) and helgrind. Implementing it pinned down several points (contract.md, "Clarifications"): one ctx per thread, counted loads, rt_delete refused during a call into it, `ugly_fail`, `ugly_rt_native`, `ugly_current_ctx`.
+- **Next: the Lua plugin** (`plugins/lua/`), which must pass `UGLY_TEST_PLUGIN=lua meson test -C build --suite conformance`. It needs `liblua5.4-dev`, which the author installs.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.

@@ -13,12 +13,11 @@ libugly_perl5 = shared_module('ugly_perl5',
   c_args: perl_ccopts,
   link_args: perl_ldopts,
   dependencies: libugly_dep,
-  install: true,
-  install_dir: get_option('libdir'),
+  install: false,
 )
 
-# Helper code, loaded at runtime from <UGLY_LANGUAGE_DIR>/perl5/helper/.
-install_data('helper/helper.pm', install_dir: pkglibdir / 'perl5' / 'helper')
+# Helper code, loaded at runtime from <UGLY_LANGUAGE_DIR>/perl5/helper/ (the
+# source tree's lang/ in tests).
 
 plugins += libugly_perl5
 plugin_dirs += meson.current_build_dir()

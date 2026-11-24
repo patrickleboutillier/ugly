@@ -93,27 +93,24 @@ The API follows three conventions:
 
 ## Status
 
+UGLY is between two contract generations. **v1** is the 2013 design, frozen
+at tag `v0.02`. **v2** is the contract in [doc/v2/contract.md](doc/v2/contract.md):
+handles with own and borrow, callbacks, structured errors that keep their
+identity, and one thread per runtime. Its core is written and tested, and
+its real language plugins are next.
+
 | Part | State |
 |---|---|
-| C core | Works. Contexts, values, language loading, runtimes and objects. |
-| Perl 5 plugin | Works end to end, including objects and several runtimes in one process. All 147 tests pass, and the C tests are clean under valgrind (no memory errors, no leaks). |
-| Perl binding (XS) | Context, value, language and runtime (`load_library`). No `call_function` or objects yet. |
+| v2 core (`src/`, `include/`) | Works: handle table, enforced borrows, re-entry, errors, threads, lifecycle. |
+| v2 mock plugin (`plugins/mock/`) | A small language in C that implements the whole plugin contract. |
+| v2 conformance suite (`tests/`) | 8 groups and 180 subtests, passing against the mock, and clean under valgrind and helgrind. |
+| v2 plugins for Lua, CPython, QuickJS | Next, in that order. Perl will be ported last. |
+| v1 core and Perl 5 plugin (`lib/c/`, `lang/perl5/`) | Frozen. Built and tested (147 subtests) but not installed, until Perl is ported to v2. |
+| v1 Perl binding (XS) | Context, value, language and runtime (`load_library`). |
 
-The Perl 5 code is frozen as the v1 reference. The next round of work starts
-with a new contract (handles, ownership, callbacks, structured errors) and new
-plugins for Lua, embedded CPython and QuickJS. Perl will be ported to that
-contract last. The Java plugin and JNA binding were scaffolding and have been
-removed; they survive in the `v0.01` tag. If Java comes back, it will use the
-Panama FFM API.
-
-Known bugs and gaps:
-
-- The type system has no arrays, maps, bytes or null.
-- There are no callbacks, no cross-runtime ownership rules, no structured
-  errors and no thread safety.
-
-The last two lines are not small gaps. They are the substance of the
-[design essay](doc/design-essay.md).
+The Java plugin and JNA binding were scaffolding and have been removed; they
+survive in the `v0.01` tag. If Java comes back, it will use the Panama FFM
+API.
 
 ## Building and testing
 
@@ -123,22 +120,27 @@ its embedding library. On Debian/Ubuntu that's `meson`, `ninja-build` and
 
 ```sh
 meson setup build
-meson compile -C build      # libugly, the perl5 plugin, and the Perl XS binding
-meson test -C build         # the C tests and the Perl binding tests
+meson compile -C build      # the v2 core and plugins, and v1 (core, perl5 plugin, XS binding)
+meson test -C build         # the v2 conformance suite and the v1 tests
 ```
 
-The tests need no install step. `meson install -C build` installs:
+The tests need no install step. `meson install -C build` installs the v2
+library and headers (`ugly.h`, `ugly_plugin.h`) and a pkg-config file.
+Plugins are looked up in `<libdir>/ugly/plugins/`, and `UGLY_PLUGIN_PATH`
+overrides that at runtime. v1 isn't installed.
 
-- `libugly` and the plugins into `libdir`;
-- the plugin helpers under `<libdir>/ugly/<lang>/`, a location that
-  `UGLY_LANGUAGE_DIR` overrides at runtime;
-- the Perl binding into perl's site directory, which the `perl_installdir`
-  option overrides.
-
-### The test suite
+### The test suites
 
 Each test is a TAP stream, and Meson runs it with `protocol: 'tap'`. The full
 output is in `build/meson-logs/testlog.txt`.
+
+**v2** (`tests/`, suite `conformance`) is the conformance suite of contract
+§9. It has eight groups: values, protocol, ownership, identity, callbacks,
+errors, threads and lifecycle. Every group runs against the plugin named
+by `UGLY_TEST_PLUGIN` (default `mock`), whose `conformance` module provides
+the fixtures.
+
+**v1** (`test/`, suites `c` and `perl`):
 
 - `test/t/*.c` are C programs that exercise the API: contexts, values,
   language loading, runtimes and objects. They use `test/ugly_test.h`, a small
@@ -151,11 +153,12 @@ A plugin that answers `UGLY_NOT_SUPPORTED` or `UGLY_NOT_IMPLEMENTED` gets
 skips rather than failures, so the same suite can run against every plugin.
 
 ```sh
-UGLY_TEST_LANG=lua meson test -C build    # the same suite against another plugin
+meson test -C build --suite conformance   # v2 only
+UGLY_TEST_PLUGIN=lua meson test -C build --suite conformance   # v2 suite against another plugin
 meson test -C build object                # one test
-meson test -C build --suite c             # only the C tests
+meson test -C build --suite c             # only the v1 C tests
 UGLY_DEBUG=3 meson test -C build          # with trace output in the log
-meson test -C build --setup valgrind      # the C tests under valgrind
+meson test -C build --setup valgrind      # the C tests (v2 and v1) under valgrind
 ```
 
 The valgrind setup fails a test on any memory error and on any definite,

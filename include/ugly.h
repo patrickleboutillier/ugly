@@ -1,12 +1,15 @@
 /*
- * UGLY v2 public API: DRAFT for review. See doc/v2/contract.md.
+ * UGLY v2 public API: approved 2026-11-24. See doc/v2/contract.md.
  *
  * This is what a host program (or a language binding acting as one) uses.
- * Plugins implement doc/v2/ugly_plugin.h.
+ * Plugins implement ugly_plugin.h.
  *
  * Conventions:
  * - Every call takes the calling thread's ugly_ctx and returns a ugly_status.
- *   On anything other than UGLY_OK, ugly_last_error() describes it.
+ *   It clears the ctx's error first; on anything other than UGLY_OK,
+ *   ugly_last_error() describes the failure. The exceptions, which leave the
+ *   error alone so that cleanup can't erase it, are ugly_release,
+ *   ugly_val_release and ugly_error_payload.
  * - Results come back through out-parameters and are owned by the caller:
  *   release them with ugly_val_release() / ugly_release().
  * - Arguments are borrowed: the callee copies what it keeps, including
@@ -116,7 +119,7 @@ void ugly_val_release(ugly_ctx *ctx, ugly_val *v) ;
 /* Contexts and errors                                                */
 /* ------------------------------------------------------------------ */
 
-/* A ctx belongs to the thread that created it. */
+/* A ctx belongs to the thread that created it. One per thread: a second ugly_ctx_new on the same thread is UGLY_ERR_USAGE. */
 ugly_status ugly_ctx_new(ugly_ctx **out) ;
 void ugly_ctx_delete(ugly_ctx *ctx) ;
 
@@ -154,11 +157,18 @@ ugly_status ugly_raise(ugly_ctx *ctx, ugly_status status, const char *type, cons
 #define UGLY_CAP_ATTACH         (1u << 2)  /* can attach to an interpreter it didn't create */
 #define UGLY_CAP_EVAL           (1u << 3)  /* supports ugly_rt_eval */
 
-/* Loads <plugin dir>/ugly_<name>.so by full path (UGLY_PLUGIN_DIR overrides the dir). */
+/*
+ * Loads ugly_<name>.so by full path, from the first directory in UGLY_PLUGIN_PATH
+ * (colon-separated) that has it, else from the compiled-in plugin directory.
+ * Loading a language that is already loaded returns the same ugly_lang.
+ */
 ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out) ;
 const char *ugly_lang_name(const ugly_lang *lang) ;
 uint32_t ugly_lang_caps(const ugly_lang *lang) ;
-/* UGLY_ERR_IN_USE while runtimes are alive. A plugin without UGLY_CAP_RESTARTABLE stays mapped. */
+/*
+ * Undoes one ugly_lang_load. The last one is refused with UGLY_ERR_IN_USE while
+ * runtimes are alive. A plugin without UGLY_CAP_RESTARTABLE stays mapped.
+ */
 ugly_status ugly_lang_unload(ugly_ctx *ctx, ugly_lang *lang) ;
 
 /* A new interpreter, owned by (and bound to) the calling thread. */
@@ -173,10 +183,12 @@ ugly_status ugly_rt_new(ugly_ctx *ctx, ugly_lang *lang, ugly_rt **out) ;
 ugly_status ugly_rt_attach(ugly_ctx *ctx, ugly_lang *lang, void *native, ugly_rt **out) ;
 
 /*
- * Destroys the interpreter (or detaches). Every handle whose home is rt
- * becomes stale; proxies for them in other runtimes fail with
- * UGLY_ERR_STALE_HANDLE from then on. Not refused for live handles: see
- * contract.md, "Runtime teardown".
+ * Destroys the interpreter (or detaches). Live handles whose home is rt are
+ * released first, while the interpreter still runs (so finalizers run), and
+ * then become stale: proxies for them in other runtimes fail with
+ * UGLY_ERR_STALE_HANDLE from then on. Not refused for live handles (see
+ * contract.md, section 7), but UGLY_ERR_IN_USE while a call into rt is in
+ * progress.
  */
 ugly_status ugly_rt_delete(ugly_ctx *ctx, ugly_rt *rt) ;
 ugly_lang *ugly_rt_lang(const ugly_rt *rt) ;
@@ -195,7 +207,11 @@ ugly_status ugly_rt_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t le
 
 /* Another owned reference to the same value (for keeping a borrowed handle). */
 ugly_status ugly_dup(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
-/* Drops an owned reference. Safe from any thread: off the home thread it is deferred. */
+/*
+ * Drops an owned reference. Safe from any thread, and ctx may be NULL (a GC
+ * finalizer thread may have none): off the home thread, the native release
+ * is deferred to the next entry into the home runtime.
+ */
 void ugly_release(ugly_ctx *ctx, ugly_handle h) ;
 /* Whether two handles (owned or borrowed) name the same value. */
 ugly_status ugly_same(ugly_ctx *ctx, ugly_handle a, ugly_handle b, bool *out) ;
