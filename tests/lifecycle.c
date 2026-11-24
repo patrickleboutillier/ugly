@@ -90,8 +90,9 @@ int main(void){
 
 	/* Restart: unload completely, load again, and it works (only if the plugin says it can). */
 	if (caps & UGLY_CAP_RESTARTABLE){
-		ugly_val n1 ;
-		fcall(&f, f.mod, "inits", NULL, 0, UGLY_INT, &n1) ;
+		/* inits() is an optional fixture: how often the plugin's process-wide init ran. */
+		ugly_val n1 = ugly_int(-1) ;
+		int counted = (fcall(&f, f.mod, "inits", NULL, 0, UGLY_INT, &n1) == UGLY_OK) ;
 		ugly_release(ctx, f.mod) ;
 		ugly_rt_delete(ctx, f.rt) ;
 		st = ugly_lang_unload(ctx, f.lang) ;
@@ -99,10 +100,15 @@ int main(void){
 		st = ugly_lang_load(ctx, plugin_name(), &f.lang) ;
 		is_status(ctx, st, UGLY_OK, "load again") ;
 		ok(fx_runtime(&f, &f.rt, &f.mod), "  ... and create a runtime") ;
-		ugly_val n2 ;
-		st = fcall(&f, f.mod, "inits", NULL, 0, UGLY_INT, &n2) ;
-		if (! ok((st == UGLY_OK)&&(n2.as.i == n1.as.i + 1), "  ... the plugin was initialized again")){
-			diag("  inits before %lld, after %lld", (long long)n1.as.i, (long long)n2.as.i) ;
+		if (counted){
+			ugly_val n2 ;
+			st = fcall(&f, f.mod, "inits", NULL, 0, UGLY_INT, &n2) ;
+			if (! ok((st == UGLY_OK)&&(n2.as.i == n1.as.i + 1), "  ... the plugin was initialized again")){
+				diag("  inits before %lld, after %lld", (long long)n1.as.i, (long long)n2.as.i) ;
+			}
+		}
+		else {
+			skip("the plugin has no inits() fixture") ;
 		}
 	}
 	else {

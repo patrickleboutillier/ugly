@@ -442,7 +442,7 @@ static ugly_status f_raise_error(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, m
 		return raise(ctx, m, "TypeError", "raise_error wants a string") ;
 	}
 	mobj *e = obj_new(m, M_EXC) ;
-	e->type = strdup("MockError") ;
+	e->type = strdup("ConformanceError") ;
 	e->message = strdup(a[0].as.s.p) ;
 	/* The exception object is the payload: its reference goes to the error. */
 	return ugly_raise_native(ctx, m->urt, e->type, e->message, e, (uintptr_t)e) ;
@@ -486,7 +486,7 @@ static ugly_status f_rethrow(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval 
 	if (st != UGLY_OK){
 		return st ;
 	}
-	return ugly_raise(ctx, UGLY_ERR_RAISED, "ForeignError", "rethrown foreign exception", h) ;
+	return ugly_raise_handle(ctx, m->urt, "ForeignError", "rethrown foreign exception", h) ;
 }
 
 

@@ -92,6 +92,22 @@ int main(void){
 	is_status(ctx, st, UGLY_OK, "recursion through the language, 100 levels deep") ;
 	is_int(v.as.i, 100, "  ... returns 100") ;
 	is_int(r.deepest, 101, "  ... reached depth 101") ;
+
+	/* Runaway re-entry fails cleanly (the core's limit, or the language's), and the runtime survives it. */
+	r.deepest = 0 ;
+	x = ugly_int(100000) ;
+	st = ugly_call(ctx, r.self, &x, 1, UGLY_INT, &v) ;
+	ok(st != UGLY_OK, "recursion 100000 levels deep fails cleanly") ;
+	const ugly_error *e = ugly_last_error(ctx) ;
+	if (e != NULL){
+		diag("  stopped at depth %d: [%s] %s: %s", r.deepest, ugly_error_language(e), ugly_error_type(e),
+			ugly_error_message(e)) ;
+	}
+	ok(r.deepest <= UGLY_MAX_DEPTH, "  ... no deeper than UGLY_MAX_DEPTH") ;
+	is_int(depth, 0, "  ... and every level unwound") ;
+	x = ugly_int(10) ;
+	st = ugly_call(ctx, r.self, &x, 1, UGLY_INT, &v) ;
+	ok((st == UGLY_OK)&&(v.as.i == 10), "  ... and the runtime still works afterwards") ;
 	ugly_release(ctx, r.self) ;
 
 	/* Across runtimes: rt1 -> C -> rt2 -> rt1. */

@@ -194,6 +194,12 @@ ugly_status ugly_raise_native(ugly_ctx *ctx, ugly_rt *rt, const char *type, cons
 }
 
 
+ugly_status ugly_raise_handle(ugly_ctx *ctx, ugly_rt *rt, const char *type, const char *message, ugly_handle payload){
+	ctx_set_error(ctx, error_new(UGLY_ERR_RAISED, rt->lang->name, type, message, payload)) ;
+	return UGLY_ERR_RAISED ;
+}
+
+
 ugly_status ugly_fail(ugly_ctx *ctx, ugly_rt *rt, ugly_status status, const char *type, const char *message){
 	if (status == UGLY_OK){
 		status = UGLY_ERR_INTERNAL ;

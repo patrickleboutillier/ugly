@@ -32,7 +32,9 @@ extern "C" {
  *
  *  1. Re-entry: every entry point makes its runtime current on entry and
  *     restores the previous state on exit (perl context, GIL / thread state,
- *     JNI attachment). Calls may nest to any depth, across any runtimes.
+ *     JNI attachment). Calls may nest across any runtimes, up to
+ *     UGLY_MAX_DEPTH (the core's limit) or the language's own limit, which
+ *     the plugin reports as an error, never as a crash.
  *  2. Arguments are borrowed. A handle argument that the plugin keeps (stored
  *     in a proxy, captured by a closure) must be ugly_dup()ed first.
  *  3. Results are owned by the caller. String/bytes results are copied with
@@ -143,6 +145,13 @@ ugly_status ugly_raise_native(ugly_ctx *ctx, ugly_rt *rt, const char *type, cons
  * status and no payload, and returns the status.
  */
 ugly_status ugly_fail(ugly_ctx *ctx, ugly_rt *rt, ugly_status status, const char *type, const char *message) ;
+
+/*
+ * Like ugly_raise_native, for a payload the plugin holds as a handle (a
+ * foreign exception rethrown by native code, rule 5). Ownership of 'payload'
+ * moves to the error. Returns UGLY_ERR_RAISED.
+ */
+ugly_status ugly_raise_handle(ugly_ctx *ctx, ugly_rt *rt, const char *type, const char *message, ugly_handle payload) ;
 
 /* Takes the current error out of ctx, for wrapping in a native exception. Caller owns it. */
 ugly_error *ugly_take_error(ugly_ctx *ctx) ;

@@ -96,15 +96,16 @@ The API follows three conventions:
 UGLY is between two contract generations. **v1** is the 2013 design, frozen
 at tag `v0.02`. **v2** is the contract in [doc/v2/contract.md](doc/v2/contract.md):
 handles with own and borrow, callbacks, structured errors that keep their
-identity, and one thread per runtime. Its core is written and tested, and
-its real language plugins are next.
+identity, and one thread per runtime. Its core and its first real language
+plugin, Lua, are written and pass the conformance suite.
 
 | Part | State |
 |---|---|
 | v2 core (`src/`, `include/`) | Works: handle table, enforced borrows, re-entry, errors, threads, lifecycle. |
 | v2 mock plugin (`plugins/mock/`) | A small language in C that implements the whole plugin contract. |
-| v2 conformance suite (`tests/`) | 8 groups and 180 subtests, passing against the mock, and clean under valgrind and helgrind. |
-| v2 plugins for Lua, CPython, QuickJS | Next, in that order. Perl will be ported last. |
+| v2 Lua plugin (`plugins/lua/`) | Lua 5.4: passes the whole conformance suite. |
+| v2 conformance suite (`tests/`) | 8 groups, run against every plugin, plus pairwise tests between every two languages (mock↔Lua). Clean under valgrind and helgrind. |
+| v2 plugins for CPython, QuickJS | Next, in that order. Perl will be ported last. |
 | v1 core and Perl 5 plugin (`lib/c/`, `lang/perl5/`) | Frozen. Built and tested (147 subtests) but not installed, until Perl is ported to v2. |
 | v1 Perl binding (XS) | Context, value, language and runtime (`load_library`). |
 
@@ -116,7 +117,9 @@ API.
 
 You need a C toolchain, Meson and Ninja, plus perl with `ExtUtils::Embed` and
 its embedding library. On Debian/Ubuntu that's `meson`, `ninja-build` and
-`libperl-dev`. There are no other dependencies. Valgrind is optional.
+`libperl-dev`. Lua 5.4 (`liblua5.4-dev`) is optional: without it, the Lua
+plugin is skipped (`-Dlua=disabled` skips it explicitly). Valgrind is
+optional too.
 
 ```sh
 meson setup build
@@ -136,9 +139,10 @@ output is in `build/meson-logs/testlog.txt`.
 
 **v2** (`tests/`, suite `conformance`) is the conformance suite of contract
 §9. It has eight groups: values, protocol, ownership, identity, callbacks,
-errors, threads and lifecycle. Every group runs against the plugin named
-by `UGLY_TEST_PLUGIN` (default `mock`), whose `conformance` module provides
-the fixtures.
+errors, threads and lifecycle. Every group runs against every plugin built
+(suite `conformance-<plugin>`), and each plugin's `conformance` module
+provides the fixtures (`tests/<plugin>/`). `pairwise.c` then runs every
+ordered pair of different plugins in one process (suite `pairwise`).
 
 **v1** (`test/`, suites `c` and `perl`):
 
@@ -153,8 +157,9 @@ A plugin that answers `UGLY_NOT_SUPPORTED` or `UGLY_NOT_IMPLEMENTED` gets
 skips rather than failures, so the same suite can run against every plugin.
 
 ```sh
-meson test -C build --suite conformance   # v2 only
-UGLY_TEST_PLUGIN=lua meson test -C build --suite conformance   # v2 suite against another plugin
+meson test -C build --suite conformance   # v2: every plugin, plus pairwise
+meson test -C build --suite conformance-lua   # v2 against one plugin
+meson test -C build --suite pairwise      # every ordered pair of languages
 meson test -C build object                # one test
 meson test -C build --suite c             # only the v1 C tests
 UGLY_DEBUG=3 meson test -C build          # with trace output in the log

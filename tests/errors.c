@@ -43,7 +43,7 @@ int main(void){
 	ugly_handle p1 = UGLY_NO_HANDLE ;
 	if (e != NULL){
 		is_str(ugly_error_language(e), plugin_name(), "  ... language") ;
-		is_str(ugly_error_type(e), "MockError", "  ... type") ;
+		is_str(ugly_error_type(e), "ConformanceError", "  ... type") ;
 		is_str(ugly_error_message(e), "boom", "  ... message") ;
 		st = ugly_error_payload(ctx, e, &p1) ;
 		ok((st == UGLY_OK)&&(p1 != UGLY_NO_HANDLE), "  ... and a payload") ;
@@ -100,7 +100,7 @@ int main(void){
 		st = fcall(&f, f.mod, "apply", b, 2, UGLY_ANY, &v) ;
 		is_status(ctx, st, UGLY_ERR_RAISED, "rt1 -> C -> rt2 raises: propagates to the host") ;
 		if ((e = ugly_last_error(ctx)) != NULL){
-			is_str(ugly_error_type(e), "MockError", "  ... type preserved") ;
+			is_str(ugly_error_type(e), "ConformanceError", "  ... type preserved") ;
 			is_str(ugly_error_message(e), "deep", "  ... message preserved") ;
 			ugly_handle p3 = UGLY_NO_HANDLE ;
 			ugly_error_payload(ctx, e, &p3) ;

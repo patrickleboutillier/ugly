@@ -34,9 +34,11 @@ pkglibdir = get_option('prefix') / get_option('libdir') / 'ugly'
 ugly_plugin_dir = get_option('prefix') / get_option('libdir') / 'ugly' / 'plugins'
 v2_plugins = []
 v2_plugin_dirs = []
+v2_test_plugins = ['mock']     # the conformance suite runs against each of these
 
 subdir('src')
 subdir('plugins/mock')
+subdir('plugins/lua')
 subdir('tests')
 
 # v1 (frozen; the reference is tag v0.02): built and tested, but not

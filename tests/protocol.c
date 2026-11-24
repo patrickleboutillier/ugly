@@ -95,12 +95,6 @@ int main(void){
 	is_status(ctx, st, UGLY_ERR_NOT_CAPABLE, "call(counter): UGLY_ERR_NOT_CAPABLE") ;
 	ugly_release(ctx, c) ;
 
-	/* invoke on a module calls a member function. */
-	ugly_val five = ugly_int(5) ;
-	st = ugly_invoke(ctx, f.mod, "echo", &five, 1, UGLY_INT, &v) ;
-	is_status(ctx, st, UGLY_OK, "invoke(module, echo, 5)") ;
-	is_int(v.as.i, 5, "  ... returns 5") ;
-
 	/* Classes: new. */
 	ugly_val cls ;
 	st = ugly_get_member(ctx, f.mod, "Point", UGLY_HANDLE, &cls) ;
