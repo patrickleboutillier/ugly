@@ -2,101 +2,62 @@
 
 ## Project: UGLY (Ultimate Glue LaYer)
 
-A C hub for in-process, multi-language interop, written in March 2013 (plus a few commits in January 2014). The author also wrote Perl's **Inline::Java**. UGLY was the attempt to generalize that Perl↔Java bridge into an N-language system: **2N adapters instead of N² pairwise bridges**.
+A C hub for in-process, multi-language interop. It embeds the real interpreters and routes every cross-language call through a neutral C core. It was first written in 2013–2014 by the author of Perl's **Inline::Java**, as an attempt to generalize that Perl↔Java bridge to N languages: one adapter per language instead of N² pairwise bridges. It was revived in 2026 around a new contract, `doc/contract.md`.
 
 Treat the author as a domain expert on language interop. Discuss design tradeoffs; don't explain JNI, callbacks or cross-runtime lifetimes.
 
 ## Architecture
 
-### v2 (the approved contract, `doc/contract.md`): in progress on master
-
-- **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract. The plugin vtable is written by hand; nothing is generated.
-- **`src/`** is the core (`libugly`, version 2.0.0):
+- **`doc/contract.md`** is the spec. It was approved on 2026-11-24 (PR #1), and its "Decisions" and "Clarifications" sections record everything settled since. Every rule in it should be a test in `tests/`.
+- **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract (the plugin rules plus the core services). The plugin vtable is written by hand; nothing is generated.
+- **`src/`** is the core (`libugly` 2.0.0):
   - `handles.c`: the handle table. A handle is a slot index plus a generation. It also holds borrow slots, the (home, identity) index and the per-runtime queues of deferred releases, all under one lock. Plugin code never runs under that lock.
   - `ctx.c`: one ctx per thread (`_Thread_local current`) and errors.
-  - `rt.c`: runtimes and frames. `rt_enter`/`rt_leave` check the thread, drain deferred releases and revoke borrows. `after_call` normalizes plugin results.
+  - `rt.c`: runtimes and frames. `rt_enter`/`rt_leave` check the thread, enforce `UGLY_MAX_DEPTH`, drain deferred releases and revoke borrows. `after_call` normalizes plugin results.
   - `protocol.c`: the operations.
   - `lang.c`: plugin loading through `UGLY_PLUGIN_PATH`, with `RTLD_GLOBAL` and counted loads.
   - `host.c`: the built-in "c" language, which is the home of C callables and core lists and maps. Each ctx has one runtime of it.
-- **`plugins/<lang>/`** holds the plugins, built as `ugly_<lang>.so` and exporting `ugly_plugin_<lang>()`.
-  - **`plugins/mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
-  - **`plugins/python/`** is CPython 3.10+. Python is initialized once at plugin load with `Py_InitializeEx(0)`, the GIL is released, and Python is never finalized: no RESTARTABLE, no MULTI_RUNTIME, and a runtime is a globals dict. Every entry does `PyGILState_Ensure`/`Release`, which nests fine through other languages. The embedded `ugly` module holds `ugly.Proxy` (cached per handle via weakrefs), `ugly.Error` (with `.type`, `.message`, `.language`, `.payload`, and an `_err` capsule that's restored unchanged when it escapes) and `ugly.rethrow`. Conversions are Python's strict ones. Tests set `PYTHONMALLOC=malloc` and `PYTHONDONTWRITEBYTECODE=1`. `tests/valgrind.supp` suppresses only CPython "possibly lost" leaks.
-  - **`plugins/lua/`** is Lua 5.4. Every operation runs under `lua_pcall` (`op_body`), except `call`, which pcalls the target directly so a call costs one of Lua's roughly 200 nested C calls. Proxies are `ugly.proxy` userdata cached per owned handle in a weak table. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape. Elements are 0-based in the protocol and 1-based in Lua. It is an optional dependency (`-Dlua=`).
+- **`plugins/<lang>/`** holds the plugins, built as `ugly_<lang>.so` and exporting `ugly_plugin_<lang>()`. Each one's `meson.build` appends to `plugins`, `plugin_dirs` and `test_plugins`, and is optional (`-D<lang>=`).
+  - **`mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
+  - **`lua/`** is Lua 5.4.
+    - Every operation runs under `lua_pcall` (`op_body`), except `call`, which pcalls the target directly so a call costs one of Lua's roughly 200 nested C calls.
+    - Proxies are `ugly.proxy` userdata, cached per owned handle in a weak table. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape.
+    - Elements are 0-based in the protocol and 1-based in Lua.
+    - `invoke` passes `self` only to methods found through the metatable, not to raw fields.
+  - **`python/`** is CPython 3.10+.
+    - Python is initialized once at plugin load with `Py_InitializeEx(0)`, the GIL is released, and Python is never finalized. So there's no RESTARTABLE and no MULTI_RUNTIME, and a runtime is a globals dict.
+    - Every entry does `PyGILState_Ensure`/`Release`.
+    - The embedded `ugly` module holds `ugly.Proxy` (cached per handle via weakrefs), `ugly.Error` (`.type`, `.message`, `.language`, `.payload`, and an `_err` capsule that's restored unchanged when it escapes) and `ugly.rethrow`. It is the seed of the Python binding.
+    - Conversions are Python's strict ones.
+  - Proxies in both languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
 - **`tests/`** is the conformance suite: 8 C programs plus `conformance.h` (TAP and fixture), and `pairwise.c`.
-  - Meson registers each program once per plugin in `v2_test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair (suite `pairwise`, env `UGLY_TEST_PEER`).
-  - Fixtures are each plugin's `conformance` module: `tests/lua/conformance.lua` (found through `LUA_PATH`), built into the mock. The spec is in contract §9: type names come from `describe`, the exception type is `ConformanceError`, and `inits()` is optional.
-  - A new plugin adds itself to `v2_test_plugins`, `v2_plugins` and `v2_plugin_dirs` in its `meson.build`.
+  - Meson registers each program once per plugin in `test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair of different plugins (suite `pairwise`, env `UGLY_TEST_PEER`).
+  - Fixtures are each plugin's `conformance` module, in `tests/lua/` and `tests/python/` (the mock's are built in). The spec is in contract §9.
+  - Expectations that depend on the language are "exact or refused". Tests that need a capability a plugin lacks report a SKIP; they never drop checks silently.
+- **`examples/`**: programs built and run as tests by exit status. `polyglot.c` has Lua call Python; README quotes it.
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
-  - A plugin reports a non-exception failure with `ugly_fail` (chosen status) and an exception with `ugly_raise_native` (`RAISED` plus a payload).
+  - A plugin reports a non-exception failure with `ugly_fail` (chosen status), an exception with `ugly_raise_native` (`RAISED` plus a payload), and a rethrown foreign value with `ugly_raise_handle`.
+  - A Lua or Python error must never `longjmp` across a core frame or skip one: catch it at the boundary.
+- **Build:** Meson (≥ 0.61) and Ninja, out-of-tree, with `-Wall` and no warnings. `meson test -C build --setup valgrind` fails on memory errors and on definite, indirect or possible leaks. `tests/valgrind.supp` suppresses only CPython's "possibly lost" live objects. Tests set `PYTHONMALLOC=malloc` and `PYTHONDONTWRITEBYTECODE=1`.
+- **Tags:** `v0.01` is the original 2013–2014 code, including Java and JNA. `v0.02` is the v1 reference: the original contract with a Perl 5 plugin and XS binding, a Meson build and a TAP suite. v1 was removed from the tree on 2026-11-24 at the author's request.
 
-### v1 (frozen, tag `v0.02`): still built and tested, not installed
+## Notes for the Perl port (learned on v1, tag `v0.02`)
 
-- **`lib/c/`**: the core library (`libugly`).
-  - `ugly.h` holds the types and `ugly_api.h` holds the public API. `ugly_api.h` is parsed by `gen_iface.sh` to generate `ugly_iface.h`, so keep its formatting rules: one token for the return type, one function per line.
-  - `ugly_context`: errors go here (error code + message), not into exceptions. Every API call clears it first.
-  - `ugly_value`: a tagged union of BOOL, LONG, DOUBLE, CHAR, STRING and OBJECT. Every value crossing a language boundary goes through it.
-  - `ugly_language`: loads the plugin `libugly_<lang>.so` with `dlopen` and calls `_ugly_<lang>_language_init` to get the plugin's interface vtable.
-  - `ugly_runtime`, `ugly_object`: generic wrappers that dispatch through that vtable.
-- **`lang/<x>/`**: language **plugins**. Each embeds that language's interpreter or VM and implements: language_delete, runtime_new, runtime_delete, load_library, call_function, object_new, object_call_method, object_delete. The vtable is generated from the `UGLY_IFACE` lines in `ugly_api.h`, so a new `UGLY_IFACE` entry forces every plugin to implement it.
-  - Each plugin has helper code in its own language (`helper/helper.pm`), loaded at runtime from `<UGLY_LANGUAGE_DIR>/<lang>/helper/`.
-- **`lib/<x>/`**: host-language **bindings**, so code in that language can drive the C API. Perl uses XS (`lib/perl5/Ugly.xs`).
-- **`test/`**: `meson test -C build` runs every test as TAP (`protocol: 'tap'`). That covers the C programs in `test/t/*.c` (suite `c`) and the Perl binding's `lib/perl5/t/*.t` (suite `perl`).
-  - The C tests use `test/ugly_test.h`, a small vendored TAP header with `ok`, `is_long`/`is_double`/`is_string`, `no_error`/`has_error` and `done_testing`. There are no external dependencies.
-  - `no_error` turns `UGLY_NOT_SUPPORTED`/`UGLY_NOT_IMPLEMENTED` into skips, so one suite can run against every plugin.
-  - The plugin is chosen with `UGLY_TEST_LANG`. It is deliberately not set by Meson, so the caller's value passes through. Both the C tests (`ugly_test_lang()`) and the `.t` files default to `perl5`. The test libraries `calc`/`oocalc` live in `test/<lang>/`.
-  - `test_env` in `test/meson.build` sets `UGLY_LANGUAGE_DIR` to the source tree's `lang/`. It also sets `LD_LIBRARY_PATH` to every plugin's build dir (each `lang/<x>/meson.build` appends to `plugins`/`plugin_dirs`) and `PERL5LIB`, so no install is needed.
-  - `meson test -C build --setup valgrind` runs the C suite under valgrind. See "Where we left off".
-- **`UGLY_LANGUAGE_DIR`**: the compiled-in default is `<prefix>/<libdir>/ugly`, and the environment variable overrides it. Helpers live at `<dir>/<lang>/helper/` (perl5: `helper/helper.pm`).
-- **Perl XS binding**: no MakeMaker. `xsubpp` generates `Ugly.c` (`lib/perl5/meson.build`), and `lib/perl5/auto/Ugly/meson.build` builds it, so the module lands at `build/lib/perl5/auto/Ugly/Ugly.so`, where XSLoader finds it through `@INC`. Install goes to `$Config{installsitearch}`, which the `perl_installdir` option overrides.
-- **Build:** Meson (≥ 0.61) and Ninja: `meson setup build && meson compile -C build`. Builds are out-of-tree. It uses `-Wall` (`warning_level=1`) and is warning-free. `gen_iface.sh <path to ugly_api.h>` is a `custom_target`. Linking the Perl plugin needs `libperl-dev`. `UGLY_DEBUG=<n>` turns on debug tracing.
-- **Tag `v0.01`**: the original 2013–2014 state, including the Java plugin (`lang/java`), the JNA binding (`lib/java`) and `test/java`.
-- **Tag `v0.02`** (annotated): the **v1 reference**. The Perl 5 plugin is frozen against the original contract, with the Meson build. Both tags are pushed.
+- Every entry into an embedded perl must save and restore `PERL_GET_CONTEXT` (v1's `UGLY_PERL5_ENTER`/`LEAVE` in `lang/perl5/ugly_perl5_priv.h`).
+- Call `PERL_SYS_INIT3` once per process, and only if `PL_curinterp` is NULL; a host perl already owns that state. **Never** call `PERL_SYS_TERM`: after it, perl can't start again in the same process (`perl_alloc` exits with EBADF). So Perl isn't RESTARTABLE.
+- Delete a runtime with `perl_destruct`/`perl_free` under the interpreter's context. A MULTIPLICITY perl defaults to destruct level 1, so `PERL_DESTRUCT_LEVEL` isn't needed.
+- `call_sv` with mortalized arguments: anything that must outlive the call needs `SvREFCNT_inc`. A wrapper must own exactly one reference to its RV; v1's `wrap` took two, so objects were never DESTROYed.
+- In XS typemaps, set the C variable to NULL in the `else` branch for undef, or functions without a NULL PREINIT read garbage.
+- The Perl helper (`helper.pm`) `use`d the binding to share value code. In v2 terms, the plugin and the binding are one adapter.
 
-## Current state (assessed 2026-11-24)
+## State (2026-11-24)
 
-- **Perl 5 plugin** works end to end, including objects and two runtimes in one process. It is **frozen as the v1 reference**; don't extend it against the old contract. Bug fixes are fine.
-  - Every entry into an embedded perl must save and restore `PERL_GET_CONTEXT` (`UGLY_PERL5_ENTER`/`LEAVE` in `ugly_perl5_priv.h`).
-  - `perl_call_helper_function` mortalizes its arguments, so the object handle is passed with `SvREFCNT_inc`.
-  - An `ugly_object` owns exactly one reference to its perl RV (XS `Ugly::Object::wrap`), which `object_delete` releases. Until 2026-11-24, `wrap` took a second reference, so perl objects were never DESTROYed.
-  - `PERL_SYS_INIT3` runs once per process, only if `PL_curinterp` is NULL. A host perl (the binding) already owns that state. `PERL_SYS_TERM` is **never** called: after it, perl can't start again in the same process (`perl_alloc` exits with EBADF). So the perl `language_delete` is a no-op.
-- **Teardown rule (2026-11-24):** `ugly_runtime_delete` and `ugly_language_delete` refuse with `UGLY_IN_USE` while live objects or runtimes remain, and leave the target intact. The core counts these (`nb_objects`, `nb_runtimes` in `ugly_priv.h`). Deleting NULL is a no-op for language, runtime and object. Cascading deletes or a handle registry is left as a v2 ownership decision.
-- **Java has been removed** (2026-11-24). It was scaffolding against JDK 1.7 and survives in tag `v0.01`.
-- The Perl binding wraps context, value, language and runtime (`load_library` only).
-- As of 2026-11-24 everything builds without warnings (`-Wall`) on GCC 11/perl 5.34, and `meson test` passes 9 tests with 147 subtests.
-- **Valgrind (2026-11-24, valgrind 3.18):** `meson test --setup valgrind` passes. There are 0 memory errors and 0 definite, indirect or possible leaks in all 5 C tests. About 7 KB is still reachable in `t/runtime` and `t/object`: perl's process-wide state, which is kept on purpose. This doesn't need `PERL_DESTRUCT_LEVEL`, because a MULTIPLICITY perl defaults to destruct level 1.
-
-### Known issues
-- `ugly_debug_args` returns a per-thread buffer, valid until the next call in the same thread, and cuts long output with "...". Every other to-string is either a literal or cached per value, object or runtime. This was fixed on 2026-11-24, along with a buffer overflow in `ugly_debug_args`.
-- The Perl binding's typemap used to leave a pointer unset when it was passed undef. `get_language` and `load_library` had no `= NULL` PREINIT to hide that. The typemap now sets NULL itself (fixed 2026-11-24).
-
-## Where we left off (2026-11-24)
-
-- **`master`** (pushed, 2026-11-24) holds the whole revival: Java removal, the TAP test suite and fixes, docs, teardown, the v1 cleanup, the Meson port (which also removed `doc/git.howto`, at the author's request), and version 0.02. The head is tagged **`v0.02`**, the v1 reference. The branches `revive-docs-and-tests` and `meson-build` are fully merged.
-- **The valgrind setup** (`add_test_setup('valgrind', ...)` in `test/meson.build`) runs only the C suite (`exclude_suites: ['perl']`), directly with no libtool wrappers.
-  - A test fails on any memory error or any definite, indirect or possible leak. Still-reachable memory is allowed.
-  - Checked with an injected heap overread and an injected leak: both show as ERROR (exit status 99).
-  - It uses `--keep-debuginfo=yes`, because plugins are `dlclose`d.
-- **Teardown** (`ugly_runtime_delete`, `ugly_language_delete`): the tests delete everything they create, and cover re-initializing a language in the same process.
-- **The v2 contract was approved on 2026-11-24** (PR #1). The author took the recommendation on all 8 review questions; the decisions are listed in `contract.md`.
-- **The v2 core, mock plugin and conformance suite are done** (2026-11-24, branch `v2-core`). 8 groups and 180 subtests pass, clean under valgrind (leaks fail) and helgrind. Implementing it pinned down several points (contract.md, "Clarifications"): one ctx per thread, counted loads, rt_delete refused during a call into it, `ugly_fail`, `ugly_rt_native`, `ugly_current_ctx`.
-- **The Lua plugin is done** (2026-11-24, branch `lua-plugin`). It passes all 8 groups, and pairwise mock↔Lua passes; everything is clean under valgrind, and helgrind finds no races.
-  - Writing it fixed the contract in three places: the re-entry depth limit (`UGLY_MAX_DEPTH`, `UGLY_ERR_TOO_DEEP`), `ugly_raise_handle`, and language-neutral fixtures.
-- **The CPython plugin is done** (2026-11-24, branch `python-plugin`). It passes all 8 groups, and pairwise works for every pair of mock, Lua and Python; everything is clean under valgrind, and helgrind finds no races.
-  - Writing it fixed: language-dependent conversions are tested as "exact or refused", single-runtime plugins must refuse a second runtime (with explicit SKIPs), and receivers across languages work (proxies invoke callable members; Lua passes `self` only to metatable methods).
-  - `doc/v2/contract.md` moved to `doc/contract.md`, at the author's request.
-- **Agreed: remove v1 from the tree once v2 works** (it survives in tag `v0.02`).
-- **Next (agreed 2026-11-24): bindings for Lua and Python together.** That means an in-language `ugly` module (import/load/runtimes) plus attach mode, so a plain `lua` or `python3` process can use the other language with no C host. Real attach tests go in the suite. Milestone: `python3 script.py` uses a Lua module, and `lua script.lua` uses a Python one. After that QuickJS, then Perl. See contract.md "Order of work".
-
-### Missing for a real polyglot layer
-- Arrays, maps, bytes and null values.
-- **Callbacks**: the called language calling back into the caller.
-- **Ownership / GC rules** for objects held across runtimes.
-- **Structured errors**: a type, a message and the originating language, propagated like exceptions.
-- Thread safety.
-
-Inline::Java solved most of these for the Perl↔Java pair. The open problem is turning those solutions into language-neutral rules in the C core.
+- **`master`**: the v2 core, plugins for the mock, Lua and CPython, the conformance suite (24 runs: 8 groups × 3 plugins), pairwise (6 ordered pairs) and the polyglot example. 31 tests pass, clean under valgrind, and helgrind finds no races.
+- Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
+- **Next (agreed): bindings for Lua and Python together.** That means an in-language `ugly` module (load, runtimes, import) plus attach mode, so a plain `lua` or `python3` process can use the other language with no C host. Real attach tests go in the suite. Milestone: `python3 script.py` uses a Lua module, and `lua script.lua` uses a Python one.
+- Then QuickJS, then the Perl port (see the notes above). See contract.md "Order of work".
 
 ## Landscape (2026)
 
@@ -111,15 +72,8 @@ Inline::Java solved most of these for the Perl↔Java pair. The open problem is 
 
 **UGLY's niche** is embedding the *real* interpreters in one process and letting them call each other through a neutral C core. That niche is still largely unfilled.
 
-## Direction agreed
+## Docs
 
-1. **Docs first (drafted 2026-11-24).**
-   - `README.md` is the only README.
-   - `doc/design-essay.md` is in the author's first-person voice. The author verified its Inline::Java claims on 2026-11-24.
-2. **Possibly later: a small, sharp v2** (not a broad product).
-   - Keep the core architecture.
-   - Plugin order: Lua first (contract problems show up undisguised), then embedded CPython (GIL and reentrancy), then QuickJS. Perl is ported last, as the neutrality stress test.
-   - Use Panama FFM instead of JNI/JNA if Java returns. Creating the JVM still needs the JNI invocation API.
-   - Make callbacks, ownership rules and structured errors first-class in `ugly_value` and the API from day one.
-   - Build: Meson (done on 2026-11-24).
-   - Each new plugin must pass the existing suite (`UGLY_TEST_LANG=<lang> meson test -C build`). That suite is the start of the conformance tests.
+- `README.md` is the only README.
+- `doc/design-essay.md` is in the author's first-person voice; the author verified its Inline::Java claims on 2026-11-24. It describes the 2013 design historically.
+- `doc/contract.md` is the v2 spec. It is kept current: record any change to the contract in it, and in the headers.
