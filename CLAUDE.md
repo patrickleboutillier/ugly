@@ -8,7 +8,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## Architecture
 
-### v2 (the approved contract, `doc/v2/contract.md`): in progress on master
+### v2 (the approved contract, `doc/contract.md`): in progress on master
 
 - **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract. The plugin vtable is written by hand; nothing is generated.
 - **`src/`** is the core (`libugly`, version 2.0.0):
@@ -20,6 +20,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - `host.c`: the built-in "c" language, which is the home of C callables and core lists and maps. Each ctx has one runtime of it.
 - **`plugins/<lang>/`** holds the plugins, built as `ugly_<lang>.so` and exporting `ugly_plugin_<lang>()`.
   - **`plugins/mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
+  - **`plugins/python/`** is CPython 3.10+. Python is initialized once at plugin load with `Py_InitializeEx(0)`, the GIL is released, and Python is never finalized: no RESTARTABLE, no MULTI_RUNTIME, and a runtime is a globals dict. Every entry does `PyGILState_Ensure`/`Release`, which nests fine through other languages. The embedded `ugly` module holds `ugly.Proxy` (cached per handle via weakrefs), `ugly.Error` (with `.type`, `.message`, `.language`, `.payload`, and an `_err` capsule that's restored unchanged when it escapes) and `ugly.rethrow`. Conversions are Python's strict ones. Tests set `PYTHONMALLOC=malloc` and `PYTHONDONTWRITEBYTECODE=1`. `tests/valgrind.supp` suppresses only CPython "possibly lost" leaks.
   - **`plugins/lua/`** is Lua 5.4. Every operation runs under `lua_pcall` (`op_body`), except `call`, which pcalls the target directly so a call costs one of Lua's roughly 200 nested C calls. Proxies are `ugly.proxy` userdata cached per owned handle in a weak table. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape. Elements are 0-based in the protocol and 1-based in Lua. It is an optional dependency (`-Dlua=`).
 - **`tests/`** is the conformance suite: 8 C programs plus `conformance.h` (TAP and fixture), and `pairwise.c`.
   - Meson registers each program once per plugin in `v2_test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair (suite `pairwise`, env `UGLY_TEST_PEER`).
@@ -82,8 +83,11 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **The v2 core, mock plugin and conformance suite are done** (2026-11-24, branch `v2-core`). 8 groups and 180 subtests pass, clean under valgrind (leaks fail) and helgrind. Implementing it pinned down several points (contract.md, "Clarifications"): one ctx per thread, counted loads, rt_delete refused during a call into it, `ugly_fail`, `ugly_rt_native`, `ugly_current_ctx`.
 - **The Lua plugin is done** (2026-11-24, branch `lua-plugin`). It passes all 8 groups, and pairwise mock↔Lua passes; everything is clean under valgrind, and helgrind finds no races.
   - Writing it fixed the contract in three places: the re-entry depth limit (`UGLY_MAX_DEPTH`, `UGLY_ERR_TOO_DEEP`), `ugly_raise_handle`, and language-neutral fixtures.
-- **Next: the CPython plugin** (`plugins/python/`). Python 3.10 dev files are already installed (`python3-embed` pkg-config). Expect the GIL (`PyGILState_*` on every entry) and no `MULTI_RUNTIME` in v2.0.
-- **Then (agreed 2026-11-24): bindings for Lua and Python together.** That means an in-language `ugly` module (import/load/runtimes) plus attach mode, so a plain `lua` or `python3` process can use the other language with no C host. Real attach tests go in the suite. Milestone: `python3 script.py` uses a Lua module, and `lua script.lua` uses a Python one. After that QuickJS, then Perl. See contract.md "Order of work".
+- **The CPython plugin is done** (2026-11-24, branch `python-plugin`). It passes all 8 groups, and pairwise works for every pair of mock, Lua and Python; everything is clean under valgrind, and helgrind finds no races.
+  - Writing it fixed: language-dependent conversions are tested as "exact or refused", single-runtime plugins must refuse a second runtime (with explicit SKIPs), and receivers across languages work (proxies invoke callable members; Lua passes `self` only to metatable methods).
+  - `doc/v2/contract.md` moved to `doc/contract.md`, at the author's request.
+- **Agreed: remove v1 from the tree once v2 works** (it survives in tag `v0.02`).
+- **Next (agreed 2026-11-24): bindings for Lua and Python together.** That means an in-language `ugly` module (import/load/runtimes) plus attach mode, so a plain `lua` or `python3` process can use the other language with no C host. Real attach tests go in the suite. Milestone: `python3 script.py` uses a Lua module, and `lua script.lua` uses a Python one. After that QuickJS, then Perl. See contract.md "Order of work".
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.

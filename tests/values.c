@@ -33,6 +33,27 @@ static void want(fixture *f, ugly_val in, ugly_kind k, ugly_status expect, const
 }
 
 
+/* A conversion a language may or may not allow: either the exact value, or UGLY_ERR_TYPE. */
+static void want_either(fixture *f, ugly_val in, ugly_kind k, ugly_val expect, const char *what){
+	ugly_val out ;
+	ugly_status st = fcall(f, f->mod, "echo", &in, 1, k, &out) ;
+	int good = (st == UGLY_ERR_TYPE) ;
+	if (st == UGLY_OK){
+		switch (k){
+			case UGLY_INT: good = (out.as.i == expect.as.i) ; break ;
+			case UGLY_STRING: good = (out.as.str.len == expect.as.str.len)
+				&&(memcmp(out.as.str.ptr, expect.as.str.ptr, expect.as.str.len) == 0) ; break ;
+			default: break ;
+		}
+	}
+	ok(good, "%s: %s", what, st == UGLY_OK ? "converted, to the exact value" : "refused with UGLY_ERR_TYPE") ;
+	if (! good){
+		diag("  got %s", status_name(st)) ;
+	}
+	ugly_val_release(f->ctx, &out) ;
+}
+
+
 static void kind_of(fixture *f, ugly_val in, const char *expect, const char *what){
 	ugly_val out ;
 	ugly_status st = fcall(f, f->mod, "kind_of", &in, 1, UGLY_STRING, &out) ;
@@ -63,20 +84,24 @@ int main(void){
 	static const uint8_t bytes[] = { 0, 1, 127, 128, 255 } ;
 	roundtrip(&f, ugly_bytes(bytes, sizeof(bytes)), "bytes, including 0 and 255") ;
 
-	/* The caller's 'want', converted by the home plugin with its own rules (mock: Perl-like). */
+	/*
+	 * The caller's 'want', converted by the home plugin with its own rules.
+	 * Some conversions every language makes; others depend on the language
+	 * (Perl and Lua numify "42", Python refuses), and must then be exact or
+	 * refused.
+	 */
 	ugly_val out ;
-	want(&f, ugly_str("42", 2), UGLY_INT, UGLY_OK, "want INT from \"42\": converted", &out) ;
-	is_int(out.kind == UGLY_INT ? out.as.i : -1, 42, "  ... to 42") ;
-	want(&f, ugly_int(7), UGLY_STRING, UGLY_OK, "want STRING from 7: converted", &out) ;
-	is_str(sval(&out), "7", "  ... to \"7\"") ;
-	ugly_val_release(f.ctx, &out) ;
-	want(&f, ugly_double(2.0), UGLY_INT, UGLY_OK, "want INT from 2.0: converted", &out) ;
-	is_int(out.kind == UGLY_INT ? out.as.i : -1, 2, "  ... to 2") ;
+	want(&f, ugly_int(7), UGLY_DOUBLE, UGLY_OK, "want DOUBLE from 7: converted", &out) ;
+	ok((out.kind == UGLY_DOUBLE)&&(out.as.d == 7.0), "  ... to 7.0") ;
+	want_either(&f, ugly_str("42", 2), UGLY_INT, ugly_int(42), "want INT from \"42\"") ;
+	want_either(&f, ugly_int(7), UGLY_STRING, ugly_str("7", 1), "want STRING from 7") ;
+	want_either(&f, ugly_double(2.0), UGLY_INT, ugly_int(2), "want INT from 2.0") ;
 	want(&f, ugly_str("x", 1), UGLY_INT, UGLY_ERR_TYPE, "want INT from \"x\": UGLY_ERR_TYPE", &out) ;
 	const ugly_error *e = ugly_last_error(f.ctx) ;
 	is_str(e ? ugly_error_language(e) : NULL, plugin_name(), "  ... reported by the home language") ;
 	want(&f, ugly_double(2.5), UGLY_INT, UGLY_ERR_TYPE, "want INT from 2.5: UGLY_ERR_TYPE", &out) ;
 	ok(out.kind == UGLY_NULL, "  ... and no value") ;
+	want(&f, ugly_int(1), UGLY_HANDLE, UGLY_ERR_TYPE, "want HANDLE from 1: UGLY_ERR_TYPE", &out) ;
 
 	/* Inside the language, each kind arrives as its native type. */
 	kind_of(&f, ugly_null(), "null", "kind_of(null)") ;

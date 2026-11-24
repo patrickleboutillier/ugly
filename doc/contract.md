@@ -1,11 +1,11 @@
 # UGLY v2: the contract
 
 *Approved 2026-11-24. This document sits alongside
-[`ugly.h`](../../include/ugly.h) (the public API) and [`ugly_plugin.h`](../../include/ugly_plugin.h)
+[`ugly.h`](../include/ugly.h) (the public API) and [`ugly_plugin.h`](../include/ugly_plugin.h)
 (the plugin contract). The headers live in `include/`. The v1 reference is
 tag `v0.02`.*
 
-The [design essay](../design-essay.md) ends with this point: "written once"
+The [design essay](design-essay.md) ends with this point: "written once"
 means specified once, completely, before the second plugin exists. This
 document is that specification. Every rule in it should become a test in the
 conformance suite (§9). A rule that can't be tested doesn't belong here.
@@ -353,18 +353,19 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 How each language maps onto the contract. "Proxy finalizer" is where a
 proxy releases its handle reference.
 
-| | Lua 5.4 | CPython 3.12+ | QuickJS | Perl 5 |
+| | Lua 5.4 | CPython 3.10+ | QuickJS | Perl 5 |
 |---|---|---|---|---|
 | null | `nil` | `None` | `null`, `undefined` | `undef` |
-| int / double | integer / float subtypes | `int`, or `TYPE` beyond int64 / `float` | number: INT if integral and `want` allows | IV / NV, using SV flags |
+| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and `want` allows | IV / NV, using SV flags |
 | string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string / `ArrayBuffer` | UTF-8 flag: on → STRING, off → STRING decoded as Latin-1, or BYTES if wanted |
 | members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties | hash keys; for methods, `can` |
 | elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays |
-| `invoke` receiver | `obj:m()` | bound method | `this` | invocant |
-| proxy finalizer | userdata `__gc` | `tp_dealloc` | class finalizer | `DESTROY` |
+| `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant |
+| proxy finalizer | userdata `__gc` | `tp_dealloc` of `ugly.Proxy` | class finalizer | `DESTROY` |
+| foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | |
 | re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | context, job queue | `PERL_SET_CONTEXT`, `G_EVAL` |
 | restartable | yes | no | yes | no |
-| multiple runtimes | yes | no in v2.0 (subinterpreters later) | yes | yes (MULTIPLICITY) |
+| multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY) |
 
 ## Decisions
 
@@ -431,6 +432,21 @@ All of them are in the headers and covered by the conformance suite.
 - **Fixtures are language-neutral.** The exception type is
   `ConformanceError`, `inits()` is optional, and nothing checks a receiver
   convention or a bytes type that a language doesn't have.
+- **Conversions that depend on the language are checked as "exact or
+  refused"** (found by the Python plugin). Perl and Lua numify `"42"`;
+  Python refuses. The suite accepts either, but never a wrong value or
+  another status.
+- **Single-runtime plugins are checked, not skipped silently.** A plugin
+  without `UGLY_CAP_MULTI_RUNTIME` must refuse a second runtime with
+  `UGLY_ERR_NOT_SUPPORTED`, and the tests that need two runtimes report a
+  SKIP. Cross-runtime scenarios for such a language are covered by the
+  pairwise tests.
+- **Receivers across languages** (found pairing Lua with Python). A proxy
+  turns a callable member into a method call: `obj.m(x)` from Python, and
+  `obj:m(x)` or `obj.m(x)` from Lua, all `ugly_invoke(obj, "m", x)`. The
+  home plugin then applies its own receiver rule. Lua passes `self` only to
+  methods found through the metatable, so a module's plain functions work
+  from Python too.
 - **The mock plugin** (`plugins/mock/`) is a small language written in C,
   with lenient, Perl-like conversions. It implements every rule of
   `ugly_plugin.h` and every conformance fixture.
@@ -447,8 +463,10 @@ All of them are in the headers and covered by the conformance suite.
    (`plugins/lua/`, fixtures in `tests/lua/`). It passes all 8 groups, and
    the pairwise suite passes for mock→Lua and Lua→mock, all clean under
    valgrind.
-4. The CPython plugin. Its pairs join the pairwise suite, so Lua↔Python is
-   tested from day one.
+4. ~~The CPython plugin.~~ Done 2026-11-24 (`plugins/python/`, fixtures in
+   `tests/python/`). It passes all 8 groups, and the pairwise suite passes
+   for every pair of mock, Lua and Python, in both directions, clean under
+   valgrind and helgrind.
 5. **Bindings: an `ugly` module in each language, and attach mode, for Lua
    and Python together** (§8). The in-language API wraps loading,
    runtimes and import, for example

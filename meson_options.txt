@@ -1,2 +1,4 @@
 option('lua', type: 'feature', value: 'auto',
   description: 'The v2 Lua 5.4 plugin (needs liblua5.4-dev)')
+option('python', type: 'feature', value: 'auto',
+  description: 'The v2 CPython plugin (needs python3-dev)')

@@ -113,7 +113,7 @@ int main(void){
 	/* Across runtimes: rt1 -> C -> rt2 -> rt1. */
 	ugly_rt *rt2 ;
 	ugly_handle mod2 ;
-	if (fx_runtime(&f, &rt2, &mod2)){
+	if (fx_second(&f, &rt2, &mod2, "across runtimes")){
 		glue_data g = { &f, UGLY_NO_HANDLE, UGLY_NO_HANDLE } ;
 		ugly_val t ;
 		ugly_get_member(ctx, mod2, "apply", UGLY_HANDLE, &t) ;

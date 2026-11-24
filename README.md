@@ -94,18 +94,20 @@ The API follows three conventions:
 ## Status
 
 UGLY is between two contract generations. **v1** is the 2013 design, frozen
-at tag `v0.02`. **v2** is the contract in [doc/v2/contract.md](doc/v2/contract.md):
+at tag `v0.02`. **v2** is the contract in [doc/contract.md](doc/contract.md):
 handles with own and borrow, callbacks, structured errors that keep their
-identity, and one thread per runtime. Its core and its first real language
-plugin, Lua, are written and pass the conformance suite.
+identity, and one thread per runtime. Its core and two real language
+plugins, Lua and CPython, are written and pass the conformance suite, and
+Lua and Python call each other in one process.
 
 | Part | State |
 |---|---|
 | v2 core (`src/`, `include/`) | Works: handle table, enforced borrows, re-entry, errors, threads, lifecycle. |
 | v2 mock plugin (`plugins/mock/`) | A small language in C that implements the whole plugin contract. |
 | v2 Lua plugin (`plugins/lua/`) | Lua 5.4: passes the whole conformance suite. |
-| v2 conformance suite (`tests/`) | 8 groups, run against every plugin, plus pairwise tests between every two languages (mock↔Lua). Clean under valgrind and helgrind. |
-| v2 plugins for CPython, QuickJS | Next, in that order. Perl will be ported last. |
+| v2 CPython plugin (`plugins/python/`) | CPython 3.10+: passes the whole conformance suite. One runtime per process. |
+| v2 conformance suite (`tests/`) | 8 groups, run against every plugin, plus pairwise tests between every two languages (mock, Lua, Python). Clean under valgrind and helgrind. |
+| Next | Bindings for Lua and Python (an `ugly` module and attach mode), then QuickJS. Perl will be ported last. |
 | v1 core and Perl 5 plugin (`lib/c/`, `lang/perl5/`) | Frozen. Built and tested (147 subtests) but not installed, until Perl is ported to v2. |
 | v1 Perl binding (XS) | Context, value, language and runtime (`load_library`). |
 
@@ -117,9 +119,9 @@ API.
 
 You need a C toolchain, Meson and Ninja, plus perl with `ExtUtils::Embed` and
 its embedding library. On Debian/Ubuntu that's `meson`, `ninja-build` and
-`libperl-dev`. Lua 5.4 (`liblua5.4-dev`) is optional: without it, the Lua
-plugin is skipped (`-Dlua=disabled` skips it explicitly). Valgrind is
-optional too.
+`libperl-dev`. Lua 5.4 (`liblua5.4-dev`) and CPython 3.10+ (`python3-dev`)
+are optional: a plugin whose language isn't found is skipped (`-Dlua=disabled`
+and `-Dpython=disabled` skip them explicitly). Valgrind is optional too.
 
 ```sh
 meson setup build
@@ -170,7 +172,9 @@ The valgrind setup fails a test on any memory error and on any definite,
 indirect or possible leak, so the tests delete everything they create.
 Memory that is still reachable at exit is allowed, because a plugin may keep
 process-wide state for the life of the process. For example, perl can't be
-shut down and started again in one process.
+shut down and started again in one process. `tests/valgrind.supp` suppresses
+one thing: CPython's live objects reported as "possibly lost", because
+Python is never finalized.
 
 ## License
 

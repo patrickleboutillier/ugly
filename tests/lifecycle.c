@@ -85,7 +85,9 @@ int main(void){
 		}
 	}
 	else {
-		skip("plugin lacks UGLY_CAP_MULTI_RUNTIME") ;
+		ugly_rt *rt2 ;
+		st = ugly_rt_new(ctx, f.lang, &rt2) ;
+		is_status(ctx, st, UGLY_ERR_NOT_SUPPORTED, "a second runtime without UGLY_CAP_MULTI_RUNTIME: UGLY_ERR_NOT_SUPPORTED") ;
 	}
 
 	/* Restart: unload completely, load again, and it works (only if the plugin says it can). */

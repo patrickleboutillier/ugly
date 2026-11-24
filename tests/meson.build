@@ -13,6 +13,11 @@ foreach plugin : v2_test_plugins
     env.prepend('UGLY_PLUGIN_PATH', d)
   endforeach
   env.set('LUA_PATH', meson.current_source_dir() / 'lua' / '?.lua;;')
+  # Python: fixtures from tests/python; plain malloc so valgrind sees every allocation; no
+  # __pycache__ in the source tree.
+  env.set('PYTHONPATH', meson.current_source_dir() / 'python')
+  env.set('PYTHONMALLOC', 'malloc')
+  env.set('PYTHONDONTWRITEBYTECODE', '1')
 
   foreach t : ['values', 'protocol', 'ownership', 'identity', 'callbacks', 'errors', 'threads', 'lifecycle']
     exe = 'conformance_' + t
@@ -37,6 +42,9 @@ foreach a : v2_test_plugins
         env.prepend('UGLY_PLUGIN_PATH', d)
       endforeach
       env.set('LUA_PATH', meson.current_source_dir() / 'lua' / '?.lua;;')
+      env.set('PYTHONPATH', meson.current_source_dir() / 'python')
+      env.set('PYTHONMALLOC', 'malloc')
+      env.set('PYTHONDONTWRITEBYTECODE', '1')
       test('pairwise-' + a + '-' + b, pairwise, protocol: 'tap', env: env,
         suite: ['conformance', 'pairwise'], depends: v2_plugins)
     endif

@@ -140,6 +140,24 @@ T_FN int fx_runtime(fixture *f, ugly_rt **rt, ugly_handle *mod){
 }
 
 
+/*
+ * A second runtime of the same language, for tests that need one: a SKIP if
+ * the plugin doesn't claim UGLY_CAP_MULTI_RUNTIME, a failure if it claims it
+ * but can't.
+ */
+T_FN int fx_second(fixture *f, ugly_rt **rt, ugly_handle *mod, const char *what){
+	if (! (ugly_lang_caps(f->lang) & UGLY_CAP_MULTI_RUNTIME)){
+		skip("%s: plugin lacks UGLY_CAP_MULTI_RUNTIME", what) ;
+		return 0 ;
+	}
+	if (! fx_runtime(f, rt, mod)){
+		ok(0, "%s: a second runtime", what) ;
+		return 0 ;
+	}
+	return 1 ;
+}
+
+
 /* Sets up ctx, language, runtime and module; bails out of the test (with a plan) if that fails. */
 T_FN void fx_setup(fixture *f){
 	memset(f, 0, sizeof(*f)) ;

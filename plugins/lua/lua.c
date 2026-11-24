@@ -527,21 +527,34 @@ static int op_body(lua_State *L){
 			return 0 ;
 		}
 
-		case OP_INVOKE:
-			/* obj:method(args): the receiver is the first argument. */
+		case OP_INVOKE: {
+			/*
+			 * Lua's convention: a method found through the metatable is
+			 * obj:method(args), with the receiver first; a plain field
+			 * (a module's function) is obj.f(args), without it.
+			 */
 			if (! indexable(L, 2)){
 				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no methods") ;
+			}
+			int plain = 0 ;
+			if (lua_type(L, 2) == LUA_TTABLE){
+				lua_pushstring(L, o->name) ;
+				plain = (lua_rawget(L, 2) != LUA_TNIL) ;
+				lua_pop(L, 1) ;
 			}
 			if (lua_getfield(L, 2, o->name) == LUA_TNIL){
 				FAIL(o, UGLY_ERR_NOT_FOUND, "KeyError", o->name) ;
 			}
-			lua_pushvalue(L, 2) ;
+			if (! plain){
+				lua_pushvalue(L, 2) ;
+			}
 			if (! push_args(o)){
 				return 0 ;
 			}
-			lua_call(L, (int)o->nargs + 1, 1) ;
+			lua_call(L, (int)o->nargs + (plain ? 0 : 1), 1) ;
 			o->st = to_val(ctx, r, -1, o->want, o->out) ;
 			return 0 ;
+		}
 
 		case OP_NEW:
 			/* Class.new(args), or Class(args) for a callable class. */
@@ -702,8 +715,19 @@ static int proxy_index(lua_State *L){
 	}
 	const char *name = luaL_checkstring(L, 2) ;
 	st = ugly_get_member(ctx, p->h, name, UGLY_ANY, &out) ;
-	if ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)){
-		/* Not a member: assume a method, called as obj:name(...). */
+	int method = ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)) ;
+	if ((st == UGLY_OK)&&(out.kind == UGLY_HANDLE)){
+		/* A callable member is a method: invoke it, with the foreign language's receiver rules. */
+		uint32_t traits = 0 ;
+		ugly_val tn ;
+		if ((ugly_describe(ctx, out.as.h, &traits, &tn) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)){
+			method = 1 ;
+			ugly_val_release(ctx, &out) ;
+		}
+		ugly_val_release(ctx, &tn) ;
+	}
+	if (method){
+		/* Called as obj:name(...) or obj.name(...): either way, invoke name on obj. */
 		lua_pushvalue(L, 1) ;
 		lua_pushstring(L, name) ;
 		lua_pushcclosure(L, proxy_method, 2) ;

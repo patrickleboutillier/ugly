@@ -1,5 +1,5 @@
 /*
- * UGLY v2 public API: approved 2026-11-24. See doc/v2/contract.md.
+ * UGLY v2 public API: approved 2026-11-24. See doc/contract.md.
  *
  * This is what a host program (or a language binding acting as one) uses.
  * Plugins implement ugly_plugin.h.
