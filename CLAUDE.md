@@ -34,7 +34,11 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - `perl_call_helper_function` mortalizes its arguments, so the object handle is passed with `SvREFCNT_inc`.
 - **Java has been removed** (2026-11-24). It was scaffolding against JDK 1.7 and survives in tag `v0.01`.
 - The Perl binding wraps context, value, language and runtime (`load_library` only).
-- As of 2026-11-24 everything builds without warnings on GCC/perl 5.34, and `make check` passes 114/114. Valgrind hasn't been run yet.
+- As of 2026-11-24 everything builds without warnings on GCC/perl 5.34, and `make check` passes 114/114.
+- **Valgrind baseline (2026-11-24, by hand, valgrind 3.18, `PERL_DESTRUCT_LEVEL=2`):**
+  - There are **0 memory errors** in all 5 C tests: no invalid reads or writes, and no uninitialised values.
+  - `t/runtime` and `t/object` each report 183 "possibly lost" records, all inside libperl. They come from embedded interpreters that are never destroyed (there's no `ugly_runtime_delete`).
+  - `t/language` has 1 definite leak: the `ugly_language` struct (`language.c:53`), because there's no language teardown.
 
 ### Known bugs
 - `ugly_debug_args`, `ugly_type_to_string` and `ugly_runtime_to_string` use static buffers, so they aren't reentrant. `ugly_debug_args` can also overflow its buffer.
@@ -44,7 +48,15 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - Stray `.svn` directory in `test/perl5/`.
 - Out-of-tree (VPATH) builds fail: `lib/c` runs `./gen_iface.sh`, which reads `ugly_api.h` relative to the current directory.
 - Generated autotools output is committed (`configure`, `Makefile.in`, `autom4te.cache`, …).
-- `README` and `README.md` are essentially empty, and `doc/` only has `git.howto`.
+
+## Where we left off (2026-11-24)
+
+- Work is on branch **`revive-docs-and-tests`**, in 4 commits: Java removal, test suite and fixes, regenerated autotools, docs. It is **not pushed and not merged** into `master`. Tag `v0.01` is local only.
+- **Paused at the author's request: a `make check-valgrind` target.** The plan:
+  - Add `AC_PATH_PROG([VALGRIND], [valgrind])` (optional) to `configure.ac`.
+  - In `test/Makefile.am`, rerun `check` with `LOG_COMPILER="$(LIBTOOL) --mode=execute $(VALGRIND) --error-exitcode=99 …"` and `PERL_DESTRUCT_LEVEL=2`. Possibly also wrap `T_LOG_COMPILER` (perl) for the binding tests.
+  - Fail on memory errors only, not on leaks (`--errors-for-leak-kinds=none`, or a suppressions file for libperl), until `ugly_runtime_delete` and language teardown exist.
+- A natural follow-up: add `ugly_runtime_delete` (perl: `perl_destruct`/`perl_free` under `UGLY_PERL5_ENTER`) and `ugly_language_delete` (`dlclose`). Then make leaks fail the valgrind target too.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.
