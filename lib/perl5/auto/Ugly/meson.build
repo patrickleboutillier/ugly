@@ -11,7 +11,5 @@ ugly_xs = shared_module('Ugly',
   ],
   include_directories: include_directories('../..'),
   dependencies: libugly_dep,
-  install: true,
-  install_dir: perl_installdir / 'auto' / 'Ugly',
-  install_rpath: get_option('prefix') / get_option('libdir'),
+  install: false,
 )

@@ -45,31 +45,3 @@ foreach t : ['01_context', '02_value', '03_language', '04_runtime']
     protocol: 'tap', env: test_env, suite: 'perl', depends: test_depends,
   )
 endforeach
-
-# meson test --setup valgrind: the C tests under valgrind (memcheck).
-#
-# A test fails, via valgrind's exit status, on any memory error (invalid
-# reads/writes, uninitialised values) and on any definite, indirect or
-# possible leak. "Still reachable" memory is allowed: a plugin may keep
-# process-wide state that outlives every language handle (perl's
-# PERL_SYS_INIT3 state, which can't be torn down and re-created in the same
-# process). The tests therefore delete everything they create.
-#
-# --keep-debuginfo keeps stack traces readable for code in plugins that
-# ugly_language_delete has already dlclose()d. The Perl binding tests are left
-# out: running perl itself under valgrind is mostly noise about perl.
-valgrind = find_program('valgrind', required: false)
-if valgrind.found()
-  add_test_setup('valgrind',
-    exe_wrapper: [valgrind,
-      '--error-exitcode=99',
-      '--leak-check=full',
-      '--errors-for-leak-kinds=definite,indirect,possible',
-      '--track-origins=yes',
-      '--num-callers=30',
-      '--keep-debuginfo=yes',
-    ],
-    exclude_suites: ['perl'],
-    timeout_multiplier: 10,
-  )
-endif

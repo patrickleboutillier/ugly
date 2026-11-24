@@ -16,7 +16,7 @@ libugly = shared_library('ugly',
   c_args: ['-DUGLY_LANGUAGE_DIR="@0@"'.format(pkglibdir)],
   dependencies: libdl,
   version: '0.0.0',
-  install: true,
+  install: false,     # v1 is frozen and no longer installed (see the top-level meson.build)
 )
 
 # For plugins, bindings and tests built here. It exposes the private headers
@@ -25,11 +25,4 @@ libugly_dep = declare_dependency(
   link_with: libugly,
   include_directories: include_directories('.'),
   sources: iface_h,
-)
-
-install_headers('ugly.h', 'ugly_api.h')
-
-import('pkgconfig').generate(libugly,
-  name: 'ugly',
-  description: 'UGLY: in-process glue between programming languages',
 )

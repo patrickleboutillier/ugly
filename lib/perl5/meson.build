@@ -10,11 +10,6 @@ xsubpp = find_program('xsubpp')
 perl_xs_version = run_command(perl, '-MExtUtils::MakeMaker', '-e', 'print MM->parse_version(shift)',
   files('lib/Ugly.pm'), check: true).stdout().strip()
 
-perl_installdir = get_option('perl_installdir')
-if perl_installdir == ''
-  perl_installdir = run_command(perl, '-MConfig', '-e', 'print $Config{installsitearch}',
-    check: true).stdout().strip()
-endif
 
 ugly_xs_c = custom_target('Ugly.c',
   input: 'Ugly.xs',
@@ -27,6 +22,3 @@ ugly_xs_c = custom_target('Ugly.c',
 )
 
 subdir('auto/Ugly')
-
-install_data('lib/Ugly.pm', install_dir: perl_installdir)
-install_data('lib/Ugly/Value.pm', install_dir: perl_installdir / 'Ugly')

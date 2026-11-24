@@ -1,5 +1,5 @@
 /*
- * UGLY v2 plugin contract: DRAFT for review. See doc/v2/contract.md.
+ * UGLY v2 plugin contract: approved 2026-11-24. See doc/v2/contract.md.
  *
  * A plugin is ugly_<lang>.so exporting one symbol:
  *
@@ -63,8 +63,8 @@ typedef struct ugly_plugin {
 	const char *name ;       /* "lua", "python", "quickjs", "perl5" */
 
 	/*
-	 * Process-wide setup, once per load. 'dir' is where the plugin's helper
-	 * files live. 'term' is called on unload only if UGLY_CAP_RESTARTABLE; a
+	 * Process-wide setup, once per process (or again after 'term'). 'dir' is
+	 * the directory the plugin's .so was loaded from; helper files live there. 'term' is called on unload only if UGLY_CAP_RESTARTABLE; a
 	 * plugin whose process-wide state is one-way (perl, CPython) leaves it
 	 * NULL and stays mapped.
 	 */
@@ -111,6 +111,12 @@ typedef struct ugly_plugin {
 /* Core services for plugins                                          */
 /* ------------------------------------------------------------------ */
 
+/* The calling thread's ctx, for native code (a proxy's __call) that wasn't handed one. NULL if none. */
+ugly_ctx *ugly_current_ctx(void) ;
+
+/* The plugin's per-runtime state, as returned by rt_new/rt_attach. */
+void *ugly_rt_native(const ugly_rt *rt) ;
+
 /*
  * Registers a native reference as a new owned handle whose home is rt.
  * 'identity' (non-zero) is the native object's identity (e.g. the PyObject*
@@ -130,6 +136,13 @@ ugly_status ugly_resolve(ugly_ctx *ctx, ugly_rt *rt, ugly_handle h, void **ref) 
  */
 ugly_status ugly_raise_native(ugly_ctx *ctx, ugly_rt *rt, const char *type, const char *message,
 	void *payload_ref, uintptr_t payload_identity) ;
+
+/*
+ * A failure that isn't a language exception (no such member, a value of the
+ * wrong type...): records an error in this runtime's language with the given
+ * status and no payload, and returns the status.
+ */
+ugly_status ugly_fail(ugly_ctx *ctx, ugly_rt *rt, ugly_status status, const char *type, const char *message) ;
 
 /* Takes the current error out of ctx, for wrapping in a native exception. Caller owns it. */
 ugly_error *ugly_take_error(ugly_ctx *ctx) ;
