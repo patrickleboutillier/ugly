@@ -1,13 +1,16 @@
-WHAT US UGLY?
-=============
+UGLY: Ultimate Glue LaYer
+=========================
 
+UGLY is a C library for in-process calls between programming languages. It
+embeds the real interpreters and VMs and routes every cross-language call
+through a small, language-neutral C core. Each language needs one plugin (so
+the core can call into it) and one binding (so it can call the core), which
+makes 2N adapters instead of N^2 pairwise bridges.
 
+It is an unfinished prototype from 2013-2014. The Perl 5 plugin works end to
+end and is frozen as the v1 reference. The early Java plugin was removed and
+survives in the v0.01 tag. The next plugins planned are Lua, CPython and
+QuickJS.
 
-
-BASIC ARCHITECTURE
-==================
-
-
-
-TESTS
-=====
+See README.md for the architecture, current status and build instructions, and
+doc/design-essay.md for the design discussion.
