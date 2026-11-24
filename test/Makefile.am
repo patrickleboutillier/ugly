@@ -41,3 +41,36 @@ AM_TESTS_ENVIRONMENT = \
 	export PERL5LIB;
 
 EXTRA_DIST = perl5/calc.pm perl5/oocalc.pm $(PERL_BINDING_TESTS)
+
+# make check-valgrind: rerun the C tests under valgrind (memcheck).
+#
+# Only memory errors (invalid reads/writes, uninitialised values) fail a test,
+# via valgrind's exit status. Leaks are reported in t/*.log but don't fail
+# yet: embedded interpreters are never destroyed because there is no
+# ugly_runtime_delete, and there is no language teardown either. Once those
+# exist, drop --errors-for-leak-kinds=none.
+#
+# The Perl binding tests are left out: running perl itself under valgrind is
+# mostly noise about perl, not about UGLY.
+#
+# This overwrites the t/*.log files from a plain 'make check'; the summary
+# goes to test-suite-valgrind.log.
+VALGRIND_FLAGS = \
+	--error-exitcode=99 \
+	--leak-check=full \
+	--errors-for-leak-kinds=none \
+	--track-origins=yes \
+	--num-callers=30
+
+check-valgrind:
+	@if test -z '$(VALGRIND)'; then \
+	  echo "check-valgrind: valgrind not found; install it and rerun configure" >&2; \
+	  exit 1; \
+	fi
+	PERL_DESTRUCT_LEVEL=2 $(MAKE) $(AM_MAKEFLAGS) check \
+	  TESTS='$(C_TESTS)' \
+	  TEST_SUITE_LOG=test-suite-valgrind.log \
+	  LOG_COMPILER='$(LIBTOOL) --mode=execute $(VALGRIND) $(VALGRIND_FLAGS)'
+
+.PHONY: check-valgrind
+MOSTLYCLEANFILES = test-suite-valgrind.log

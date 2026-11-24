@@ -21,6 +21,8 @@ AC_PATH_PROG([PERL], [perl])
 AS_IF([test -z "$PERL"], [AC_MSG_ERROR([perl is required])])
 AC_MSG_CHECKING([for ExtUtils::Embed])
 AS_IF([$PERL -MExtUtils::Embed -e 1 2>/dev/null], [AC_MSG_RESULT([yes])], [AC_MSG_ERROR([ExtUtils::Embed is required to build the perl5 plugin])])
+# Optional: only needed for 'make check-valgrind'.
+AC_PATH_PROG([VALGRIND], [valgrind])
 
 # Checks for libraries.
 AC_CHECK_LIB([dl], [dlopen])
