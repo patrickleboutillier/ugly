@@ -15,3 +15,13 @@
    ...
    obj:*/libpython3*.so*
 }
+# The same, when CPython is the host (tests/python/test_binding.py): the
+# python3 executable is statically linked, so the frames are in it rather
+# than in libpython.
+{
+   cpython-host-live-objects-possibly-lost
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   obj:*/bin/python3*
+}

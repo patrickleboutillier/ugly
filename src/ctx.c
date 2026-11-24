@@ -54,6 +54,17 @@ void ugly_ctx_delete(ugly_ctx *ctx){
 	if ((ctx == NULL)||(! on_thread(ctx->thread))||(ctx->top != NULL)){
 		return ;
 	}
+	/* Runtimes ugly_rt_get created, newest first, and the language loads they made. */
+	while (ctx->nautos > 0){
+		struct auto_rt a = ctx->autos[--ctx->nautos] ;
+		if (a.rt != NULL){
+			rt_destroy(ctx, a.rt) ;
+		}
+		if (a.loaded != NULL){
+			ugly_lang_unload(ctx, a.loaded) ;
+		}
+	}
+	free(ctx->autos) ;
 	rt_destroy(ctx, ctx->host) ;
 	ugly_error_free(ctx->error) ;
 	if (current == ctx){

@@ -149,6 +149,7 @@ ugly_status rt_create(ugly_ctx *ctx, ugly_lang *lang, void *existing, int attach
 		return st ;
 	}
 	__atomic_add_fetch(&lang->runtimes, 1, __ATOMIC_SEQ_CST) ;
+	lang_add_rt(lang, rt) ;
 	*out = rt ;
 	return UGLY_OK ;
 }
@@ -183,7 +184,15 @@ ugly_status rt_destroy(ugly_ctx *ctx, ugly_rt *rt){
 	rt->dying = 1 ;
 
 	ugly_status st = rt->lang->plugin->rt_delete(ctx, rt, rt->native) ;
+	lang_remove_rt(rt->lang, rt) ;
 	__atomic_sub_fetch(&rt->lang->runtimes, 1, __ATOMIC_SEQ_CST) ;
+	size_t i ;
+	for (i = 0 ; i < ctx->nautos ; i++){
+		if (ctx->autos[i].rt == rt){
+			/* Deleted by hand: the ctx no longer owns it (its language load stays counted). */
+			ctx->autos[i].rt = NULL ;
+		}
+	}
 	free(rt->pending) ;
 	free(rt) ;
 	return st ;
@@ -319,4 +328,67 @@ ugly_status ugly_rt_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t le
 
 void *ugly_rt_native(const ugly_rt *rt){
 	return rt->native ;
+}
+
+
+ugly_rt *ugly_rt_find(ugly_ctx *ctx, ugly_lang *lang){
+	if ((ctx == NULL)||(lang == NULL)||(! on_thread(ctx->thread))){
+		return NULL ;
+	}
+	return lang_find_rt_on_thread(lang) ;
+}
+
+
+ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out){
+	ugly_status st = ctx_check(ctx) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	if (out == NULL){
+		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_rt_get: out is required") ;
+	}
+	*out = NULL ;
+	ugly_lang *lang = lang_find(name) ;
+	ugly_lang *loaded = NULL ;
+	if (lang == NULL){
+		st = ugly_lang_load(ctx, name, &lang) ;
+		if (st != UGLY_OK){
+			return st ;
+		}
+		loaded = lang ;
+	}
+	ugly_rt *rt = lang_find_rt_on_thread(lang) ;
+	if (rt != NULL){
+		if (loaded != NULL){
+			ugly_lang_unload(ctx, loaded) ;     /* can't happen (a new language has no runtime), but stay balanced */
+		}
+		*out = rt ;
+		return UGLY_OK ;
+	}
+	if (ctx->nautos == ctx->autos_cap){
+		size_t ncap = (ctx->autos_cap ? ctx->autos_cap * 2 : 4) ;
+		struct auto_rt *na = realloc(ctx->autos, ncap * sizeof(struct auto_rt)) ;
+		if (na == NULL){
+			if (loaded != NULL){
+				ugly_lang_unload(ctx, loaded) ;
+			}
+			return ctx_fail(ctx, UGLY_ERR_NOMEM, "core", "", "out of memory") ;
+		}
+		ctx->autos = na ;
+		ctx->autos_cap = ncap ;
+	}
+	st = ugly_rt_new(ctx, lang, &rt) ;
+	if (st != UGLY_OK){
+		if (loaded != NULL){
+			ugly_error *e = ugly_take_error(ctx) ;
+			ugly_lang_unload(ctx, loaded) ;
+			ctx_set_error(ctx, e) ;
+		}
+		return st ;
+	}
+	ctx->autos[ctx->nautos].rt = rt ;
+	ctx->autos[ctx->nautos].loaded = loaded ;
+	ctx->nautos++ ;
+	*out = rt ;
+	return UGLY_OK ;
 }

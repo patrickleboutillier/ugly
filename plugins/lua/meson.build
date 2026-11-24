@@ -13,4 +13,5 @@ if lua_dep.found()
   plugins += ugly_lua
   plugin_dirs += meson.current_build_dir()
   test_plugins += 'lua'
+  subdir('binding')
 endif

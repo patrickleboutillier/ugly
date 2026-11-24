@@ -301,6 +301,39 @@ value code. v2 makes this structural:
 So each language needs one adapter with two modes, not two adapters. The
 essay's "2N" becomes about N plus N thin API wrappers.
 
+**As built (Lua and Python, 2026-11-24).**
+
+- **One source file, compiled twice.** Each plugin's source is built as the
+  plugin (`ugly_<lang>.so`, linked with the interpreter library) and as the
+  binding: the native module `ugly` (a Lua C module, a Python extension),
+  linked with no interpreter library.
+  - The binding's interpreter symbols come from the host process.
+  - This is required, not just tidy: Debian's `python3` and `lua5.4` are
+    statically linked. Loading the plugin's `.so` into them would put a
+    second interpreter in the process.
+- **The binding registers instead of loading.** On import, it calls
+  `ugly_lang_register()` with the plugin compiled into it, then
+  `ugly_rt_attach()` on the host's interpreter. After that,
+  `ugly_lang_load("lua")` (or `"python"`) returns this language, so
+  everything else finds the host's interpreter.
+- **The same `ugly` module everywhere.** Every runtime has the module
+  preloaded: `require "ugly"` in Lua, `import ugly` in Python. Embedded
+  code (in a runtime a C host created) and attached code (a plain `lua` or
+  `python3` program) use the same API:
+  - `ugly.module(lang, name)` gives a module of any language. It's not called
+    `import` because that's a keyword in Python.
+  - `ugly.eval(lang, code)` gives the value of code in any language.
+  - In Lua, `ugly.is_error(e)` and `ugly.is_proxy(x)`; in Python,
+    `ugly.Error`, `ugly.Proxy` and `ugly.rethrow(e)`.
+- **Which runtime.** `ugly.module` and `ugly.eval` use
+  `ugly_rt_get(ctx, lang)`: the oldest runtime of that language on this
+  thread, whoever created it, or else a new one that the ctx owns and
+  deletes. So Lua embedded in a Python program reaches back into that
+  program's own interpreter.
+- **Teardown.** The binding deletes what it created when the host shuts
+  down: a `__gc` sentinel in Lua (`os.exit(code, true)` or the end of the
+  script closes the state), and `atexit` in Python.
+
 ## 9. The conformance suite
 
 The suite is the contract. Each plugin provides **fixtures**: a module
@@ -447,6 +480,17 @@ All of them are in the headers and covered by the conformance suite.
   home plugin then applies its own receiver rule. Lua passes `self` only to
   methods found through the metatable, so a module's plain functions work
   from Python too.
+- **Rule 7, completed** (found by the bindings). When an error returns to
+  the language its payload came from, that language raises the original
+  value or exception object, not a wrapper. A Python exception that crosses
+  Lua is caught in Python as itself (`except Mine as e: e is mine`). A Lua
+  error value that crosses Python comes back `rawequal` to the original.
+- **New core calls for bindings:** `ugly_lang_register()` (plugin header),
+  and `ugly_rt_get()` and `ugly_rt_find()` (public API).
+- **Lua state** (found by the bindings). The Lua plugin keeps its runtime in
+  the registry, not in `LUA_EXTRASPACE`, which belongs to the host when it
+  is attached. It also converts values on the `lua_State` it was called
+  with, which matters when a proxy is called from inside a coroutine.
 - **The mock plugin** (`plugins/mock/`) is a small language written in C,
   with lenient, Perl-like conversions. It implements every rule of
   `ugly_plugin.h` and every conformance fixture.
@@ -467,15 +511,12 @@ All of them are in the headers and covered by the conformance suite.
    `tests/python/`). It passes all 8 groups, and the pairwise suite passes
    for every pair of mock, Lua and Python, in both directions, clean under
    valgrind and helgrind.
-5. **Bindings: an `ugly` module in each language, and attach mode, for Lua
-   and Python together** (§8). The in-language API wraps loading,
-   runtimes and import, for example
-   `local json = require("ugly").import("python", "json")`. Attach mode lets
-   `require "ugly"` / `import ugly`, run from a plain `lua` or `python3`
-   process, turn the running interpreter into a runtime of the core. The
-   conformance suite gains real attach tests in place of today's skip.
-   Milestone: `python3 script.py` uses a Lua module, and `lua script.lua`
-   uses a Python one, with no C host.
+5. ~~Bindings for Lua and Python, with attach mode~~ (§8, "As built"). Done
+   2026-11-24. A plain `python3` program uses Lua modules, and a plain
+   `lua5.4` program uses Python modules, with no C host
+   (`tests/python/test_binding.py`, `tests/lua/test_binding.lua`, suite
+   `bindings`). Attach mode is tested there, since a C test can't host an
+   interpreter it doesn't link.
 6. Then QuickJS, then port Perl.
 
 v1 (the 2013 contract, its Perl plugin and XS binding) was removed from the

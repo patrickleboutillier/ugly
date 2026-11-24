@@ -52,6 +52,44 @@ Inside Lua, `f` is a proxy for the Python function. Inside Python, a Lua
 table or function is a proxy too. A value that travels back to its home
 language arrives as the original object, never as a proxy of a proxy.
 
+### From Lua or Python, with no C at all
+
+The same works from a plain `python3` or `lua` program, through each
+language's `ugly` module. These lines come from the binding tests,
+[tests/python/test_binding.py](tests/python/test_binding.py) and
+[tests/lua/test_binding.lua](tests/lua/test_binding.lua):
+
+```python
+import ugly
+
+string = ugly.module("lua", "string")             # a Lua module
+string.upper("abc")                               # 'ABC'
+
+lua = ugly.module("lua", "conformance")
+lua.apply(lambda x: x * 2, 21)                    # 42: Lua calls a Python lambda
+try:
+    lua.apply(raiser, 1)                          # raiser raises `mine`, across Lua
+except Mine as e:
+    assert e is mine                              # and it comes back as itself
+```
+
+```lua
+local ugly = require "ugly"
+
+local pymath = ugly.module("python", "math")      -- a Python module
+print(pymath.sqrt(2))                             -- 1.4142135623731
+
+local py = ugly.module("python", "conformance")
+local c = py.make_counter()                       -- a Python object
+c:inc()                                           -- method calls work with : or .
+print(c.count, #c.items, c.items[1])              -- 1  1  1 (lists are 1-based in Lua)
+print(ugly.eval("python", "6 * 7"))               -- 42
+```
+
+Code embedded this way can use `ugly` too, and it reaches back into the
+host's own interpreter. For example, Python called from that Lua script can
+`import ugly` and use the script's Lua globals.
+
 ## Concepts
 
 - **Primitives cross by value**: null, bool, int64, double, UTF-8 string and
@@ -79,23 +117,20 @@ language arrives as the original object, never as a proxy of a proxy.
 | `include/ugly_plugin.h` | The plugin contract: what a language plugin implements, and the core services it may use. |
 | `src/` | The core (`libugly`): handle table, call frames and borrows, errors, threads, plugin loading. Also the built-in "c" language, which is the home of C callbacks and core lists and maps. |
 | `plugins/mock/` | A small language written in C, used to test the core and the contract before any real interpreter. |
-| `plugins/lua/` | Lua 5.4. |
-| `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. |
+| `plugins/lua/` | Lua 5.4. `binding/` builds the same source as the Lua module `ugly`. |
+| `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs, built and run as tests. |
 | `doc/` | The contract and the design essay. |
 
 ## Status
 
-Lua and CPython pass the whole conformance suite, and call each other in one
-process. Next on the plan (in [doc/contract.md](doc/contract.md), "Order of
-work"):
+Lua and CPython pass the whole conformance suite and call each other in one
+process, both from a C host and from a plain `lua` or `python3` program.
+Next on the plan (in [doc/contract.md](doc/contract.md), "Order of work"):
 
-1. **Bindings for Lua and Python**: an `ugly` module in each language, plus
-   attach mode, so that a plain `lua` or `python3` program can use the other
-   language with no C host.
-2. **QuickJS.**
-3. **Perl**, ported from the original plugin.
+1. **QuickJS.**
+2. **Perl**, ported from the original plugin.
 
 History is in the tags. `v0.01` is the original 2013–2014 code, including an
 early Java plugin and a JNA binding. `v0.02` is that first design brought
@@ -106,9 +141,10 @@ will use the Panama FFM API.
 ## Building and testing
 
 You need a C toolchain, Meson (0.61 or later) and Ninja. Each language
-plugin is built only if its language is found: Lua 5.4 (`liblua5.4-dev`)
-and CPython 3.10+ (`python3-dev`). `-Dlua=disabled` and `-Dpython=disabled`
-skip them explicitly. Valgrind is optional.
+plugin, and its binding, is built only if its language is found: Lua 5.4
+(`liblua5.4-dev`) and CPython 3.10+ (`python3-dev`). `-Dlua=disabled` and
+`-Dpython=disabled` skip them explicitly. The Lua binding test also needs the
+`lua5.4` interpreter. Valgrind is optional.
 
 ```sh
 meson setup build
@@ -117,9 +153,11 @@ meson test -C build        # the conformance suite, pairwise tests and examples
 ```
 
 The tests need no install step. `meson install -C build` installs the
-library, the two headers, a pkg-config file and the plugins. Plugins are
-looked up in `<libdir>/ugly/plugins/`, and `UGLY_PLUGIN_PATH` (a
-colon-separated list of directories) overrides that at runtime.
+library, the two headers, a pkg-config file, the plugins and the bindings
+(the Lua module where Lua looks for C modules, the Python extension in
+site-packages). Plugins are looked up in `<libdir>/ugly/plugins/`, and
+`UGLY_PLUGIN_PATH` (a colon-separated list of directories) overrides that at
+runtime.
 
 ### Tests
 
@@ -132,6 +170,9 @@ Every test is a TAP stream. The full output is in
   fixtures are each plugin's `conformance` module, from `tests/<lang>/`.
 - **Pairwise** (`tests/pairwise.c`): every ordered pair of different
   languages in one process, using each other's values, calls and errors.
+- **Bindings** (`tests/python/test_binding.py`, `tests/lua/test_binding.lua`):
+  plain `python3` and `lua5.4` processes using each other through `ugly`,
+  in attach mode.
 - **Examples** (`examples/`): run, and checked by exit status.
 
 ```sh
@@ -144,8 +185,9 @@ The valgrind setup fails a test on any memory error and on any definite,
 indirect or possible leak, so the tests delete everything they create.
 Memory that is still reachable at exit is allowed, because a plugin may keep
 process-wide state for the life of the process. `tests/valgrind.supp`
-suppresses one thing: CPython's live objects reported as "possibly lost",
-because Python is never finalized.
+suppresses one thing: CPython's live objects reported as "possibly lost"
+(from `libpython`, or from a statically linked `python3` host), because
+Python is never finalized.
 
 ## License
 
