@@ -21,6 +21,7 @@ struct ugly_ctx {
 	pthread_t thread ;
 	ugly_error *error ;          /* the last call's error, or NULL */
 	frame *top ;                 /* innermost active call */
+	int depth ;                  /* active frames */
 	ugly_rt *host ;              /* home of this thread's C callables, lists and maps */
 } ;
 

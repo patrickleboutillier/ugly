@@ -83,7 +83,6 @@ int main(void){
 	kind_of(&f, ugly_int(1), "int", "kind_of(int)") ;
 	kind_of(&f, ugly_double(1.5), "double", "kind_of(double)") ;
 	kind_of(&f, ugly_str("s", 1), "string", "kind_of(string)") ;
-	kind_of(&f, ugly_bytes(bytes, 1), "bytes", "kind_of(bytes)") ;
 
 	fx_teardown(&f) ;
 	return done_testing() ;

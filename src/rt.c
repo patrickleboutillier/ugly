@@ -33,11 +33,16 @@ ugly_status rt_enter(ugly_ctx *ctx, ugly_rt *rt, frame *f){
 		return ctx_fail(ctx, UGLY_ERR_STALE_HANDLE, "core", "", "runtime of %s is being deleted",
 			rt->lang->name) ;
 	}
+	if (ctx->depth >= UGLY_MAX_DEPTH){
+		return ctx_fail(ctx, UGLY_ERR_TOO_DEEP, "core", "RecursionError", "calls nested more than %d deep",
+			UGLY_MAX_DEPTH) ;
+	}
 	memset(f, 0, sizeof(frame)) ;
 	f->borrows = f->inline_borrows ;
 	f->cap = sizeof(f->inline_borrows) / sizeof(f->inline_borrows[0]) ;
 	f->up = ctx->top ;
 	ctx->top = f ;
+	ctx->depth++ ;
 	h_drain(rt) ;
 	rt->depth++ ;
 	return UGLY_OK ;
@@ -54,6 +59,7 @@ void rt_leave(ugly_ctx *ctx, ugly_rt *rt, frame *f){
 		free(f->borrows) ;
 	}
 	ctx->top = f->up ;
+	ctx->depth-- ;
 }
 
 

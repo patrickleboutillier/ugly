@@ -87,7 +87,7 @@ T_FN int is_str(const char *got, const char *want, const char *what){
 
 T_FN const char *status_name(ugly_status s){
 	static const char *names[] = { "OK", "RAISED", "TYPE", "NOT_FOUND", "NOT_CAPABLE", "STALE_HANDLE",
-		"WRONG_THREAD", "IN_USE", "NOT_SUPPORTED", "NOT_IMPLEMENTED", "USAGE", "NOMEM", "INTERNAL" } ;
+		"WRONG_THREAD", "IN_USE", "TOO_DEEP", "NOT_SUPPORTED", "NOT_IMPLEMENTED", "USAGE", "NOMEM", "INTERNAL" } ;
 	return ((unsigned)s < sizeof(names) / sizeof(names[0]) ? names[s] : "?") ;
 }
 

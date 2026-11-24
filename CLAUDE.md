@@ -18,8 +18,13 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - `protocol.c`: the operations.
   - `lang.c`: plugin loading through `UGLY_PLUGIN_PATH`, with `RTLD_GLOBAL` and counted loads.
   - `host.c`: the built-in "c" language, which is the home of C callables and core lists and maps. Each ctx has one runtime of it.
-- **`plugins/<lang>/`** holds the plugins, built as `ugly_<lang>.so` and exporting `ugly_plugin_<lang>()`. **`plugins/mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
-- **`tests/`** is the conformance suite: 8 C programs (suite `conformance`) plus `conformance.h` (TAP and fixture). It runs against the plugin named by `UGLY_TEST_PLUGIN` (default `mock`). Each plugin provides a `conformance` module with the fixtures of contract §9.
+- **`plugins/<lang>/`** holds the plugins, built as `ugly_<lang>.so` and exporting `ugly_plugin_<lang>()`.
+  - **`plugins/mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
+  - **`plugins/lua/`** is Lua 5.4. Every operation runs under `lua_pcall` (`op_body`), except `call`, which pcalls the target directly so a call costs one of Lua's roughly 200 nested C calls. Proxies are `ugly.proxy` userdata cached per owned handle in a weak table. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape. Elements are 0-based in the protocol and 1-based in Lua. It is an optional dependency (`-Dlua=`).
+- **`tests/`** is the conformance suite: 8 C programs plus `conformance.h` (TAP and fixture), and `pairwise.c`.
+  - Meson registers each program once per plugin in `v2_test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair (suite `pairwise`, env `UGLY_TEST_PEER`).
+  - Fixtures are each plugin's `conformance` module: `tests/lua/conformance.lua` (found through `LUA_PATH`), built into the mock. The spec is in contract §9: type names come from `describe`, the exception type is `ConformanceError`, and `inits()` is optional.
+  - A new plugin adds itself to `v2_test_plugins`, `v2_plugins` and `v2_plugin_dirs` in its `meson.build`.
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
@@ -75,7 +80,9 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Teardown** (`ugly_runtime_delete`, `ugly_language_delete`): the tests delete everything they create, and cover re-initializing a language in the same process.
 - **The v2 contract was approved on 2026-11-24** (PR #1). The author took the recommendation on all 8 review questions; the decisions are listed in `contract.md`.
 - **The v2 core, mock plugin and conformance suite are done** (2026-11-24, branch `v2-core`). 8 groups and 180 subtests pass, clean under valgrind (leaks fail) and helgrind. Implementing it pinned down several points (contract.md, "Clarifications"): one ctx per thread, counted loads, rt_delete refused during a call into it, `ugly_fail`, `ugly_rt_native`, `ugly_current_ctx`.
-- **Next: the Lua plugin** (`plugins/lua/`), which must pass `UGLY_TEST_PLUGIN=lua meson test -C build --suite conformance`. It needs `liblua5.4-dev`, which the author installs.
+- **The Lua plugin is done** (2026-11-24, branch `lua-plugin`). It passes all 8 groups, and pairwise mock↔Lua passes; everything is clean under valgrind, and helgrind finds no races.
+  - Writing it fixed the contract in three places: the re-entry depth limit (`UGLY_MAX_DEPTH`, `UGLY_ERR_TOO_DEEP`), `ugly_raise_handle`, and language-neutral fixtures.
+- **Next: the CPython plugin** (`plugins/python/`). It needs `python3-dev` (with `python3-embed` pkg-config), which the author installs. Expect the GIL (`PyGILState_*` on every entry) and no `MULTI_RUNTIME` in v2.0. Then QuickJS.
 
 ### Missing for a real polyglot layer
 - Arrays, maps, bytes and null values.

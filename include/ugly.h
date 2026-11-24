@@ -28,6 +28,14 @@ extern "C" {
 
 #define UGLY_API_VERSION 2
 
+/*
+ * The deepest the core lets calls nest (frames on one thread's ctx) before
+ * failing with UGLY_ERR_TOO_DEEP, so runaway re-entry is an error rather
+ * than a C stack overflow. A language may have a lower limit of its own (Lua:
+ * about 200 nested C calls), which its plugin reports as an error.
+ */
+#define UGLY_MAX_DEPTH 1000
+
 
 /* ------------------------------------------------------------------ */
 /* Status codes                                                       */
@@ -42,6 +50,7 @@ typedef enum ugly_status {
 	UGLY_ERR_STALE_HANDLE,     /* released, revoked (borrow ended) or its runtime is gone */
 	UGLY_ERR_WRONG_THREAD,     /* runtime or ctx used from a thread that doesn't own it */
 	UGLY_ERR_IN_USE,           /* can't delete: still has live dependents */
+	UGLY_ERR_TOO_DEEP,         /* calls nested past the core's limit (UGLY_MAX_DEPTH) */
 	UGLY_ERR_NOT_SUPPORTED,    /* the language can't do this */
 	UGLY_ERR_NOT_IMPLEMENTED,  /* the language could, the plugin doesn't (yet) */
 	UGLY_ERR_USAGE,            /* invalid arguments to the API itself */

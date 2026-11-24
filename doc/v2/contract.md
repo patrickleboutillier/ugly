@@ -303,24 +303,37 @@ essay's "2N" becomes about N plus N thin API wrappers.
 
 ## 9. The conformance suite
 
-The suite is the contract. Each plugin provides **fixtures**: a library
-with the same specification written in its own language, as
-`test/<lang>/conformance.*`. v1's `calc`/`oocalc` were the start of this.
-The fixture provides:
+The suite is the contract. Each plugin provides **fixtures**: a module
+named `conformance`, with the same specification written in its own
+language, in `tests/<lang>/` (the mock's are built in). v1's
+`calc`/`oocalc` were the start of this. The module provides:
 
-- `echo(x)` returns x;
-- `kind_of(x)` returns the name of x's native type;
-- `make_counter()` returns an object with `inc()`, a `count` field and
-  `items`, an element collection;
-- `call_twice(f, x)` returns `f(f(x))`;
-- `raise_error(msg)`, `catch_and_return(f)` and `rethrow(e)`;
-- `finalized()`, a count of finalized fixture objects;
-- `Point(x, y)`, an instantiable class.
+- `echo(x)` returns x.
+- `kind_of(x)` returns `null`, `bool`, `int`, `double`, `string`, `bytes`,
+  `proxy` (for any foreign value), or the object's type name.
+- `make_counter()` returns an object whose type name is `counter`. It has
+  an `inc()` method, a `count` field and `items`, a `list` of the counts so
+  far. The finalizer count covers the counter and its list.
+- `apply(f, x)` returns `f(x)`, and `call_twice(f, x)` returns `f(f(x))`.
+- `raise_error(msg)` raises an exception of type `ConformanceError` with a
+  `message` member.
+- `catch_and_return(f)` returns the exception object `f()` raised. For a
+  foreign error, that is its payload.
+- `rethrow(e)` raises `e` again.
+- `finalized()` counts the fixture objects freed so far, after forcing a
+  collection if the language has a GC.
+- `Point` has the type name `class` and is instantiable: `new(Point, x, y)`
+  gives a `point` with members `x`, `y` and a method `norm2()`.
+- `inits()` (optional) counts how often the plugin's process-wide init has
+  run. The restart test uses it if it exists.
 
-The tests are C programs, as now, run once per plugin with
-`UGLY_TEST_LANG`. Plugin pairs (Lua→Python and so on) are run by a pairwise
-driver. The pairwise run is where "2N composes" actually gets proven. The
-groups:
+Type names are whatever `describe` reports, in the language's own terms.
+Lua uses each metatable's `__name`, so the fixtures set them.
+
+The tests are C programs. Meson runs each one against every plugin built
+(suite `conformance-<plugin>`), and runs `pairwise.c` once for every
+ordered pair of different plugins in one process (suite `pairwise`). The
+pairwise run is where "2N composes" actually gets proven. The groups:
 
 | Group | Covers |
 |---|---|
@@ -328,10 +341,11 @@ groups:
 | protocol | traits from `describe`; members, elements and `length`; `invoke` versus get-then-call; `new` |
 | ownership | `release` runs the native finalizer (`finalized()` goes up); `dup` keeps the object alive; a stale handle is detected; **a borrowed handle kept after the call is detected**; `ugly_same` after round trips |
 | identity | the same object exported twice gives the same handle; proxies unwrap when they return home, so there's no proxy of a proxy |
-| callbacks | C → L → C → L to depth 100; L1 → L2 → L1 across plugins; a callback raises; the C host owns callable lifetimes |
+| callbacks | C → L → C → L to depth 100; runaway recursion fails cleanly, every level unwinds, and the runtime survives; L1 → L2 → L1 across runtimes; the C host owns callable lifetimes |
 | errors | type and message are preserved; **the payload rethrown at home is the identical object**; an error crossing three runtimes |
 | threads | calls from another thread give `WRONG_THREAD`; a release from another thread is deferred and drained |
 | lifecycle | capabilities are honoured; runtime delete makes outstanding handles stale; unload is refused while runtimes are alive; restart is tested only with `RESTARTABLE` |
+| pairwise | values, identity, calls, caught and rethrown errors, and alternating recursion between two languages; deleting one language's runtime while the other holds its values |
 | memory | the whole suite under the valgrind setup: no errors and no leaks |
 
 ## 10. The four planned languages
@@ -344,11 +358,11 @@ proxy releases its handle reference.
 | null | `nil` | `None` | `null`, `undefined` | `undef` |
 | int / double | integer / float subtypes | `int`, or `TYPE` beyond int64 / `float` | number: INT if integral and `want` allows | IV / NV, using SV flags |
 | string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string / `ArrayBuffer` | UTF-8 flag: on → STRING, off → STRING decoded as Latin-1, or BYTES if wanted |
-| members | table string keys; metatable `__index` | `getattr`, or dict keys for a dict | properties | hash keys; for methods, `can` |
+| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties | hash keys; for methods, `can` |
 | elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays |
 | `invoke` receiver | `obj:m()` | bound method | `this` | invocant |
 | proxy finalizer | userdata `__gc` | `tp_dealloc` | class finalizer | `DESTROY` |
-| re-entry | `lua_pcall` at every boundary | GIL with `PyGILState_*` | context, job queue | `PERL_SET_CONTEXT`, `G_EVAL` |
+| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | context, job queue | `PERL_SET_CONTEXT`, `G_EVAL` |
 | restartable | yes | no | yes | no |
 | multiple runtimes | yes | no in v2.0 (subinterpreters later) | yes | yes (MULTIPLICITY) |
 
@@ -404,6 +418,19 @@ All of them are in the headers and covered by the conformance suite.
   - `ugly_fail()`, a failure with a chosen status in the plugin's language
     and no payload. A missing member is `UGLY_ERR_NOT_FOUND`, not
     `UGLY_ERR_RAISED`.
+- **Re-entry has a limit.** Rule 1 originally said "to any depth", and no
+  interpreter allows that. The core fails calls nested deeper than
+  `UGLY_MAX_DEPTH` (1000 frames) with `UGLY_ERR_TOO_DEEP`, instead of
+  overflowing the C stack. A language with a lower limit reports it as an
+  error. Lua's is about 200 nested C calls, found by the Lua plugin. The
+  suite requires 100 levels to work, and 100000 to fail cleanly with every
+  level unwound.
+- **`ugly_raise_handle()`** raises an error whose payload the plugin already
+  holds as a handle: a foreign exception rethrown by native code (found by
+  the Lua plugin).
+- **Fixtures are language-neutral.** The exception type is
+  `ConformanceError`, `inits()` is optional, and nothing checks a receiver
+  convention or a bytes type that a language doesn't have.
 - **The mock plugin** (`plugins/mock/`) is a small language written in C,
   with lenient, Perl-like conversions. It implements every rule of
   `ugly_plugin.h` and every conformance fixture.
@@ -416,5 +443,9 @@ All of them are in the headers and covered by the conformance suite.
 2. ~~Write the conformance suite against the mock plugin.~~ Done
    2026-11-24 (`tests/`): 8 groups and 180 subtests, clean under valgrind
    and helgrind.
-3. Write the Lua plugin and make it pass the suite.
-4. Then CPython, then QuickJS, then run the pairwise suite. Then port Perl.
+3. ~~Write the Lua plugin and make it pass the suite.~~ Done 2026-11-24
+   (`plugins/lua/`, fixtures in `tests/lua/`). It passes all 8 groups, and
+   the pairwise suite passes for mock→Lua and Lua→mock, all clean under
+   valgrind.
+4. Then CPython, then QuickJS (each adds its pairs to the pairwise suite).
+   Then port Perl.
