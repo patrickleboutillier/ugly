@@ -4,6 +4,7 @@
  * releases), borrows its handle arguments, calls the home plugin, and
  * normalizes the result.
  */
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -267,6 +268,159 @@ ugly_status ugly_new(ugly_ctx *ctx, ugly_handle cls, const ugly_val *args, size_
 			}
 		}
 	}
+	st = end(&c, st, "new", UGLY_HANDLE, &v) ;
+	if (st == UGLY_OK){
+		*out = v.as.h ;
+	}
+	return st ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Call options (contract §11)                                      */
+/* ---------------------------------------------------------------- */
+
+/* Any option set? A caller's struct may be older (smaller) than ours. */
+static int has_opts(const ugly_opts *o){
+	if ((o == NULL)||(o->size < offsetof(ugly_opts, hint))){
+		return 0 ;
+	}
+	return (o->nkwargs > 0)
+		||((o->size >= offsetof(ugly_opts, context))&&(o->hint != NULL))
+		||((o->size >= sizeof(ugly_opts))&&(o->context != NULL)) ;
+}
+
+
+/*
+ * A full-size copy of the caller's options for the plugin, with the keyword
+ * values borrowed for this call like its positional arguments. *kw is
+ * malloc'd: free it after the call.
+ */
+static ugly_status borrow_opts(call *c, const ugly_opts *in, ugly_opts *out, ugly_kwarg **kw){
+	ugly_opts o = UGLY_OPTS_INIT ;
+	o.kwargs = in->kwargs ;
+	o.nkwargs = in->nkwargs ;
+	if (in->size >= offsetof(ugly_opts, context)){
+		o.hint = in->hint ;
+	}
+	if (in->size >= sizeof(ugly_opts)){
+		o.context = in->context ;
+	}
+	*kw = NULL ;
+	if (o.nkwargs > 0){
+		if (o.kwargs == NULL){
+			return ctx_fail(c->ctx, UGLY_ERR_USAGE, "core", "", "call options: kwargs is NULL") ;
+		}
+		*kw = calloc(o.nkwargs, sizeof(ugly_kwarg)) ;
+		if (*kw == NULL){
+			return ctx_fail(c->ctx, UGLY_ERR_NOMEM, "core", "", "out of memory") ;
+		}
+		size_t i ;
+		for (i = 0 ; i < o.nkwargs ; i++){
+			if (o.kwargs[i].name == NULL){
+				return ctx_fail(c->ctx, UGLY_ERR_USAGE, "core", "", "call options: keyword %zu has no name", i) ;
+			}
+			(*kw)[i].name = o.kwargs[i].name ;
+			ugly_status st = frame_borrow_args(c->ctx, &c->f, &o.kwargs[i].value, 1, &(*kw)[i].value) ;
+			if (st != UGLY_OK){
+				return st ;
+			}
+		}
+		o.kwargs = *kw ;
+	}
+	*out = o ;
+	return UGLY_OK ;
+}
+
+
+static ugly_status no_opts(call *c){
+	return ctx_fail(c->ctx, UGLY_ERR_NOT_SUPPORTED, c->rt->lang->name, "",
+		"%s takes no call options (keyword arguments, hint, context)", c->rt->lang->name) ;
+}
+
+
+ugly_status ugly_call_opts(ugly_ctx *ctx, ugly_handle fn, const ugly_val *args, size_t nargs,
+	const ugly_opts *opts, ugly_kind want, ugly_val *out){
+
+	if (! has_opts(opts)){
+		return ugly_call(ctx, fn, args, nargs, want, out) ;
+	}
+	call c ;
+	ugly_kwarg *kw = NULL ;
+	ugly_opts o ;
+	ugly_status st = begin(&c, ctx, fn, args, nargs, out) ;
+	if (st == UGLY_OK){
+		if (out == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_call_opts: out is required") ;
+		}
+		else if (c.p->call_opts == NULL){
+			st = no_opts(&c) ;
+		}
+		else if ((st = borrow_opts(&c, opts, &o, &kw)) == UGLY_OK){
+			st = c.p->call_opts(ctx, c.rt, c.ref, c.bargs, nargs, &o, want, out) ;
+		}
+	}
+	free(kw) ;
+	return end(&c, st, "call", want, out) ;
+}
+
+
+ugly_status ugly_invoke_opts(ugly_ctx *ctx, ugly_handle obj, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *opts, ugly_kind want, ugly_val *out){
+
+	if (! has_opts(opts)){
+		return ugly_invoke(ctx, obj, method, args, nargs, want, out) ;
+	}
+	call c ;
+	ugly_kwarg *kw = NULL ;
+	ugly_opts o ;
+	ugly_status st = begin(&c, ctx, obj, args, nargs, out) ;
+	if (st == UGLY_OK){
+		if ((method == NULL)||(out == NULL)){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_invoke_opts: method and out are required") ;
+		}
+		else if (c.p->invoke_opts == NULL){
+			st = no_opts(&c) ;
+		}
+		else if ((st = borrow_opts(&c, opts, &o, &kw)) == UGLY_OK){
+			st = c.p->invoke_opts(ctx, c.rt, c.ref, method, c.bargs, nargs, &o, want, out) ;
+		}
+	}
+	free(kw) ;
+	return end(&c, st, "invoke", want, out) ;
+}
+
+
+ugly_status ugly_new_opts(ugly_ctx *ctx, ugly_handle cls, const ugly_val *args, size_t nargs,
+	const ugly_opts *opts, ugly_handle *out){
+
+	if (! has_opts(opts)){
+		return ugly_new(ctx, cls, args, nargs, out) ;
+	}
+	call c ;
+	ugly_kwarg *kw = NULL ;
+	ugly_opts o ;
+	ugly_val v = ugly_null() ;
+	if (out != NULL){
+		*out = UGLY_NO_HANDLE ;
+	}
+	ugly_status st = begin(&c, ctx, cls, args, nargs, NULL) ;
+	if (st == UGLY_OK){
+		if (out == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_new_opts: out is required") ;
+		}
+		else if (c.p->new_opts == NULL){
+			st = no_opts(&c) ;
+		}
+		else if ((st = borrow_opts(&c, opts, &o, &kw)) == UGLY_OK){
+			ugly_handle h = UGLY_NO_HANDLE ;
+			st = c.p->new_opts(ctx, c.rt, c.ref, c.bargs, nargs, &o, &h) ;
+			if (st == UGLY_OK){
+				v = ugly_hval(h) ;
+			}
+		}
+	}
+	free(kw) ;
 	st = end(&c, st, "new", UGLY_HANDLE, &v) ;
 	if (st == UGLY_OK){
 		*out = v.as.h ;

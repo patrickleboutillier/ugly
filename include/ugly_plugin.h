@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define UGLY_PLUGIN_ABI 3     /* 2: delete_member, splice; 3: options */
+#define UGLY_PLUGIN_ABI 4     /* 2: delete_member, splice; 3: options; 4: call options */
 
 
 /*
@@ -129,6 +129,19 @@ typedef struct ugly_plugin {
 
 	/* ABI 3. The option keys this plugin takes (ugly_configure), NULL-terminated; NULL for none. */
 	const char *const *options ;
+
+	/*
+	 * ABI 4. Calls with call options (contract §11), only ever with at least
+	 * one option set; opts->size is the full struct, and keyword values are
+	 * borrowed. Honour each option, or refuse with UGLY_ERR_NOT_SUPPORTED
+	 * naming it (ugly_fail). NULL: every option is refused by the core.
+	 */
+	ugly_status (*call_opts)(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+		const ugly_opts *opts, ugly_kind want, ugly_val *out) ;
+	ugly_status (*invoke_opts)(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+		size_t nargs, const ugly_opts *opts, ugly_kind want, ugly_val *out) ;
+	ugly_status (*new_opts)(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+		const ugly_opts *opts, ugly_handle *out) ;
 } ugly_plugin ;
 
 

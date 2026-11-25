@@ -310,6 +310,37 @@ ugly_status ugly_invoke(ugly_ctx *ctx, ugly_handle obj, const char *method, cons
 /* Constructs an instance (Python Class(), JS new, Perl Class->new, Lua Class.new). */
 ugly_status ugly_new(ugly_ctx *ctx, ugly_handle cls, const ugly_val *args, size_t nargs, ugly_handle *out) ;
 
+/*
+ * Call options (contract §11): keyword arguments, an overload hint, a call
+ * context. The callee's language honours each with its own meaning (Python
+ * **kwargs, Perl trailing name => value pairs and call context, a Java
+ * overload), or refuses the call with UGLY_ERR_NOT_SUPPORTED: options are
+ * never dropped. Keyword values are borrowed for the call, like arguments.
+ * With no options (opts NULL or empty), these are ugly_call, ugly_invoke
+ * and ugly_new.
+ */
+typedef struct ugly_kwarg {
+	const char *name ;           /* UTF-8 */
+	ugly_val value ;
+} ugly_kwarg ;
+
+typedef struct ugly_opts {
+	uint32_t size ;              /* sizeof(ugly_opts), so fields can be added */
+	const ugly_kwarg *kwargs ;
+	size_t nkwargs ;
+	const char *hint ;           /* language-specific (Java: "int,java.lang.String"); NULL for none */
+	const char *context ;        /* "list", "scalar" or "void"; NULL for the language's default */
+} ugly_opts ;
+
+#define UGLY_OPTS_INIT { sizeof(ugly_opts), NULL, 0, NULL, NULL }
+
+ugly_status ugly_call_opts(ugly_ctx *ctx, ugly_handle fn, const ugly_val *args, size_t nargs,
+	const ugly_opts *opts, ugly_kind want, ugly_val *out) ;
+ugly_status ugly_invoke_opts(ugly_ctx *ctx, ugly_handle obj, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *opts, ugly_kind want, ugly_val *out) ;
+ugly_status ugly_new_opts(ugly_ctx *ctx, ugly_handle cls, const ugly_val *args, size_t nargs,
+	const ugly_opts *opts, ugly_handle *out) ;
+
 
 /* ------------------------------------------------------------------ */
 /* Values made by the host                                            */

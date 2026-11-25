@@ -1170,32 +1170,94 @@ static ugly_status py_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offs
 }
 
 
-static ugly_status py_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+/*
+ * Call options (contract §11): keyword arguments as a dict (NULL for none);
+ * a hint or a call context is refused, before anything else happens. With
+ * the GIL held.
+ */
+static ugly_status kwargs_dict(ugly_ctx *ctx, const ugly_opts *o, PyObject **out){
+	*out = NULL ;
+	if (o == NULL){
+		return UGLY_OK ;
+	}
+	if (o->hint != NULL){
+		return fail(ctx, UGLY_ERR_NOT_SUPPORTED, "TypeError", "Python takes no call hint") ;
+	}
+	if (o->context != NULL){
+		return fail(ctx, UGLY_ERR_NOT_SUPPORTED, "TypeError", "Python takes no call context") ;
+	}
+	if (o->nkwargs == 0){
+		return UGLY_OK ;
+	}
+	PyObject *d = PyDict_New() ;
+	size_t i ;
+	for (i = 0 ; (d != NULL)&&(i < o->nkwargs) ; i++){
+		PyObject *v = from_val(ctx, o->kwargs[i].value) ;
+		if ((v == NULL)||(PyDict_SetItemString(d, o->kwargs[i].name, v) != 0)){
+			Py_XDECREF(v) ;
+			Py_CLEAR(d) ;
+			break ;
+		}
+		Py_DECREF(v) ;
+	}
+	if (d == NULL){
+		return py_failure(ctx) ;
+	}
+	*out = d ;
+	return UGLY_OK ;
+}
+
+
+static ugly_status call_with(ugly_ctx *ctx, void *ref, const ugly_val *args, size_t nargs, const ugly_opts *o,
 	ugly_kind want, ugly_val *out){
 
-	(void)rt ;
 	ugly_status st ;
 	ENTER ;
-	if (! PyCallable_Check(ref)){
+	PyObject *kw = NULL ;
+	if ((st = kwargs_dict(ctx, o, &kw)) != UGLY_OK){
+		/* refused */
+	}
+	else if (! PyCallable_Check(ref)){
 		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not callable") ;
 	}
 	else {
 		PyObject *t = args_tuple(ctx, args, nargs) ;
-		PyObject *r = (t != NULL ? PyObject_Call(ref, t, NULL) : NULL) ;
+		PyObject *r = (t != NULL ? PyObject_Call(ref, t, kw) : NULL) ;
 		Py_XDECREF(t) ;
 		st = out_val(ctx, r, want, out) ;
 	}
+	Py_XDECREF(kw) ;
 	LEAVE ;
 	return st ;
 }
 
 
-static ugly_status py_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
-	size_t nargs, ugly_kind want, ugly_val *out){
+static ugly_status py_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_kind want, ugly_val *out){
 
 	(void)rt ;
+	return call_with(ctx, ref, args, nargs, NULL, want, out) ;
+}
+
+
+static ugly_status py_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_kind want, ugly_val *out){
+
+	(void)rt ;
+	return call_with(ctx, ref, args, nargs, o, want, out) ;
+}
+
+
+static ugly_status invoke_with(ugly_ctx *ctx, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
+
 	ugly_status st ;
 	ENTER ;
+	PyObject *kw = NULL ;
+	if ((st = kwargs_dict(ctx, o, &kw)) != UGLY_OK){
+		LEAVE ;
+		return st ;
+	}
 	PyObject *m = PyObject_GetAttrString(ref, method) ;     /* a bound method: self is already in it */
 	if ((m == NULL)&&(PyErr_ExceptionMatches(PyExc_AttributeError))){
 		st = fail(ctx, UGLY_ERR_NOT_FOUND, "AttributeError", method) ;
@@ -1205,17 +1267,34 @@ static ugly_status py_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *
 	}
 	else {
 		PyObject *t = args_tuple(ctx, args, nargs) ;
-		PyObject *r = (t != NULL ? PyObject_Call(m, t, NULL) : NULL) ;
+		PyObject *r = (t != NULL ? PyObject_Call(m, t, kw) : NULL) ;
 		Py_XDECREF(t) ;
 		Py_DECREF(m) ;
 		st = out_val(ctx, r, want, out) ;
 	}
+	Py_XDECREF(kw) ;
 	LEAVE ;
 	return st ;
 }
 
 
-static ugly_status py_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+static ugly_status py_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, ugly_kind want, ugly_val *out){
+
+	(void)rt ;
+	return invoke_with(ctx, ref, method, args, nargs, NULL, want, out) ;
+}
+
+
+static ugly_status py_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
+
+	(void)rt ;
+	return invoke_with(ctx, ref, method, args, nargs, o, want, out) ;
+}
+
+
+static ugly_status new_with(ugly_ctx *ctx, void *ref, const ugly_val *args, size_t nargs, const ugly_opts *o,
 	ugly_handle *out){
 
 	ugly_val v = ugly_null() ;
@@ -1225,13 +1304,29 @@ static ugly_status py_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not a class") ;
 	}
 	else {
-		st = py_call(ctx, rt, ref, args, nargs, UGLY_HANDLE, &v) ;
+		st = call_with(ctx, ref, args, nargs, o, UGLY_HANDLE, &v) ;
 		if (st == UGLY_OK){
 			*out = v.as.h ;
 		}
 	}
 	LEAVE ;
 	return st ;
+}
+
+
+static ugly_status py_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_handle *out){
+
+	(void)rt ;
+	return new_with(ctx, ref, args, nargs, NULL, out) ;
+}
+
+
+static ugly_status py_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_handle *out){
+
+	(void)rt ;
+	return new_with(ctx, ref, args, nargs, o, out) ;
 }
 
 
@@ -1372,6 +1467,9 @@ static const ugly_plugin plugin = {
 	.length = py_length,
 	.get_index = py_get_index,
 	.set_index = py_set_index,
+	.call_opts = py_call_opts,
+	.invoke_opts = py_invoke_opts,
+	.new_opts = py_new_opts,
 	.delete_member = py_delete_member,
 	.splice = py_splice,
 	.call = py_call,

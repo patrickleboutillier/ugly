@@ -42,11 +42,21 @@ sub catch_and_return {
 sub rethrow { die $_[0] }
 sub finalized { return $finalized }
 
+# Call options (contract §11): keyword arguments arrive as trailing pairs.
+sub kw { my ($a, %o) = @_ ; return join(' ', $a, $o{b} // 0, $o{c} // 0) }
+sub context { return wantarray ? 'list' : defined(wantarray) ? 'scalar' : 'void' }
+
 
 package conformance::Point ;
 
 sub new { my ($class, $x, $y) = @_ ; return bless { x => $x, y => $y }, $class }
 sub norm2 { my $self = shift ; return $self->{x} * $self->{x} + $self->{y} * $self->{y} }
+
+
+package conformance::KwBox ;
+
+sub new { my ($class, %o) = @_ ; return bless { value => $o{value} // 0 }, $class }
+sub add { my ($self, %o) = @_ ; return $self->{value} + ($o{n} // 1) }
 
 
 package counter ;
