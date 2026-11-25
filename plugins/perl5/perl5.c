@@ -903,6 +903,21 @@ XS(xs_module){
 	XSRETURN(1) ;
 }
 
+/* Ugly::_configure(lang, key, value) */
+XS(xs_configure){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if (items < 3){
+		croak("usage: Ugly::_configure(lang, key, value)") ;
+	}
+	ugly_status st = ugly_configure(ctx, SvPV_nolen(ST(0)), SvPV_nolen(ST(1)), SvPV_nolen(ST(2))) ;
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	XSRETURN_EMPTY ;
+}
+
 XS(xs_eval){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -944,6 +959,7 @@ static void register_xs(pTHX){
 	newXS("Ugly::Error::_free", xs_error_free, file) ;
 	newXS("Ugly::module", xs_module, file) ;
 	newXS("Ugly::eval", xs_eval, file) ;
+	newXS("Ugly::_configure", xs_configure, file) ;
 }
 
 
@@ -1536,6 +1552,16 @@ static ugly_status pl_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 		free(r) ;
 	}
 	else {
+		/* ugly_configure("perl5", "path", dir): ahead of PERL5LIB in @INC, in the order given. */
+		AV *inc = GvAVn(PL_incgv) ;
+		size_t n = 0 ;
+		while (ugly_option("perl5", "path", n) != NULL){
+			n++ ;
+		}
+		while (n-- > 0){
+			av_unshift(inc, 1) ;
+			av_store(inc, 0, newSVpv(ugly_option("perl5", "path", n), 0)) ;
+		}
 		add_runtime(r) ;
 		*native = r ;
 	}
@@ -1595,6 +1621,7 @@ static const ugly_plugin plugin = {
 	.name = "perl5",
 	.init = pl_init,
 	.rt_new = pl_rt_new,
+	.options = (const char *const []){ "path", NULL },
 	.rt_attach = pl_rt_attach,
 	.rt_delete = pl_rt_delete,
 	.import = pl_import,

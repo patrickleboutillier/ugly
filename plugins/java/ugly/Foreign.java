@@ -88,4 +88,5 @@ public final class Foreign {
 	static native void freeError(long err);
 	static native Object module(String lang, String name);
 	static native Object eval(String lang, String code);
+	static native void configure(String lang, String key, String value);
 }

@@ -796,7 +796,61 @@ static PyObject *mod_eval(PyObject *mod, PyObject *args){
 }
 
 
+/* ugly_configure for each value of one option: a str, or a list or tuple of them. */
+static int configure_one(ugly_ctx *ctx, const char *lang, const char *key, PyObject *v){
+	if (PyUnicode_Check(v)){
+		ugly_status st = ugly_configure(ctx, lang, key, PyUnicode_AsUTF8(v)) ;
+		if (st != UGLY_OK){
+			raise_ugly(ctx, st) ;
+			return -1 ;
+		}
+		return 0 ;
+	}
+	if (PyList_Check(v)||PyTuple_Check(v)){
+		Py_ssize_t i, n = PySequence_Size(v) ;
+		for (i = 0 ; i < n ; i++){
+			PyObject *item = PySequence_GetItem(v, i) ;
+			int rc = ((item != NULL)&&PyUnicode_Check(item) ? configure_one(ctx, lang, key, item) : -1) ;
+			if ((rc != 0)&&(! PyErr_Occurred())){
+				PyErr_Format(PyExc_TypeError, "configure: %s takes strings", key) ;
+			}
+			Py_XDECREF(item) ;
+			if (rc != 0){
+				return -1 ;
+			}
+		}
+		return 0 ;
+	}
+	PyErr_Format(PyExc_TypeError, "configure: %s takes a string or a list of strings", key) ;
+	return -1 ;
+}
+
+
+/* configure(lang, path=..., classpath=..., options=...): before lang's first use. */
+static PyObject *mod_configure(PyObject *mod, PyObject *args, PyObject *kwargs){
+	(void)mod ;
+	const char *lang ;
+	if (! PyArg_ParseTuple(args, "s:configure", &lang)){
+		return NULL ;
+	}
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	PyObject *key, *value ;
+	Py_ssize_t pos = 0 ;
+	while ((kwargs != NULL)&&PyDict_Next(kwargs, &pos, &key, &value)){
+		if (configure_one(ctx, lang, PyUnicode_AsUTF8(key), value) != 0){
+			return NULL ;
+		}
+	}
+	Py_RETURN_NONE ;
+}
+
+
 static PyMethodDef mod_methods[] = {
+	{ "configure", (PyCFunction)(void (*)(void))mod_configure, METH_VARARGS | METH_KEYWORDS,
+		"configure(lang, path=..., ...): options for lang, before its first use." },
 	{ "module", mod_module, METH_VARARGS, "module(lang, name): a module of any language." },
 	{ "eval", mod_eval, METH_VARARGS, "eval(lang, code): the value of code in any language." },
 	{ "rethrow", mod_rethrow, METH_O, "Raise e again; a foreign exception object keeps its identity." },
@@ -1208,6 +1262,22 @@ static ugly_status py_init(ugly_ctx *ctx, const char *dir){
 			PyDict_SetItemString(PyImport_GetModuleDict(), "ugly", ugly_module) ;
 		}
 	}
+	if (st == UGLY_OK){
+		/* ugly_configure("python", "path", dir): ahead of PYTHONPATH, in the order given. */
+		PyObject *sys_path = PySys_GetObject("path") ;     /* borrowed */
+		size_t n = 0 ;
+		while (ugly_option("python", "path", n) != NULL){
+			n++ ;
+		}
+		while ((sys_path != NULL)&&(n-- > 0)){
+			PyObject *d = PyUnicode_DecodeFSDefault(ugly_option("python", "path", n)) ;
+			if ((d == NULL)||(PyList_Insert(sys_path, 0, d) != 0)){
+				PyErr_Clear() ;
+				st = UGLY_ERR_INTERNAL ;
+			}
+			Py_XDECREF(d) ;
+		}
+	}
 	LEAVE ;
 	return st ;
 }
@@ -1278,6 +1348,7 @@ static const ugly_plugin plugin = {
 	.name = "python",
 	.init = py_init,
 	.rt_new = py_rt_new,
+	.options = (const char *const []){ "path", NULL },
 	.rt_attach = py_rt_attach,
 	.rt_delete = py_rt_delete,
 	.import = py_import,

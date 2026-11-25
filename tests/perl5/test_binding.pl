@@ -2,6 +2,14 @@
 use strict ;
 use warnings ;
 use Ugly ;
+use File::Basename () ;
+use File::Spec () ;
+
+# Options for Python before anything starts it (the "use Ugly python => ..." below runs at compile time).
+BEGIN {
+	my $configured = File::Spec->rel2abs(File::Basename::dirname(__FILE__) . '/../configured') ;
+	Ugly::configure(python => { path => [ $configured ] }) ;
+}
 
 my ($count, $failures) = (0, 0) ;
 sub ok {
@@ -93,6 +101,10 @@ ok(join(',', sort keys %$d) eq 'x,y', "hash assignment clears, then stores") ;
 my $obj = Ugly::eval("js", "({ k: 1 })") ;
 delete $obj->{k} ;
 ok(! exists($obj->{k}), "delete on a JS object") ;
+
+ok(Ugly::module("python", "ugly_configured")->{where} eq "configured", "Ugly::configure(python => { path => ... }): Python finds the module") ;
+eval { Ugly::configure(python => { path => '/too/late' }) } ;
+ok(Ugly::is_error($@) && $@->message =~ /already started/, "  ... and configuring it again once started dies") ;
 
 print "1..$count\n" ;
 exit($failures ? 1 : 0) ;

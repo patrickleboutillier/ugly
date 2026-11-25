@@ -966,6 +966,40 @@ static int api_eval(lua_State *L){
 }
 
 
+/* ugly.configure(lang, { path = "dir" or { ... }, ... }): options for lang, before its first use. */
+static int api_configure(lua_State *L){
+	const char *lang = luaL_checkstring(L, 1) ;
+	luaL_checktype(L, 2, LUA_TTABLE) ;
+	ugly_ctx *ctx = need_ctx(L) ;
+	lua_pushnil(L) ;
+	while (lua_next(L, 2) != 0){
+		if (lua_type(L, -2) != LUA_TSTRING){
+			return luaL_error(L, "ugly.configure: option names are strings") ;
+		}
+		const char *key = lua_tostring(L, -2) ;
+		lua_Integer i, n = (lua_type(L, -1) == LUA_TTABLE ? luaL_len(L, -1) : 1) ;
+		for (i = 1 ; i <= n ; i++){
+			if (lua_type(L, -1) == LUA_TTABLE){
+				lua_geti(L, -1, i) ;
+			}
+			else {
+				lua_pushvalue(L, -1) ;
+			}
+			if (lua_type(L, -1) != LUA_TSTRING){
+				return luaL_error(L, "ugly.configure: %s takes a string or a list of strings", key) ;
+			}
+			ugly_status st = ugly_configure(ctx, lang, key, lua_tostring(L, -1)) ;
+			if (st != UGLY_OK){
+				return throw_ugly_error(L, ctx, st) ;
+			}
+			lua_pop(L, 1) ;
+		}
+		lua_pop(L, 1) ;
+	}
+	return 0 ;
+}
+
+
 /* ugly.is_error(e): whether e is an error from another language (with .type, .message, .language, .payload). */
 static int api_is_error(lua_State *L){
 	lua_pushboolean(L, luaL_testudata(L, 1, ERROR_MT) != NULL) ;
@@ -981,7 +1015,7 @@ static int api_is_proxy(lua_State *L){
 
 
 static const luaL_Reg api[] = {
-	{ "module", api_module }, { "eval", api_eval }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
+	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
 	{ NULL, NULL }
 } ;
 
@@ -1027,6 +1061,27 @@ static void setup_state(lua_State *L, lrt *r){
 }
 
 
+/* ugly_configure("lua", "path"/"cpath", ...): ahead of package.path/cpath (and so of LUA_PATH), in the order given. */
+static void prepend_paths(lua_State *L, const char *key, const char *field){
+	if (ugly_option("lua", key, 0) == NULL){
+		return ;
+	}
+	lua_getglobal(L, "package") ;
+	int pkg = lua_gettop(L), pieces = 0 ;
+	const char *v ;
+	size_t i ;
+	for (i = 0 ; (v = ugly_option("lua", key, i)) != NULL ; i++){
+		lua_pushstring(L, v) ;
+		lua_pushliteral(L, ";") ;
+		pieces += 2 ;
+	}
+	lua_getfield(L, pkg, field) ;
+	lua_concat(L, pieces + 1) ;
+	lua_setfield(L, pkg, field) ;
+	lua_settop(L, pkg - 1) ;
+}
+
+
 static ugly_status lua_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 	lrt *r = calloc(1, sizeof(lrt)) ;
 	if (r == NULL){
@@ -1041,6 +1096,8 @@ static ugly_status lua_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 	r->urt = rt ;
 	r->owns = 1 ;
 	luaL_openlibs(L) ;
+	prepend_paths(L, "path", "path") ;
+	prepend_paths(L, "cpath", "cpath") ;
 	setup_state(L, r) ;
 	*native = r ;
 	return UGLY_OK ;
@@ -1243,6 +1300,7 @@ static const ugly_plugin plugin = {
 	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_RESTARTABLE | UGLY_CAP_EVAL | UGLY_CAP_ATTACH,
 	.name = "lua",
 	.rt_new = lua_rt_new,
+	.options = (const char *const []){ "path", "cpath", NULL },
 	.rt_attach = lua_rt_attach,
 	.rt_delete = lua_rt_delete,
 	.import = lua_import,

@@ -14,9 +14,16 @@ def ok(cond, what):
     print(("ok" if cond else "not ok"), count, "-", what, flush=True)
 
 
+import os
 import ugly
 
 ok(hasattr(ugly, "module") and hasattr(ugly, "eval"), "import ugly in a plain python3 process")
+
+# Options, before the languages start: tests/configured is on no environment search path.
+configured = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "configured")
+ugly.configure("lua", path=os.path.join(configured, "?.lua"), cpath=["/configured/?.so"])
+ugly.configure("js", path=[configured])
+ugly.configure("perl5", path=configured)
 
 lua = ugly.module("lua", "conformance")
 ok(isinstance(lua, ugly.Proxy), "ugly.module('lua', ...) gives a Lua module, as a proxy")
@@ -74,6 +81,22 @@ ok(ugly.eval("lua", "return require('ugly').module('python', 'math').sqrt(16)") 
    "embedded Lua uses require('ugly') to reach this process's Python")
 ok(ugly.eval("lua", "return require('ugly').module('python', '__main__').obj") is obj,
    "  ... and sees this script's own globals")
+
+# Options took effect, and can't change once a language has started.
+ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")
+ok(ugly.eval("lua", "return package.cpath").startswith("/configured/?.so;"), "  ... and cpath comes first in package.cpath")
+ok(ugly.module("js", "ugly_configured").where == "configured", "configure('js', path=...): JS finds the module")
+ok(ugly.module("perl5", "ugly_configured").where() == "configured", "configure('perl5', path=...): Perl finds the module")
+try:
+    ugly.configure("lua", path="/too/late/?.lua")
+    ok(False, "configure after the language started raises ugly.Error")
+except ugly.Error as e:
+    ok("already started" in e.message, "configure after the language started raises ugly.Error")
+try:
+    ugly.configure("js", path=42)
+    ok(False, "configure with a value that isn't a string raises TypeError")
+except TypeError:
+    ok(True, "configure with a value that isn't a string raises TypeError")
 
 print(f"1..{count}")
 sys.exit(1 if failures else 0)

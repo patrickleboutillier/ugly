@@ -20,6 +20,126 @@ static ugly_lang *langs ;
 static ugly_lang c_lang = { NULL, "c", "", NULL, &ugly_c_plugin, 1, 0, 1, NULL } ;
 
 
+/*
+ * Options (ugly_configure): per language name, process-wide, in the order
+ * given. Set before the language loads, read by its plugin. Lock order:
+ * langs_lock, then opts_lock; plugins read them in init, under langs_lock.
+ */
+static int valid_name(const char *name) ;
+
+typedef struct opt {
+	char *lang, *key, *value ;
+	struct opt *next ;
+} opt ;
+
+static pthread_mutex_t opts_lock = PTHREAD_MUTEX_INITIALIZER ;
+static opt *opts ;
+
+
+const char *ugly_option(const char *lang, const char *key, size_t i){
+	const char *v = NULL ;
+	if ((lang == NULL)||(key == NULL)){
+		return NULL ;
+	}
+	pthread_mutex_lock(&opts_lock) ;
+	opt *o ;
+	for (o = opts ; o != NULL ; o = o->next){
+		if ((strcmp(o->lang, lang) == 0)&&(strcmp(o->key, key) == 0)&&(i-- == 0)){
+			v = o->value ;
+			break ;
+		}
+	}
+	pthread_mutex_unlock(&opts_lock) ;
+	return v ;
+}
+
+
+/* Every option set for this plugin's language must be one it takes. Called under langs_lock. */
+static ugly_status check_options(ugly_ctx *ctx, const ugly_plugin *plugin){
+	ugly_status st = UGLY_OK ;
+	pthread_mutex_lock(&opts_lock) ;
+	opt *o ;
+	for (o = opts ; (o != NULL)&&(st == UGLY_OK) ; o = o->next){
+		if (strcmp(o->lang, plugin->name) != 0){
+			continue ;
+		}
+		int known = 0 ;
+		const char *const *k ;
+		for (k = plugin->options ; (k != NULL)&&(*k != NULL) ; k++){
+			known |= (strcmp(*k, o->key) == 0) ;
+		}
+		if (! known){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "%s takes no option '%s' (ugly_configure)",
+				plugin->name, o->key) ;
+		}
+	}
+	pthread_mutex_unlock(&opts_lock) ;
+	return st ;
+}
+
+
+ugly_status ugly_configure(ugly_ctx *ctx, const char *lang, const char *key, const char *value){
+	ugly_status st = ctx_check(ctx) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	if ((! valid_name(lang))||(key == NULL)||(key[0] == '\0')){
+		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_configure: invalid language or key") ;
+	}
+	if (strcmp(lang, c_lang.name) == 0){
+		return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "the built-in c language takes no options") ;
+	}
+	pthread_mutex_lock(&langs_lock) ;
+	ugly_lang *l ;
+	for (l = langs ; l != NULL ; l = l->next){
+		if (strcmp(l->name, lang) == 0){
+			pthread_mutex_unlock(&langs_lock) ;
+			return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "%s has already started: configure it before its first use",
+				lang) ;
+		}
+	}
+	pthread_mutex_lock(&opts_lock) ;
+	if (value == NULL){
+		opt **p = &opts ;
+		while (*p != NULL){
+			opt *o = *p ;
+			if ((strcmp(o->lang, lang) == 0)&&(strcmp(o->key, key) == 0)){
+				*p = o->next ;
+				free(o->lang) ;
+				free(o->key) ;
+				free(o->value) ;
+				free(o) ;
+			}
+			else {
+				p = &o->next ;
+			}
+		}
+	}
+	else {
+		opt *o = calloc(1, sizeof(opt)) ;
+		if ((o == NULL)||((o->lang = xstrdup(lang)) == NULL)||((o->key = xstrdup(key)) == NULL)
+			||((o->value = xstrdup(value)) == NULL)){
+			if (o != NULL){
+				free(o->lang) ;
+				free(o->key) ;
+				free(o) ;
+			}
+			st = ctx_fail(ctx, UGLY_ERR_NOMEM, "core", "", "out of memory") ;
+		}
+		else {
+			opt **p = &opts ;
+			while (*p != NULL){
+				p = &(*p)->next ;
+			}
+			*p = o ;
+		}
+	}
+	pthread_mutex_unlock(&opts_lock) ;
+	pthread_mutex_unlock(&langs_lock) ;
+	return st ;
+}
+
+
 ugly_lang *lang_builtin_c(void){
 	return &c_lang ;
 }
@@ -132,6 +252,12 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 	}
 	free(path) ;
 
+	if ((st = check_options(ctx, plugin)) != UGLY_OK){
+		dlclose(dl) ;
+		free(dir) ;
+		pthread_mutex_unlock(&langs_lock) ;
+		return st ;
+	}
 	if (plugin->init != NULL){
 		st = plugin->init(ctx, dir) ;
 		if (st != UGLY_OK){
@@ -322,6 +448,10 @@ ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_la
 			pthread_mutex_unlock(&langs_lock) ;
 			return UGLY_OK ;
 		}
+	}
+	if ((st = check_options(ctx, plugin)) != UGLY_OK){
+		pthread_mutex_unlock(&langs_lock) ;
+		return st ;
 	}
 	if (plugin->init != NULL){
 		st = plugin->init(ctx, "") ;

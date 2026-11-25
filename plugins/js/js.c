@@ -1024,6 +1024,72 @@ static JSValue api_eval(JSContext *c, JSValueConst this_val, int argc, JSValueCo
 }
 
 
+/* ugly_configure for one value; 0, or -1 with a JS exception thrown. */
+static int configure_value(JSContext *c, ugly_ctx *ctx, const char *lang, const char *key, JSValueConst v){
+	if (! JS_IsString(v)){
+		JS_ThrowTypeError(c, "ugly.configure: %s takes a string or an array of strings", key) ;
+		return -1 ;
+	}
+	const char *s = JS_ToCString(c, v) ;
+	if (s == NULL){
+		return -1 ;
+	}
+	ugly_status st = ugly_configure(ctx, lang, key, s) ;
+	JS_FreeCString(c, s) ;
+	if (st != UGLY_OK){
+		throw_ugly(c, ctx, st) ;
+		return -1 ;
+	}
+	return 0 ;
+}
+
+
+/* ugly.configure(lang, { path: "dir" or [...], ... }): options for lang, before its first use. */
+static JSValue api_configure(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((ctx == NULL)||(argc < 2)||(! JS_IsObject(argv[1]))){
+		return (ctx == NULL ? JS_EXCEPTION : JS_ThrowTypeError(c, "ugly.configure(lang, { option: value, ... })")) ;
+	}
+	const char *lang = JS_ToCString(c, argv[0]) ;
+	if (lang == NULL){
+		return JS_EXCEPTION ;
+	}
+	JSPropertyEnum *tab = NULL ;
+	uint32_t n = 0, i ;
+	int bad = (JS_GetOwnPropertyNames(c, &tab, &n, argv[1], JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) ;
+	for (i = 0 ; (! bad)&&(i < n) ; i++){
+		const char *key = JS_AtomToCString(c, tab[i].atom) ;
+		JSValue v = JS_GetProperty(c, argv[1], tab[i].atom) ;
+		if ((key == NULL)||JS_IsException(v)){
+			bad = 1 ;
+		}
+		else if (JS_IsArray(c, v)){
+			int64_t len = 0, k ;
+			JSValue jl = JS_GetPropertyStr(c, v, "length") ;
+			bad = (JS_ToInt64(c, &len, jl) < 0) ;
+			JS_FreeValue(c, jl) ;
+			for (k = 0 ; (! bad)&&(k < len) ; k++){
+				JSValue item = JS_GetPropertyUint32(c, v, (uint32_t)k) ;
+				bad = (JS_IsException(item) || (configure_value(c, ctx, lang, key, item) != 0)) ;
+				JS_FreeValue(c, item) ;
+			}
+		}
+		else {
+			bad = (configure_value(c, ctx, lang, key, v) != 0) ;
+		}
+		JS_FreeValue(c, v) ;
+		JS_FreeCString(c, key) ;
+	}
+	for (i = 0 ; i < n ; i++){
+		JS_FreeAtom(c, tab[i].atom) ;
+	}
+	js_free(c, tab) ;
+	JS_FreeCString(c, lang) ;
+	return (bad ? JS_EXCEPTION : JS_UNDEFINED) ;
+}
+
+
 static JSValue api_is_error(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
 	(void)this_val ;
 	return JS_NewBool(c, (argc > 0)&&(JS_GetOpaque(argv[0], error_class) != NULL)) ;
@@ -1049,6 +1115,7 @@ static JSValue api_gc(JSContext *c, JSValueConst this_val, int argc, JSValueCons
 static const JSCFunctionListEntry api[] = {
 	JS_CFUNC_DEF("module", 2, api_module),
 	JS_CFUNC_DEF("eval", 2, api_eval),
+	JS_CFUNC_DEF("configure", 2, api_configure),
 	JS_CFUNC_DEF("isError", 1, api_is_error),
 	JS_CFUNC_DEF("isProxy", 1, api_is_proxy),
 	JS_CFUNC_DEF("gc", 0, api_gc),
@@ -1060,7 +1127,28 @@ static int api_init(JSContext *c, JSModuleDef *m){
 }
 
 
-/* Loads module 'name': "ugly" is built in; others are <dir>/<name>.js for a dir in UGLY_JS_PATH. */
+/* The module search path: ugly_configure("js", "path", ...) in the order given, then UGLY_JS_PATH. */
+static char *module_path(void){
+	const char *env = getenv("UGLY_JS_PATH"), *v ;
+	size_t len = (env != NULL ? strlen(env) : 0) + 1, i ;
+	for (i = 0 ; (v = ugly_option("js", "path", i)) != NULL ; i++){
+		len += strlen(v) + 1 ;
+	}
+	char *search = malloc(len) ;
+	if (search == NULL){
+		return NULL ;
+	}
+	search[0] = '\0' ;
+	for (i = 0 ; (v = ugly_option("js", "path", i)) != NULL ; i++){
+		strcat(search, v) ;
+		strcat(search, ":") ;
+	}
+	strcat(search, env != NULL ? env : "") ;
+	return search ;
+}
+
+
+/* Loads module 'name': "ugly" is built in; others are <dir>/<name>.js for a dir in the module path. */
 static JSModuleDef *module_loader(JSContext *c, const char *name, void *opaque){
 	(void)opaque ;
 	if (strcmp(name, "ugly") == 0){
@@ -1071,12 +1159,11 @@ static JSModuleDef *module_loader(JSContext *c, const char *name, void *opaque){
 		return m ;
 	}
 
-	const char *env = getenv("UGLY_JS_PATH") ;
-	char *search = strdup(env != NULL ? env : "") ;
+	char *search = module_path() ;
 	char *save = NULL, *dir ;
 	char *src = NULL ;
 	size_t len = 0 ;
-	for (dir = strtok_r(search, ":", &save) ; (dir != NULL)&&(src == NULL) ; dir = strtok_r(NULL, ":", &save)){
+	for (dir = (search != NULL ? strtok_r(search, ":", &save) : NULL) ; (dir != NULL)&&(src == NULL) ; dir = strtok_r(NULL, ":", &save)){
 		char path[4096] ;
 		size_t nl = strlen(name) ;
 		snprintf(path, sizeof(path), "%s/%s%s", dir, name, ((nl > 3)&&(strcmp(name + nl - 3, ".js") == 0)) ? "" : ".js") ;
@@ -1100,7 +1187,7 @@ static JSModuleDef *module_loader(JSContext *c, const char *name, void *opaque){
 	}
 	free(search) ;
 	if (src == NULL){
-		JS_ThrowReferenceError(c, "could not load module '%s' (not in UGLY_JS_PATH)", name) ;
+		JS_ThrowReferenceError(c, "could not load module '%s' (not in the \"path\" option or UGLY_JS_PATH)", name) ;
 		return NULL ;
 	}
 	JSValue fn = JS_Eval(c, src, len, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY) ;
@@ -1695,6 +1782,7 @@ static const ugly_plugin plugin = {
 	.name = "js",
 	.init = js_init,
 	.rt_new = js_rt_new,
+	.options = (const char *const []){ "path", NULL },
 	.rt_attach = js_rt_attach,
 	.rt_delete = js_rt_delete,
 	.import = js_import,

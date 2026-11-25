@@ -300,6 +300,36 @@ supported, but unreliable with extension modules.
   still refused while its runtimes are alive, since that is the host's own
   bookkeeping.
 
+**Options** (libugly 2.1, plugin ABI 3, 2026-11-25). Bindings create
+runtimes on demand (`ugly_rt_get`), so the host has no `rt_new` call at
+which to pass settings. `ugly_configure(ctx, lang, key, value)` records them
+beforehand:
+- Options are lists of strings, per language name, and process-wide. Each
+  call appends; a NULL value clears the key.
+- They must be set before the language starts. Afterwards the call fails
+  with `UGLY_ERR_IN_USE`, because a JVM's heap or Python's `sys.path` at
+  init can't change later. "Starts" means loads for the first time: a
+  plugin that stays initialized after unloading (no `term`) can't be
+  configured again, but one torn down by `term` can.
+- Each plugin declares the keys it takes (`options` in `ugly_plugin`), and a
+  load with any other key fails with `UGLY_ERR_USAGE`, so a typo can't go
+  unnoticed.
+- Plugins read them with `ugly_option(lang, key, i)`, ahead of the
+  environment variables that play the same part:
+
+| Language | Keys | Ahead of |
+|---|---|---|
+| Lua | `path`, `cpath` (`package.path`, `package.cpath`) | `LUA_PATH`, `LUA_CPATH` |
+| Python | `path` (`sys.path`) | `PYTHONPATH` |
+| JS | `path` (module directories) | `UGLY_JS_PATH` |
+| Perl | `path` (`@INC`) | `PERL5LIB` |
+| Java | `classpath`, `options` (JVM options: `-Xmx512m`, `-Dk=v`...) | `UGLY_JAVA_CLASSPATH`, `CLASSPATH` |
+
+Every binding has `configure`: `ugly.configure("java", options=["-Xmx512m"])`
+in Python, `ugly.configure("python", { path = "./py" })` in Lua and JS,
+`Ugly::configure(python => { path => [...] })` in Perl, and
+`Ugly.configure("python", "path", dir)` in Java.
+
 ## 8. Bindings are plugins in attach mode
 
 v1 had a plugin (the core drives Perl) and a binding (Perl drives the core)

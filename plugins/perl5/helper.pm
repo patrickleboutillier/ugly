@@ -110,6 +110,21 @@ sub name { ${$_[0]} }
 package Ugly ;
 use Carp () ;
 
+# Ugly::configure(java => { classpath => [ ... ], options => '-Xmx512m' }, python => { path => './py' }) ;
+# Options for languages that haven't started yet (in a BEGIN block, before
+# "use Ugly LANG => ..." starts them): strings or lists of strings.
+sub configure {
+	Carp::croak('Ugly::configure(LANG => { OPTION => VALUE, ... }, ...): expected pairs') if @_ % 2 ;
+	while (@_){
+		my ($lang, $opts) = splice(@_, 0, 2) ;
+		Carp::croak("Ugly::configure: the options for $lang are a hash") unless ref($opts) eq 'HASH' ;
+		for my $key (sort keys %$opts){
+			my $v = $opts->{$key} ;
+			Ugly::_configure($lang, $key, $_) for (ref($v) eq 'ARRAY' ? @$v : $v) ;
+		}
+	}
+}
+
 sub is_error { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Error') }
 sub is_proxy { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Proxy') }
 

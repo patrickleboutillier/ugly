@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 24;
+	static final int PLAN = 25;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -35,6 +35,7 @@ public class test_binding {
 
 	public static void main(String[] args){
 		System.out.println("1.." + PLAN);
+		Ugly.configure("python", "path", System.getenv("UGLY_TEST_CONFIGURED"));     // before Python starts
 
 		Foreign lua = (Foreign)Ugly.module("lua", "conformance");
 		ok(lua != null, "Ugly.module(\"lua\", ...) in a plain java program gives a Foreign");
@@ -122,6 +123,11 @@ public class test_binding {
 			Foreign date = (Foreign)((Foreign)Ugly.module("python", "datetime")).invoke("date", 2026, 11, 25);
 			ok("2026-11-25".equals(date.invoke("isoformat")) && Long.valueOf(2026).equals(date.get("year")),
 				"a Python datetime.date: isoformat() and year");
+		});
+
+		check("configure", () -> {
+			Foreign m = (Foreign)Ugly.module("python", "ugly_configured");
+			ok("configured".equals(m.get("where")), "Ugly.configure(\"python\", \"path\", ...): Python finds the module");
 		});
 
 		check("js", () -> {

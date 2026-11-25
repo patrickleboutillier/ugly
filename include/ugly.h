@@ -172,6 +172,18 @@ ugly_status ugly_raise(ugly_ctx *ctx, ugly_status status, const char *type, cons
  * Loading a language that is already loaded returns the same ugly_lang.
  */
 ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out) ;
+/*
+ * Sets an option for language 'lang', read by its plugin when it starts:
+ * "path" (where its modules are found) for every language, "cpath" for Lua,
+ * "classpath" and "options" (JVM options) for Java. Options are lists: each
+ * call appends 'value', and a NULL value clears 'key'. They are
+ * process-wide, and come before the environment variables that play the
+ * same part (LUA_PATH, PYTHONPATH...). They must be set before the language
+ * starts: UGLY_ERR_IN_USE once it has loaded, and after unloading too,
+ * unless its plugin was torn down (UGLY_CAP_RESTARTABLE with a 'term'). A
+ * key its plugin doesn't take fails the load with UGLY_ERR_USAGE.
+ */
+ugly_status ugly_configure(ugly_ctx *ctx, const char *lang, const char *key, const char *value) ;
 const char *ugly_lang_name(const ugly_lang *lang) ;
 uint32_t ugly_lang_caps(const ugly_lang *lang) ;
 /*
