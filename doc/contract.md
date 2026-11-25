@@ -1,9 +1,11 @@
 # UGLY v2: the contract
 
-*Approved 2026-11-24. This document sits alongside
-[`ugly.h`](../include/ugly.h) (the public API) and [`ugly_plugin.h`](../include/ugly_plugin.h)
-(the plugin contract). The headers live in `include/`. The v1 reference is
-tag `v0.02`.*
+*Approved 2026-11-24, and kept current since: changes are recorded in
+"Decisions" and "Clarifications", and in the headers. It describes libugly
+2.4 (plugin ABI 4). This document sits alongside
+[`ugly.h`](../include/ugly.h) (the public API) and
+[`ugly_plugin.h`](../include/ugly_plugin.h) (the plugin contract). The v1
+reference is tag `v0.02`.*
 
 The [design essay](design-essay.md) ends with this point: "written once"
 means specified once, completely, before the second plugin exists. This
@@ -842,11 +844,12 @@ All of them are in the headers and covered by the conformance suite.
    `perl` programs use the other languages. Everything is clean under
    valgrind and helgrind.
 
-The plan is complete. What comes next is in [TODO.md](../TODO.md). Java
-came first (2026-11-25, `plugins/java/`, fixtures in `tests/java/`): it
-passes all 8 groups and all 30 ordered pairs of six plugins pass. Its
-binding followed the same day: plain `java` programs use the other
-languages.
+The plan is complete. What came after it (2026-11-25), each recorded in
+its own section above: Java and its binding (§10); threads shared between
+runtimes, and runtimes the host serializes, for HAProxy (§6); options for
+runtimes created on demand (§7); resizing and deleting (§2); call options
+(§11, and a ninth conformance group). Open work is in
+[TODO.md](../TODO.md).
 
 v1 (the 2013 contract, its Perl plugin and XS binding) was removed from the
 tree on 2026-11-24, once v2 had two real languages calling each other. It is

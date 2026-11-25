@@ -89,15 +89,12 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## State (2026-11-25)
 
-- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS), Perl 5 and Java, bindings for Lua, Python, JS (qjs), Perl and Java, the conformance suite (48 runs: 8 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (7) and two examples. 87 tests pass; the 66 without a JVM are clean under valgrind, and helgrind finds no races.
-- Releases: source tarballs only (`.github/workflows/release.yml`). To release: set the version in `meson.build` (and `src/meson.build`'s library version if the ABI changed), merge, tag `vX.Y.Z` on master, push the tag; CI checks the tag against the version, runs `meson dist` (build and test from the tarball) and publishes. `gh workflow run release.yml` is a dry run. Releasing is outward-facing: ask the author first.
-- Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
-- **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
-- **The plan in contract.md is complete** (2026-11-24): QuickJS, the JS binding, and Perl with its binding are done. Perl's open questions were decided with Claude's recommendations (contract decisions 9–12). Decision 6, Latin-1 decoding, was **revised** so that bytes round-trip; it's flagged to the author in the contract.
-- **Java (2026-11-25)** was the first language after the plan, with its binding.
-- **Done since (2026-11-25):** Java and its binding, Perl's namespace import and ties (with `ugly_splice`/`ugly_delete_member`), `ugly_configure`, CI, foreign functions as Lua functions, Lua 5.3, source releases (none published yet: the author tags), any-thread runtimes phase 1.
-- **Next:** whatever the author picks. The HAProxy POC works in both Lua modes on 4 threads, with one Python.
-- **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
+- **`master`**: the v2 core (libugly 2.4.0, plugin ABI 4); plugins for the mock, Lua (5.4 or 5.3), CPython, JS (QuickJS), Perl 5 and Java; bindings for Lua (both versions), Python, JS (qjs), Perl and Java. Tests: the conformance suite (54 runs: 9 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (7, plus `configure-java`), the examples (2, plus 3 HAProxy runs when `haproxy` is installed). 96 tests pass here; the 72 without a JVM or HAProxy are clean under valgrind, and helgrind finds no races. CI runs all of it.
+- **Releases** (source tarballs only, `.github/workflows/release.yml`): v2.2.0 (the first), v2.3.0, v2.4.0. To release: set the version in `meson.build` (and `src/meson.build`'s library version if the API changed), merge, tag `vX.Y.Z` on master, push the tag; CI checks the tag against the version, runs `meson dist` (build and test from the tarball) and publishes. `gh workflow run release.yml` is a dry run. Releasing is outward-facing: only when the author asks.
+- **Process:** work on a branch, open a PR, wait for CI, rebase-merge it, delete the branch. Check that the merge happened before deleting (`gh pr view N --json state`): a failed merge once closed a PR when its branch was deleted. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off.
+- **Done, beyond the original plan:** Java and its binding; Perl's namespace import and ties; `ugly_configure`; threads (any-thread runtimes, runtimes the host serializes); Lua 5.3; foreign functions as Lua functions; call options (keyword arguments, Perl's context, Java's hints); CI; source releases; the HAProxy proof of concept, in both of HAProxy's Lua modes on several threads.
+- **Decision 6** (Latin-1 decoding) was **revised** so that bytes round-trip; it's flagged to the author in the contract.
+- **Next:** whatever the author picks from `TODO.md` (open items first, done ones at the end): LuaJIT, Python started before a fork, iterators, Ruby or Node.js, packages. Keep it current.
 
 ## Landscape (2026)
 
