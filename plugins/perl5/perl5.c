@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 
 #include <EXTERN.h>
 #include <perl.h>
@@ -1362,6 +1363,21 @@ static void pl_release(ugly_rt *rt, void *ref){
 
 extern char **environ ;
 
+/*
+ * perl_construct ignores SIGFPE (PERL_FPU_INIT). Another runtime in the
+ * process may own that signal: the JVM turns it into ArithmeticException.
+ * So we keep whatever handler was there before perl started.
+ */
+static void keep_sigfpe(struct sigaction *saved, int restore){
+	if (! restore){
+		sigaction(SIGFPE, NULL, saved) ;
+	}
+	else if ((saved->sa_flags & SA_SIGINFO)||(saved->sa_handler != SIG_DFL)){
+		sigaction(SIGFPE, saved, NULL) ;
+	}
+}
+
+
 static ugly_status pl_init(ugly_ctx *ctx, const char *dir){
 	(void)ctx ; (void)dir ;
 	/* Once per process, and only if we're the first perl (PL_curinterp stays set after perl_free). */
@@ -1370,7 +1386,10 @@ static ugly_status pl_init(ugly_ctx *ctx, const char *dir){
 		int argc = 1 ;
 		char **argv = args ;
 		char **env = environ ;
+		struct sigaction fpe ;
+		keep_sigfpe(&fpe, 0) ;
 		PERL_SYS_INIT3(&argc, &argv, &env) ;
+		keep_sigfpe(&fpe, 1) ;
 	}
 	return UGLY_OK ;
 }
@@ -1401,6 +1420,8 @@ static ugly_status pl_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 	r->urt = rt ;
 	r->owns = 1 ;
 	PerlInterpreter *saved_perl_ = PERL_GET_CONTEXT ;
+	struct sigaction fpe ;
+	keep_sigfpe(&fpe, 0) ;
 	PerlInterpreter *my_perl = perl_alloc() ;     /* makes the new interpreter current */
 	r->perl = my_perl ;
 	perl_construct(my_perl) ;
@@ -1417,6 +1438,7 @@ static ugly_status pl_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 		add_runtime(r) ;
 		*native = r ;
 	}
+	keep_sigfpe(&fpe, 1) ;
 	PERL_SET_CONTEXT(saved_perl_) ;
 	return st ;
 }

@@ -45,7 +45,15 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
     - Modules and classes are `Ugly::Package` objects (a scalar ref holding the package name). Their identity is the stash, members are subs and nested packages, and `new` instantiates.
     - Calls run in list context and collapse (`call_perl`). Never `PUSHMARK` before `eval_sv`: it pushes its own mark.
     - The binding (`binding/`: `lib/Ugly.pm`, `auto/Ugly/Ugly.so`, `boot_Ugly`) attaches to the running perl. `END { Ugly::_teardown() }` tears down. Its test sets `PERL_DESTRUCT_LEVEL=2`, so the host frees everything and valgrind measures only UGLY.
-  - Proxies in all four languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
+  - **`java/`** is Java through JNI (JDK 21+, found via `javac`; `-ljvm` with an rpath to `lib/server`).
+    - One JVM per process, created in `init` (or the running one reused), with `-Xrs` and the class path `<plugin dir>/ugly.jar:$UGLY_JAVA_CLASSPATH:$CLASSPATH`. No capability flags.
+    - Most of the protocol is Java, in `ugly/Bridge.java`: reflection, bean getters, `Map` keys, arrays and `List`s, and overloads chosen by `score()`. A foreign value passed for an interface becomes a dynamic proxy (`ForeignHandler`).
+    - `ugly.Foreign` holds a handle, released by a `Cleaner` and cached per handle; its natives are registered from `java.c`. Errors from elsewhere are `ugly.ForeignException`, which owns the core's error until it leaves Java.
+    - Refs are global refs; identity is an id from `Bridge.acquireId` (an `IdentityHashMap`), since objects move. Strings are converted from UTF-16 in C, never via modified UTF-8.
+    - Every op runs in `FRAME_IN`/`FRAME_OUT`, and every JNI call that can throw is followed by `JCHECK` or `drop_exception`.
+    - JVM output goes to stderr (the `vfprintf` hook). `UGLY_JAVA_CHECK` adds `-Xcheck:jni` and aborts on a JNI warning at `FRAME_OUT`; the tests set it. Its signal checker prints "handler modified" noise at `exit()`, harmlessly, now on stderr.
+    - Java tests are in suite `jvm`, which the valgrind setup excludes. The fixture is `tests/java/conformance.java`, built into `conformance.jar`.
+  - Proxies in all five languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
   - **Bindings** (`plugins/<lang>/binding/`) compile the plugin's own source again with `-DUGLY_BINDING`, as the native module `ugly`: `luaopen_ugly`, and `PyInit_ugly` via `pyinst.extension_module`. They link **no interpreter library**, because Debian's `python3` and `lua5.4` are statically linked and a second interpreter in the process would be fatal.
     - On import, a binding calls `ugly_lang_register` (no dlopen) and `ugly_rt_attach` on the host interpreter. Teardown is a `__gc` sentinel in Lua and `atexit` in Python.
     - Every runtime, embedded or attached, preloads the same `ugly` module: `ugly.module(lang, name)` and `ugly.eval(lang, code)`, which use `ugly_rt_get`, plus `is_error`/`is_proxy` in Lua and `Error`/`Proxy`/`rethrow` in Python.
@@ -62,6 +70,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
   - A plugin reports a non-exception failure with `ugly_fail` (chosen status), an exception with `ugly_raise_native` (`RAISED` plus a payload), and a rethrown foreign value with `ugly_raise_handle`.
   - A Lua or Python error must never `longjmp` across a core frame or skip one: catch it at the boundary.
+  - Signals belong to whoever installed them first: a plugin restores any handler its interpreter resets while starting (perl ignores SIGFPE, which the JVM needs).
 - **Build:** Meson (≥ 0.61) and Ninja, out-of-tree, with `-Wall` and no warnings. `meson test -C build --setup valgrind` fails on memory errors and on definite, indirect or possible leaks. `tests/valgrind.supp` suppresses only CPython's "possibly lost" live objects. Tests set `PYTHONMALLOC=malloc` and `PYTHONDONTWRITEBYTECODE=1`.
 - **Tags:** `v0.01` is the original 2013–2014 code, including Java and JNA. `v0.02` is the v1 reference: the original contract with a Perl 5 plugin and XS binding, a Meson build and a TAP suite. v1 was removed from the tree on 2026-11-24 at the author's request.
 
@@ -72,12 +81,13 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - Delete a runtime with `perl_destruct`/`perl_free` under its context.
 - `call_sv` mortalizes its arguments. Whatever wraps an RV must own exactly one reference (v1's `wrap` took two, so objects were never DESTROYed).
 
-## State (2026-11-24)
+## State (2026-11-25)
 
-- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS) and Perl 5, bindings for Lua, Python, JS (qjs) and Perl, the conformance suite (40 runs: 8 groups × 5 plugins), pairwise (20 ordered pairs), the binding tests (4) and two examples. 66 tests pass, clean under valgrind, and helgrind finds no races.
+- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS), Perl 5 and Java, bindings for Lua, Python, JS (qjs) and Perl, the conformance suite (48 runs: 8 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (4) and two examples. 84 tests pass; the 66 without a JVM are clean under valgrind, and helgrind finds no races.
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
 - **The plan in contract.md is complete** (2026-11-24): QuickJS, the JS binding, and Perl with its binding are done. Perl's open questions were decided with Claude's recommendations (contract decisions 9–12). Decision 6, Latin-1 decoding, was **revised** so that bytes round-trip; it's flagged to the author in the contract.
+- **Java (2026-11-25)** was the first language after the plan; it has no binding yet (TODO.md).
 - **Next:** whatever the author picks from `TODO.md`. The HAProxy and embedded-Lua items are the motivating ones: any-thread runtimes, lazy Python init, and Lua 5.3/LuaJIT. CI and Node.js (N-API) are also there.
 - **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
 

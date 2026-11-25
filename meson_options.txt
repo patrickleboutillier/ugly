@@ -6,3 +6,5 @@ option('js', type: 'feature', value: 'auto',
   description: 'The JavaScript plugin (QuickJS, built from the release in subprojects/quickjs.wrap)')
 option('perl5', type: 'feature', value: 'auto',
   description: 'The Perl 5 plugin (needs libperl-dev)')
+option('java', type: 'feature', value: 'auto',
+  description: 'The Java plugin (needs a JDK: javac, jni.h, libjvm.so)')

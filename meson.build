@@ -42,6 +42,7 @@ subdir('plugins/lua')
 subdir('plugins/python')
 subdir('plugins/js')
 subdir('plugins/perl5')
+subdir('plugins/java')
 subdir('tests')
 subdir('examples')
 
@@ -56,7 +57,10 @@ subdir('examples')
 #
 # --keep-debuginfo keeps stack traces readable for plugins that have been
 # dlclose()d. tests/valgrind.supp suppresses only CPython's live objects
-# reported as "possibly lost" (Python is never finalized); see that file.
+# reported as "possibly lost" (Python is never finalized); see that file. The
+# JVM can't run under valgrind (it uses SIGSEGV on purpose), so suite 'jvm'
+# (anything that starts it) is left out; the Java plugin's checks are -Xcheck:jni
+# (UGLY_JAVA_CHECK) and the JVM's own.
 valgrind = find_program('valgrind', required: false)
 if valgrind.found()
   add_test_setup('valgrind',
@@ -69,6 +73,7 @@ if valgrind.found()
       '--keep-debuginfo=yes',
       '--suppressions=' + (meson.project_source_root() / 'tests' / 'valgrind.supp'),
     ],
+    exclude_suites: ['jvm'],
     timeout_multiplier: 10,
   )
 endif

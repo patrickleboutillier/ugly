@@ -399,24 +399,25 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 | pairwise | values, identity, calls, caught and rethrown errors, and alternating recursion between two languages; deleting one language's runtime while the other holds its values |
 | memory | the whole suite under the valgrind setup: no errors and no leaks |
 
-## 10. The four planned languages
+## 10. The languages
 
-How each language maps onto the contract. "Proxy finalizer" is where a
-proxy releases its handle reference.
+How each language maps onto the contract: the four planned ones, and Java,
+added after the plan was complete. "Proxy finalizer" is where a proxy
+releases its handle reference.
 
-| | Lua 5.4 | CPython 3.10+ | QuickJS (`js`) | Perl 5 |
-|---|---|---|---|---|
-| null | `nil` | `None` | `null`, `undefined` (NULL goes in as `null`) | `undef` |
-| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IOK → INT, NOK → DOUBLE, POK → STRING; booleans by `SvIsBOOL` (5.36+) or `PL_sv_yes`/`PL_sv_no`'s signature; an explicit `want` numifies only what `looks_like_number` |
-| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag on → STRING; off → STRING if valid UTF-8, else BYTES; `want = STRING` decodes unflagged strings as Latin-1 (see decision 6) |
-| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | a hash's keys, then an object's methods; a package's subs and nested packages. Modules and classes are packages (`Ugly::Package`); `new` instantiates |
-| elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays |
-| `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant for an object; none for a package's function |
-| proxy finalizer | userdata `__gc` | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` |
-| foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | |
-| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT` on every entry; `G_EVAL`; calls run in list context and collapse (none → null, one → it, more → array) |
-| restartable | yes | no | yes | no |
-| multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY); `PERL_SYS_INIT3` once per process, never `PERL_SYS_TERM` |
+| | Lua 5.4 | CPython 3.10+ | QuickJS (`js`) | Perl 5 | Java (JDK 21) |
+|---|---|---|---|---|---|
+| null | `nil` | `None` | `null`, `undefined` (NULL goes in as `null`) | `undef` | `null` |
+| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IOK → INT, NOK → DOUBLE, POK → STRING; booleans by `SvIsBOOL` (5.36+) or `PL_sv_yes`/`PL_sv_no`'s signature; an explicit `want` numifies only what `looks_like_number` | boxed integers and `BigInteger` (if it fits) → INT, `Double`/`Float` → DOUBLE; INT goes in as `Long`, and narrows to `int`/`short`/`byte` parameters when it fits; integers widen to DOUBLE |
+| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag on → STRING; off → STRING if valid UTF-8, else BYTES; `want = STRING` decodes unflagged strings as Latin-1 (see decision 6) | `String`/`Character` / `byte[]`; strings are converted from UTF-16 by the plugin, not with JNI's modified UTF-8 |
+| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | a hash's keys, then an object's methods; a package's subs and nested packages. Modules and classes are packages (`Ugly::Package`); `new` instantiates | public fields and methods, then bean getters (`getX`, `isX`); a `Map`'s keys. Classes are imported by name; a class with a public constructor is INSTANTIABLE (`class`), else `module` |
+| elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays | arrays and `List`s |
+| `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant for an object; none for a package's function | the object for an instance method; none for a class's static method. Overloads are chosen by scoring how well the arguments convert |
+| proxy finalizer | userdata `__gc` | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` | a `Cleaner` on `ugly.Foreign`; a foreign value passed where an interface is expected becomes a dynamic proxy (the single abstract method calls it) |
+| foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | | `f.invoke("m", x)` on `ugly.Foreign`, or through the interface it was passed as |
+| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT` on every entry; `G_EVAL`; calls run in list context and collapse (none → null, one → it, more → array) | a JNI local frame per operation; exceptions are checked after every JNI call; deep recursion ends in `StackOverflowError` (about 200 alternating levels here) |
+| restartable | yes | no | yes | no | no (`DestroyJavaVM` is one-way) |
+| multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY); `PERL_SYS_INIT3` once per process, never `PERL_SYS_TERM` | no: one JVM per process, created at plugin load, or the one already running |
 
 ## Decisions
 
@@ -549,6 +550,32 @@ All of them are in the headers and covered by the conformance suite.
   - Its `FinalizationRegistry` callbacks are queued only when the GC runs, so its `ugly` module has `gc()` (collect, then run them), and the `finalized()` fixture uses it.
   - `JS_FreeRuntime` asserts that nothing is still referenced, which makes every test's runtime deletion a leak check for the plugin.
   - The valgrind run found a use-after-free in its rule-7 path: it released the error before taking its own reference to the payload's value. That warning is now part of rule 7 in `ugly_plugin.h`.
+- **Java** (2026-11-25) needed no change to the protocol, and added one
+  rule about signals.
+  - One JVM per process: the invocation API can't create a second, or a new
+    one after `DestroyJavaVM`. So the plugin has no capability flags.
+  - Most of the protocol is Java (`ugly.Bridge`, reflection); C converts
+    values, maps exceptions and implements `ugly.Foreign`'s natives.
+    Identity is an id from an `IdentityHashMap`, because objects move.
+  - Overloads are resolved by scoring each candidate on how well the
+    arguments convert, the best total winning. A foreign value passed for an
+    interface becomes a dynamic proxy, so a Lua function works as a
+    `Function<Object, Object>`.
+  - Errors from other languages are `ugly.ForeignException` (`type()`,
+    `language()`, `payload()`); one that escapes Java goes on unchanged, and
+    `new ForeignException(payload)` rethrows a foreign value (rule 7).
+  - **Signals belong to whoever installed them first.** The JVM installs
+    SIGSEGV, SIGFPE, SIGILL and SIGBUS handlers it depends on (implicit null
+    and divide checks), and `perl_construct` sets SIGFPE to `SIG_IGN`. So a
+    plugin must keep another runtime's handlers when its interpreter
+    starts: the Perl plugin restores SIGFPE. Found by `pairwise-java-perl5`
+    under `-Xcheck:jni`, which checks the handlers. Rule in `ugly_plugin.h`.
+  - **The JVM writes to stderr**, through its `vfprintf` hook, so its
+    diagnostics can't corrupt a host's stdout (or TAP). `UGLY_JAVA_CHECK`
+    turns on `-Xcheck:jni` and makes a JNI warning fatal once the operation
+    that caused it returns. The tests set it.
+  - The JVM is excluded from the valgrind setup (suite `jvm`): its JIT and
+    GC are beyond what memcheck can judge.
 - **Rule 7, completed** (found by the bindings). When an error returns to
   the language its payload came from, that language raises the original
   value or exception object, not a wrapper. A Python exception that crosses
@@ -595,7 +622,9 @@ All of them are in the headers and covered by the conformance suite.
    `perl` programs use the other languages. Everything is clean under
    valgrind and helgrind.
 
-The plan is complete. What comes next is in [TODO.md](../TODO.md).
+The plan is complete. What comes next is in [TODO.md](../TODO.md). Java
+came first (2026-11-25, `plugins/java/`, fixtures in `tests/java/`): it
+passes all 8 groups and all 30 ordered pairs of six plugins pass.
 
 v1 (the 2013 contract, its Perl plugin and XS binding) was removed from the
 tree on 2026-11-24, once v2 had two real languages calling each other. It is
