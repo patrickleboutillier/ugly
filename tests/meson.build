@@ -90,6 +90,17 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
       suite: 'bindings', depends: plugins + bindings)
   endif
 
+  # A plain java program; teardown at JVM exit prints the last test. Its VM
+  # output goes to stderr, out of the TAP stream.
+  if binding_dirs.has_key('java') and binding_dirs.has_key('js') and binding_dirs.has_key('perl5')
+    binding_jar = jar('test_binding', 'java' / 'test_binding.java', link_with: ugly_jar)
+    test('binding-java', java_prog,
+      args: ['-Xcheck:jni', '-XX:+DisplayVMOutputToStderr', '-Djava.library.path=' + binding_dirs['java'],
+        '-cp', ugly_jar.full_path() + ':' + binding_jar.full_path(), 'test_binding'],
+      protocol: 'tap', env: environment(test_env_vars),
+      suite: ['bindings', 'jvm'], depends: plugins + bindings + [binding_jar])
+  endif
+
   lua_exe = find_program('lua5.4', 'lua', required: false)
   if lua_exe.found()
     env = environment(test_env_vars)

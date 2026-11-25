@@ -818,6 +818,7 @@ static ugly_status out_val(JNIEnv *env, ugly_ctx *ctx, jobject o, ugly_kind want
  */
 static volatile int jni_warned = 0 ;
 
+#ifndef UGLY_BINDING
 static jint JNICALL vm_print(FILE *f, const char *fmt, va_list ap){
 	(void)f ;
 	char buf[1024] ;
@@ -828,6 +829,7 @@ static jint JNICALL vm_print(FILE *f, const char *fmt, va_list ap){
 	fputs(buf, stderr) ;
 	return n ;
 }
+#endif
 
 
 static jobject frame_out(JNIEnv *env){
@@ -1126,6 +1128,10 @@ static int lookup(JNIEnv *env){
 static ugly_status jv_init(ugly_ctx *ctx, const char *dir){
 	(void)ctx ;
 	JNIEnv *env = NULL ;
+#ifdef UGLY_BINDING
+	(void)dir ;
+	env = env_here() ;     /* JNI_OnLoad set jvm: the host is java */
+#else
 	jsize n = 0 ;
 	if ((JNI_GetCreatedJavaVMs(&jvm, 1, &n) != JNI_OK)||(n == 0)){
 		/* We start the JVM: the helper jar next to this plugin, then the user's class path. */
@@ -1135,10 +1141,11 @@ static ugly_status jv_init(ugly_ctx *ctx, const char *dir){
 		char *opt_cp = malloc(len) ;
 		snprintf(opt_cp, len, "-Djava.class.path=%s/ugly.jar%s%s%s%s", dir,
 			extra ? ":" : "", extra ? extra : "", cp ? ":" : "", cp ? cp : "") ;
-		JavaVMOption options[4] ;
+		JavaVMOption options[5] ;
 		int nopt = 0 ;
 		options[nopt++].optionString = opt_cp ;
 		options[nopt++].optionString = "-Xrs" ;     /* leave SIGINT, SIGTERM... to the host */
+		options[nopt++].optionString = "-Dugly.embedded=true" ;     /* ugly.Foreign: natives are registered */
 		options[nopt].optionString = "vfprintf" ;
 		options[nopt++].extraInfo = (void *)vm_print ;
 		if (getenv("UGLY_JAVA_CHECK") != NULL){
@@ -1158,6 +1165,7 @@ static ugly_status jv_init(ugly_ctx *ctx, const char *dir){
 	else {
 		env = env_here() ;     /* the host is Java */
 	}
+#endif
 	if (lookup(env) != 0){
 		if ((*env)->ExceptionCheck(env)){
 			(*env)->ExceptionDescribe(env) ;
@@ -1183,6 +1191,15 @@ static ugly_status jv_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 }
 
 
+/* The host's JVM, as seen from the attaching thread ('existing' is its JNIEnv). */
+static ugly_status jv_rt_attach(ugly_ctx *ctx, ugly_rt *rt, void *existing, void **native){
+	if (existing == NULL){
+		return UGLY_ERR_USAGE ;
+	}
+	return jv_rt_new(ctx, rt, native) ;
+}
+
+
 static ugly_status jv_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 	(void)ctx ; (void)rt ;
 	if (the_rt == native){
@@ -1195,10 +1212,11 @@ static ugly_status jv_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
-	.caps = 0,
+	.caps = UGLY_CAP_ATTACH,
 	.name = "java",
 	.init = jv_init,
 	.rt_new = jv_rt_new,
+	.rt_attach = jv_rt_attach,
 	.rt_delete = jv_rt_delete,
 	.import = jv_import,
 	.describe = jv_describe,
@@ -1218,3 +1236,88 @@ static const ugly_plugin plugin = {
 const ugly_plugin *ugly_plugin_java(void){
 	return &plugin ;
 }
+
+
+#ifdef UGLY_BINDING
+/* ---------------------------------------------------------------- */
+/* The binding: ugly.Ugly from a plain java program                 */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Built from this same file as libugly_jni.so, without libjvm: the JVM is
+ * the host's. ugly.Foreign's static initializer loads it, and JNI_OnLoad
+ * registers this plugin as "java" and attaches to the JVM on the loading
+ * thread, which then owns the ctx and the runtime.
+ *
+ * Teardown is at JVMTI's VMDeath. The java launcher's DestroyJavaVM runs on
+ * the thread that ran main, and so does System.exit called from it, so the
+ * ctx is still there and JNI still works; shutdown hooks would run on new
+ * threads, which can't touch it. If the JVM ends from another thread, UGLY
+ * is left as it is, like any process exit.
+ */
+#include <jvmti.h>
+
+static ugly_ctx *b_ctx ;
+static ugly_lang *b_lang ;
+static ugly_rt *b_rt ;
+static int b_owns_ctx ;
+
+
+static void JNICALL b_vm_death(jvmtiEnv *jvmti, JNIEnv *env){
+	(void)jvmti ;
+	if ((b_rt == NULL)||(ugly_current_ctx() != b_ctx)){
+		return ;
+	}
+	/* main's JNIEnv went with DetachCurrentThread: DestroyJavaVM reattached this thread. */
+	if (the_rt != NULL){
+		the_rt->env = env ;
+	}
+	ugly_rt_delete(b_ctx, b_rt) ;
+	ugly_lang_unload(b_ctx, b_lang) ;
+	if (b_owns_ctx){
+		ugly_ctx_delete(b_ctx) ;     /* also deletes the runtimes Ugly.module created */
+	}
+	b_rt = NULL ;
+}
+
+
+static jint attach_failed(const char *why){
+	fprintf(stderr, "ugly: can't attach to this JVM: %s\n", why) ;
+	return JNI_ERR ;     /* System.loadLibrary throws UnsatisfiedLinkError */
+}
+
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved){
+	(void)reserved ;
+	if (b_rt != NULL){
+		return JNI_VERSION_10 ;
+	}
+	jvm = vm ;
+	JNIEnv *env = env_here() ;
+	b_ctx = ugly_current_ctx() ;
+	if (b_ctx == NULL){
+		if (ugly_ctx_new(&b_ctx) != UGLY_OK){
+			return attach_failed("can't create a context") ;
+		}
+		b_owns_ctx = 1 ;
+	}
+	ugly_status st = ugly_lang_register(b_ctx, &plugin, &b_lang) ;
+	if (st == UGLY_OK){
+		st = ugly_rt_attach(b_ctx, b_lang, env, &b_rt) ;
+	}
+	if (st != UGLY_OK){
+		const ugly_error *e = ugly_last_error(b_ctx) ;
+		return attach_failed(e ? ugly_error_message(e) : "unknown error") ;
+	}
+	jvmtiEnv *jvmti = NULL ;
+	jvmtiEventCallbacks cb ;
+	memset(&cb, 0, sizeof(cb)) ;
+	cb.VMDeath = b_vm_death ;
+	if (((*vm)->GetEnv(vm, (void **)&jvmti, JVMTI_VERSION_1_2) != JNI_OK)
+		||((*jvmti)->SetEventCallbacks(jvmti, &cb, sizeof(cb)) != JVMTI_ERROR_NONE)
+		||((*jvmti)->SetEventNotificationMode(jvmti, JVMTI_ENABLE, JVMTI_EVENT_VM_DEATH, NULL) != JVMTI_ERROR_NONE)){
+		fprintf(stderr, "ugly: no JVMTI, so no teardown at exit\n") ;
+	}
+	return JNI_VERSION_10 ;
+}
+#endif

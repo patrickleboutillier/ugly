@@ -8,7 +8,7 @@ this list is everything else, plus the reasons behind each item.
 
 - [x] **QuickJS plugin** (done 2026-11-24: `plugins/js/`).
 - [x] **Perl** (done 2026-11-24: `plugins/perl5/`, with a binding).
-- [x] **Java** (done 2026-11-25: `plugins/java/`; no binding yet).
+- [x] **Java** (done 2026-11-25: `plugins/java/`, with a binding).
 
 ## Embedding in real hosts: HAProxy and friends
 
@@ -95,11 +95,11 @@ All additive; none of it breaks existing plugins (contract, "Scope").
     ever.
 - [x] **Java (the JVM)**, done 2026-11-25 through JNI (`plugins/java/`).
   What's left:
-  - [ ] **A Java binding**: `System.loadLibrary("ugly")` with `JNI_OnLoad`
-    attaching to the running JVM, so a plain `java` program uses the other
-    languages. The plugin already uses a running JVM if there is one.
+  - [x] **A Java binding** (done 2026-11-25): `ugly.Foreign` loads
+    `libugly_jni.so`, whose `JNI_OnLoad` attaches; teardown at JVMTI
+    VMDeath.
   - [ ] **Java threads.** A runtime is the JVM seen from one thread; other
-    Java threads calling foreign values get `WRONG_THREAD`. "Calling a
+    Java threads calling foreign values get `IllegalStateException`. "Calling a
     runtime from any thread" (above) would lift that.
   - [ ] **Panama FFM** for the helper side once JDK 22+ is the baseline.
     Creating the JVM still needs the JNI invocation API.

@@ -14,6 +14,20 @@ public final class Foreign {
 	private static final Cleaner cleaner = Cleaner.create();
 	private static final Map<Long, WeakReference<Foreign>> cache = new HashMap<>();
 
+	/*
+	 * Under a plain java program (the binding), our natives come from the
+	 * library libugly_jni.so (-Dugly.library=<path> names it explicitly),
+	 * whose JNI_OnLoad attaches UGLY to this JVM, on this thread. When UGLY
+	 * started the JVM (the plugin), it registered them already and said so.
+	 */
+	static {
+		if (! Boolean.getBoolean("ugly.embedded")){
+			String lib = System.getProperty("ugly.library");
+			if (lib != null) System.load(lib);
+			else System.loadLibrary("ugly_jni");
+		}
+	}
+
 	final long handle;
 
 	private Foreign(long handle){

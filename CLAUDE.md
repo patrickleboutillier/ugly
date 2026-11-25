@@ -46,15 +46,16 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
     - Calls run in list context and collapse (`call_perl`). Never `PUSHMARK` before `eval_sv`: it pushes its own mark.
     - The binding (`binding/`: `lib/Ugly.pm`, `auto/Ugly/Ugly.so`, `boot_Ugly`) attaches to the running perl. `END { Ugly::_teardown() }` tears down. Its test sets `PERL_DESTRUCT_LEVEL=2`, so the host frees everything and valgrind measures only UGLY.
   - **`java/`** is Java through JNI (JDK 21+, found via `javac`; `-ljvm` with an rpath to `lib/server`).
-    - One JVM per process, created in `init` (or the running one reused), with `-Xrs` and the class path `<plugin dir>/ugly.jar:$UGLY_JAVA_CLASSPATH:$CLASSPATH`. No capability flags.
+    - One JVM per process, created in `init` (or the running one reused), with `-Xrs` and the class path `<plugin dir>/ugly.jar:$UGLY_JAVA_CLASSPATH:$CLASSPATH`. Only `UGLY_CAP_ATTACH`.
     - Most of the protocol is Java, in `ugly/Bridge.java`: reflection, bean getters, `Map` keys, arrays and `List`s, and overloads chosen by `score()`. A foreign value passed for an interface becomes a dynamic proxy (`ForeignHandler`).
     - `ugly.Foreign` holds a handle, released by a `Cleaner` and cached per handle; its natives are registered from `java.c`. Errors from elsewhere are `ugly.ForeignException`, which owns the core's error until it leaves Java.
     - Refs are global refs; identity is an id from `Bridge.acquireId` (an `IdentityHashMap`), since objects move. Strings are converted from UTF-16 in C, never via modified UTF-8.
     - Every op runs in `FRAME_IN`/`FRAME_OUT`, and every JNI call that can throw is followed by `JCHECK` or `drop_exception`.
     - JVM output goes to stderr (the `vfprintf` hook). `UGLY_JAVA_CHECK` adds `-Xcheck:jni` and aborts on a JNI warning at `FRAME_OUT`; the tests set it. Its signal checker prints "handler modified" noise at `exit()`, harmlessly, now on stderr.
     - Java tests are in suite `jvm`, which the valgrind setup excludes. The fixture is `tests/java/conformance.java`, built into `conformance.jar`.
+    - The binding (`binding/`, `libugly_jni.so`, no libjvm) is loaded by `ugly.Foreign`'s static initializer unless `-Dugly.embedded=true` (set by the plugin when it creates the JVM). `JNI_OnLoad` registers and attaches on the loading thread; teardown is at JVMTI VMDeath, which runs on `main`'s thread (shutdown hooks run on new threads, which own no ctx). Its test runs `java` with `-Xcheck:jni -XX:+DisplayVMOutputToStderr`, and its last TAP line comes from a Lua finalizer at teardown.
   - Proxies in all five languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
-  - **Bindings** (`plugins/<lang>/binding/`) compile the plugin's own source again with `-DUGLY_BINDING`, as the native module `ugly`: `luaopen_ugly`, and `PyInit_ugly` via `pyinst.extension_module`. They link **no interpreter library**, because Debian's `python3` and `lua5.4` are statically linked and a second interpreter in the process would be fatal.
+  - **Bindings** (`plugins/<lang>/binding/`) compile the plugin's own source again with `-DUGLY_BINDING`, as the native module `ugly`: `luaopen_ugly`, `PyInit_ugly` via `pyinst.extension_module`, and Java's `JNI_OnLoad` in `libugly_jni.so`. They link **no interpreter library**, because Debian's `python3` and `lua5.4` are statically linked and a second interpreter in the process would be fatal.
     - On import, a binding calls `ugly_lang_register` (no dlopen) and `ugly_rt_attach` on the host interpreter. Teardown is a `__gc` sentinel in Lua and `atexit` in Python.
     - Every runtime, embedded or attached, preloads the same `ugly` module: `ugly.module(lang, name)` and `ugly.eval(lang, code)`, which use `ugly_rt_get`, plus `is_error`/`is_proxy` in Lua and `Error`/`Proxy`/`rethrow` in Python.
     - The Lua plugin keeps its runtime in the registry (`ugly.rt`), not `LUA_EXTRASPACE`, and converts on the `lua_State` it was given, so it works inside coroutines.
@@ -64,7 +65,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - Fixtures are each plugin's `conformance` module, in `tests/lua/` and `tests/python/` (the mock's are built in). The spec is in contract §9.
   - Expectations that depend on the language are "exact or refused". Tests that need a capability a plugin lacks report a SKIP; they never drop checks silently.
 - **`examples/`**: programs built and run as tests by exit status, which README quotes. `python_from_lua.lua` is a plain Lua script using Python's standard library through the binding (README's lead example). `polyglot.c` is a C host using `ugly_rt_get`.
-- **Binding tests** (suite `bindings`): `tests/python/test_binding.py` runs under the `python3` that Meson found, and `tests/lua/test_binding.lua` under `lua5.4`. Both are TAP, and the Lua one ends with `os.exit(code, true)`, so the state closes and the binding tears down.
+- **Binding tests** (suite `bindings`): `tests/python/test_binding.py` runs under the `python3` that Meson found, and `tests/lua/test_binding.lua` under `lua5.4`, and `tests/java/test_binding.java` under `java` (suites `bindings` and `jvm`). All are TAP, and the Lua one ends with `os.exit(code, true)`, so the state closes and the binding tears down.
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
@@ -83,11 +84,11 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## State (2026-11-25)
 
-- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS), Perl 5 and Java, bindings for Lua, Python, JS (qjs) and Perl, the conformance suite (48 runs: 8 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (4) and two examples. 84 tests pass; the 66 without a JVM are clean under valgrind, and helgrind finds no races.
+- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS), Perl 5 and Java, bindings for Lua, Python, JS (qjs), Perl and Java, the conformance suite (48 runs: 8 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (5) and two examples. 85 tests pass; the 66 without a JVM are clean under valgrind, and helgrind finds no races.
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
 - **The plan in contract.md is complete** (2026-11-24): QuickJS, the JS binding, and Perl with its binding are done. Perl's open questions were decided with Claude's recommendations (contract decisions 9–12). Decision 6, Latin-1 decoding, was **revised** so that bytes round-trip; it's flagged to the author in the contract.
-- **Java (2026-11-25)** was the first language after the plan; it has no binding yet (TODO.md).
+- **Java (2026-11-25)** was the first language after the plan, with its binding.
 - **Next:** whatever the author picks from `TODO.md`. The HAProxy and embedded-Lua items are the motivating ones: any-thread runtimes, lazy Python init, and Lua 5.3/LuaJIT. CI and Node.js (N-API) are also there.
 - **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
 
