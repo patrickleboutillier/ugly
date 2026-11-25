@@ -409,4 +409,7 @@ valgrind would wrap their runner, not HAProxy.
 
 ## License
 
-GPL v3. See [COPYING](COPYING).
+Apache License 2.0. See [LICENSE](LICENSE).
+
+Releases up to 2.4.0, and the `v0.01` and `v0.02` tags, were published under
+the GPL v3, and stay under it; later versions are Apache-2.0.

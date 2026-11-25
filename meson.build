@@ -11,7 +11,7 @@
 
 project('ugly', 'c',
   version: '2.4.0',
-  license: 'GPL-3.0-or-later',
+  license: 'Apache-2.0',
   meson_version: '>= 0.61',
   default_options: [
     'c_std=gnu11',

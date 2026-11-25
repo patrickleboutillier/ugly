@@ -11,9 +11,9 @@ name: CI
 on:
   push:
     branches: [master]
-    paths-ignore: ['**.md', 'doc/**', 'COPYING', '.gitignore']
+    paths-ignore: ['**.md', 'doc/**', 'LICENSE', '.gitignore']
   pull_request:
-    paths-ignore: ['**.md', 'doc/**', 'COPYING', '.gitignore']
+    paths-ignore: ['**.md', 'doc/**', 'LICENSE', '.gitignore']
   workflow_dispatch:
 
 permissions:
