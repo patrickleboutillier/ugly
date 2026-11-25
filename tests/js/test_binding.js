@@ -46,6 +46,13 @@ try {
 const math = ugly.module("python", "math");
 ok(Math.abs(math.sqrt(2) - 1.4142135623731) < 1e-9, "Python's math.sqrt from JS");
 ok(ugly.module("lua", "string").upper("abc") === "ABC", "Lua's string.upper from JS");
+
+// README's example: Python's standard library only.
+const functools = ugly.module("python", "functools");
+ok(functools.reduce((a, b) => a * b, [1, 2, 3, 4, 5]) === 120,
+   "functools.reduce calls a JS arrow function over a JS array");
+const date = ugly.module("python", "datetime").date(2026, 11, 25);
+ok(date.isoformat() === "2026-11-25" && date.year === 2026, "a Python datetime.date: isoformat() and year");
 ok(ugly.eval("python", "6 * 7") === 42, "ugly.eval('python', code)");
 
 // Python code using JS through its own ugly module, reaching back into this very interpreter.

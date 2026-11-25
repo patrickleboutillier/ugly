@@ -71,6 +71,15 @@ All additive; none of it breaks existing plugins (contract, "Scope").
     and slice assignment in Python; `table.insert` can't reach a proxy in
     Lua, but a `__newindex` past the end already appends; JS `delete` and
     `push` on proxies.
+- [ ] **Foreign functions in Lua's C library.** A foreign function is
+  callable userdata in Lua, and `string.gsub`, `table.sort`,
+  `coroutine.wrap` and the like check for a real function, so
+  `string.gsub(s, p, pyfunc)` fails ("got ugly.proxy"). Calling it from
+  Lua code, `pcall` and metamethods work. A fix: a foreign value that is
+  CALLABLE but not INSTANTIABLE becomes a C closure holding the proxy, and
+  unwraps by its upvalue when it goes home. The cost is `f.attr` on such
+  values (Python functions' attributes, callable objects' members), since
+  all Lua functions share one metatable.
 - [ ] **Perl sugar still missing**: stringifying a proxy with its own
   language's `str()`/`tostring` (needs a "to string" operation), `0+`,
   `<=>` and `cmp` overloads (today `fallback => 1` turns `$p + 1` into

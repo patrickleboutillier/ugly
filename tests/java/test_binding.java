@@ -1,5 +1,6 @@
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BinaryOperator;
 import java.util.function.Function;
 
 import ugly.Foreign;
@@ -12,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 21;
+	static final int PLAN = 24;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -107,6 +108,20 @@ public class test_binding {
 			}
 			Foreign json = (Foreign)Ugly.module("python", "json");
 			ok("[1, 2, 3]".equals(json.invoke("dumps", Ugly.eval("python", "[1, 2, 3]"))), "Python's json.dumps");
+		});
+
+		check("readme", () -> {
+			// README's example: standard libraries only.
+			Foreign functools = (Foreign)Ugly.module("python", "functools");
+			BinaryOperator<Object> times = (a, b) -> (Long)a * (Long)b;
+			ok(Long.valueOf(120).equals(functools.invoke("reduce", times, List.of(1L, 2L, 3L, 4L, 5L))),
+				"functools.reduce calls a Java lambda over a Java list");
+			Foreign string = (Foreign)Ugly.module("lua", "string");
+			ok("3 items at 9.50".equals(string.invoke("format", "%d items at %.2f", 3, 9.5)),
+				"Lua's string.format");
+			Foreign date = (Foreign)((Foreign)Ugly.module("python", "datetime")).invoke("date", 2026, 11, 25);
+			ok("2026-11-25".equals(date.invoke("isoformat")) && Long.valueOf(2026).equals(date.get("year")),
+				"a Python datetime.date: isoformat() and year");
 		});
 
 		check("js", () -> {
