@@ -24,6 +24,13 @@
 #include <lauxlib.h>
 #include <lualib.h>
 
+/* Lua 5.3 and 5.4 (-Dlua_version): what 5.4 added that this file uses. */
+#if LUA_VERSION_NUM < 503
+#error "the Lua plugin needs Lua 5.3 or 5.4"
+#elif LUA_VERSION_NUM == 503
+#define lua_newuserdatauv(L, size, nuv) lua_newuserdata((L), (size))
+#endif
+
 #include "ugly_plugin.h"
 
 

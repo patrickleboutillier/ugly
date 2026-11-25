@@ -1,5 +1,7 @@
 option('lua', type: 'feature', value: 'auto',
-  description: 'The Lua 5.4 plugin (needs liblua5.4-dev)')
+  description: 'The Lua plugin, and the Lua binding for every Lua found (needs liblua5.4-dev or liblua5.3-dev)')
+option('lua_version', type: 'combo', choices: ['auto', '5.4', '5.3'], value: 'auto',
+  description: 'The Lua the plugin is built against (auto: 5.4, else 5.3)')
 option('python', type: 'feature', value: 'auto',
   description: 'The CPython plugin (needs python3-dev)')
 option('js', type: 'feature', value: 'auto',
