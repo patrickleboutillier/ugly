@@ -158,10 +158,13 @@ All additive; none of it breaks existing plugins (contract, "Scope").
 
 ## Engineering
 
-- [ ] **CI**: a GitHub Actions workflow that builds with and without each
-  optional language, then runs `meson test`, the valgrind setup, and
-  helgrind on the threads group. Today, every check runs only on the
-  author's machine.
+- [x] **CI** (done 2026-11-25, `.github/workflows/ci.yml`): all languages
+  on Ubuntu 22.04 and 24.04 with `-Dwerror=true`, `meson test`, valgrind
+  and helgrind (threads group); one build without each language, and one
+  with none.
+  - [ ] A Lua version axis, once the plugin builds against 5.3 and LuaJIT
+    (one Lua per process: the version is a build option, and bindings are
+    built for every Lua found).
 - [ ] **Attach tests in C.** Attach mode is tested only through the binding
   scripts. A C test that creates its own Lua state and attaches to it would
   bring attach into the conformance suite proper.

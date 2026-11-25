@@ -33,7 +33,7 @@ jobs:
         os: [ubuntu-22.04, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
@@ -47,7 +47,7 @@ jobs:
           echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
 
       - name: Cache the QuickJS download
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: subprojects/packagecache
           key: quickjs-${{ hashFiles('subprojects/quickjs.wrap') }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Keep the test logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: testlogs-${{ matrix.os }}
           path: build/meson-logs/
@@ -86,7 +86,7 @@ jobs:
         language: [lua, python, js, perl5, java]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -95,7 +95,7 @@ jobs:
         run: |
           echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
           echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: subprojects/packagecache
           key: quickjs-${{ hashFiles('subprojects/quickjs.wrap') }}
@@ -107,7 +107,7 @@ jobs:
     name: core and mock only
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install dependencies
         run: |
           sudo apt-get update

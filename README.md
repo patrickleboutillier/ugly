@@ -1,5 +1,7 @@
 # UGLY: Ultimate Glue LaYer
 
+[![CI](https://github.com/patrickleboutillier/ugly/actions/workflows/ci.yml/badge.svg)](https://github.com/patrickleboutillier/ugly/actions/workflows/ci.yml)
+
 UGLY is a C library for calling between programming languages **inside one
 process**. It embeds the real interpreters (Lua, CPython, QuickJS,
 Perl 5 and the JVM) and routes every cross-language call through a small, language-neutral C core.
