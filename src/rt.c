@@ -24,18 +24,32 @@ static const char *kind_name(ugly_kind k){
 /* Frames                                                           */
 /* ---------------------------------------------------------------- */
 
+int rt_any_thread(const ugly_rt *rt){
+	return (rt->lang->plugin->caps & UGLY_CAP_ANY_THREAD) != 0 ;
+}
+
+
 ugly_status rt_enter(ugly_ctx *ctx, ugly_rt *rt, frame *f){
-	if (! on_thread(rt->thread)){
+	if ((! rt_any_thread(rt))&&(! on_thread(rt->thread))){
 		return ctx_fail(ctx, UGLY_ERR_WRONG_THREAD, "core", "", "runtime of %s used from another thread",
-			rt->lang->name) ;
-	}
-	if (rt->dying){
-		return ctx_fail(ctx, UGLY_ERR_STALE_HANDLE, "core", "", "runtime of %s is being deleted",
 			rt->lang->name) ;
 	}
 	if (ctx->depth >= UGLY_MAX_DEPTH){
 		return ctx_fail(ctx, UGLY_ERR_TOO_DEEP, "core", "RecursionError", "calls nested more than %d deep",
 			UGLY_MAX_DEPTH) ;
+	}
+	/*
+	 * Count ourselves in, then look for a deletion: rt_destroy marks the
+	 * runtime closing, then looks for entries. One of the two sees the other
+	 * (sequentially consistent), so no thread is inside once it proceeds.
+	 * The deleting thread itself may still enter (finalizers).
+	 */
+	__atomic_add_fetch(&rt->depth, 1, __ATOMIC_SEQ_CST) ;
+	if (__atomic_load_n(&rt->dying, __ATOMIC_SEQ_CST)
+		||(__atomic_load_n(&rt->closing, __ATOMIC_SEQ_CST)&&(! pthread_equal(rt->closer, pthread_self())))){
+		__atomic_sub_fetch(&rt->depth, 1, __ATOMIC_SEQ_CST) ;
+		return ctx_fail(ctx, UGLY_ERR_STALE_HANDLE, "core", "", "runtime of %s is being deleted",
+			rt->lang->name) ;
 	}
 	memset(f, 0, sizeof(frame)) ;
 	f->borrows = f->inline_borrows ;
@@ -44,13 +58,12 @@ ugly_status rt_enter(ugly_ctx *ctx, ugly_rt *rt, frame *f){
 	ctx->top = f ;
 	ctx->depth++ ;
 	h_drain(rt) ;
-	rt->depth++ ;
 	return UGLY_OK ;
 }
 
 
 void rt_leave(ugly_ctx *ctx, ugly_rt *rt, frame *f){
-	rt->depth-- ;
+	__atomic_sub_fetch(&rt->depth, 1, __ATOMIC_SEQ_CST) ;
 	size_t i ;
 	for (i = 0 ; i < f->nborrows ; i++){
 		h_revoke(f->borrows[i]) ;
@@ -155,8 +168,32 @@ ugly_status rt_create(ugly_ctx *ctx, ugly_lang *lang, void *existing, int attach
 }
 
 
+void rt_free(ugly_rt *rt){
+	free(rt->pending) ;
+	free(rt) ;
+}
+
+
+/* Drops one share (a ctx's auto entry): the last one destroys or frees the runtime. */
+void rt_unshare(ugly_ctx *ctx, ugly_rt *rt){
+	switch (lang_rt_unshare(rt)){
+		case RT_DESTROY:
+			if (rt_destroy(ctx, rt) != UGLY_OK){
+				lang_rt_shares(rt, 1, 0) ;     /* another thread is inside: it lives on, held by nobody */
+			}
+			break ;
+		case RT_FREE:
+			rt_free(rt) ;
+			break ;
+	}
+}
+
+
 ugly_status rt_destroy(ugly_ctx *ctx, ugly_rt *rt){
-	if (rt->depth > 0){
+	rt->closer = pthread_self() ;
+	__atomic_store_n(&rt->closing, 1, __ATOMIC_SEQ_CST) ;
+	if (__atomic_load_n(&rt->depth, __ATOMIC_SEQ_CST) > 0){
+		__atomic_store_n(&rt->closing, 0, __ATOMIC_SEQ_CST) ;
 		return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "can't delete a runtime of %s during a call into it",
 			rt->lang->name) ;
 	}
@@ -181,7 +218,7 @@ ugly_status rt_destroy(ugly_ctx *ctx, ugly_rt *rt){
 			break ;
 		}
 	}
-	rt->dying = 1 ;
+	__atomic_store_n(&rt->dying, 1, __ATOMIC_SEQ_CST) ;
 
 	ugly_status st = rt->lang->plugin->rt_delete(ctx, rt, rt->native) ;
 	lang_remove_rt(rt->lang, rt) ;
@@ -189,12 +226,14 @@ ugly_status rt_destroy(ugly_ctx *ctx, ugly_rt *rt){
 	size_t i ;
 	for (i = 0 ; i < ctx->nautos ; i++){
 		if (ctx->autos[i].rt == rt){
-			/* Deleted by hand: the ctx no longer owns it (its language load stays counted). */
+			/* Deleted by hand: the ctx no longer holds it (its language load stays counted). */
 			ctx->autos[i].rt = NULL ;
+			lang_rt_shares(rt, -1, 0) ;
 		}
 	}
-	free(rt->pending) ;
-	free(rt) ;
+	if (lang_rt_mark_destroyed(rt)){
+		rt_free(rt) ;
+	}
 	return st ;
 }
 
@@ -248,7 +287,7 @@ ugly_status ugly_rt_delete(ugly_ctx *ctx, ugly_rt *rt){
 	if (rt == ctx->host){
 		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "the host runtime is deleted with its ctx") ;
 	}
-	if (! on_thread(rt->thread)){
+	if ((! rt_any_thread(rt))&&(! on_thread(rt->thread))){
 		return ctx_fail(ctx, UGLY_ERR_WRONG_THREAD, "core", "", "runtime deleted from another thread") ;
 	}
 	return rt_destroy(ctx, rt) ;
@@ -357,7 +396,19 @@ ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out){
 		}
 		loaded = lang ;
 	}
-	ugly_rt *rt = lang_find_rt_on_thread(lang) ;
+	/* One this ctx already holds, or one created on this thread. */
+	size_t i ;
+	ugly_rt *rt = NULL ;
+	for (i = 0 ; (i < ctx->nautos)&&(rt == NULL) ; i++){
+		ugly_rt *a = ctx->autos[i].rt ;
+		if ((a != NULL)&&(a->lang == lang)&&(! __atomic_load_n(&a->dying, __ATOMIC_SEQ_CST))
+			&&(! __atomic_load_n(&a->closing, __ATOMIC_SEQ_CST))){
+			rt = a ;
+		}
+	}
+	if (rt == NULL){
+		rt = lang_find_rt_on_thread(lang) ;
+	}
 	if (rt != NULL){
 		if (loaded != NULL){
 			ugly_lang_unload(ctx, loaded) ;     /* can't happen (a new language has no runtime), but stay balanced */
@@ -377,6 +428,17 @@ ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out){
 		ctx->autos = na ;
 		ctx->autos_cap = ncap ;
 	}
+	/* A language whose runtimes any thread may enter: share the one there is (Python has only one). */
+	if (lang->plugin->caps & UGLY_CAP_ANY_THREAD){
+		rt = lang_share_rt(lang) ;
+		if (rt != NULL){
+			ctx->autos[ctx->nautos].rt = rt ;
+			ctx->autos[ctx->nautos].loaded = loaded ;
+			ctx->nautos++ ;
+			*out = rt ;
+			return UGLY_OK ;
+		}
+	}
 	st = ugly_rt_new(ctx, lang, &rt) ;
 	if (st != UGLY_OK){
 		if (loaded != NULL){
@@ -386,6 +448,7 @@ ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out){
 		}
 		return st ;
 	}
+	lang_rt_shares(rt, 1, 1) ;     /* this ctx's share; the last one destroys it */
 	ctx->autos[ctx->nautos].rt = rt ;
 	ctx->autos[ctx->nautos].loaded = loaded ;
 	ctx->nautos++ ;

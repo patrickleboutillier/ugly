@@ -23,6 +23,38 @@ int on_thread(pthread_t t){
 /* Contexts                                                         */
 /* ---------------------------------------------------------------- */
 
+/* ugly_ctx_thread's ctxs, deleted by this key's destructor when their thread exits. */
+static pthread_key_t thread_key ;
+static pthread_once_t thread_key_once = PTHREAD_ONCE_INIT ;
+
+static void ctx_at_thread_exit(void *p){
+	if (p == current){
+		ugly_ctx_delete(p) ;
+	}
+}
+
+static void make_thread_key(void){
+	pthread_key_create(&thread_key, ctx_at_thread_exit) ;
+}
+
+
+ugly_status ugly_ctx_thread(ugly_ctx **out){
+	if (out == NULL){
+		return UGLY_ERR_USAGE ;
+	}
+	if (current != NULL){
+		*out = current ;
+		return UGLY_OK ;
+	}
+	ugly_status st = ugly_ctx_new(out) ;
+	if (st == UGLY_OK){
+		pthread_once(&thread_key_once, make_thread_key) ;
+		pthread_setspecific(thread_key, *out) ;
+	}
+	return st ;
+}
+
+
 ugly_status ugly_ctx_new(ugly_ctx **out){
 	if (out == NULL){
 		return UGLY_ERR_USAGE ;
@@ -54,11 +86,15 @@ void ugly_ctx_delete(ugly_ctx *ctx){
 	if ((ctx == NULL)||(! on_thread(ctx->thread))||(ctx->top != NULL)){
 		return ;
 	}
-	/* Runtimes ugly_rt_get created, newest first, and the language loads they made. */
+	/*
+	 * Runtimes ugly_rt_get gave this ctx, newest first, and the language
+	 * loads they made. Each is a share: the last one destroys a runtime
+	 * ugly_rt_get created (on whichever thread that is).
+	 */
 	while (ctx->nautos > 0){
 		struct auto_rt a = ctx->autos[--ctx->nautos] ;
 		if (a.rt != NULL){
-			rt_destroy(ctx, a.rt) ;
+			rt_unshare(ctx, a.rt) ;
 		}
 		if (a.loaded != NULL){
 			ugly_lang_unload(ctx, a.loaded) ;

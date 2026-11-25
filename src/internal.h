@@ -53,9 +53,21 @@ struct ugly_rt {
 	ugly_lang *lang ;
 	struct ugly_rt *lang_next ;
 	void *native ;
-	pthread_t thread ;
-	int depth ;                  /* calls into this runtime in progress */
-	int dying ;                  /* ugly_rt_delete in progress */
+	pthread_t thread ;           /* the creator: the only thread that may enter, unless UGLY_CAP_ANY_THREAD */
+	int depth ;                  /* calls into this runtime in progress, on all threads (atomic) */
+	int dying ;                  /* being torn down: no entry at all (atomic) */
+	int closing ;                /* deletion started: only 'closer' may still enter (atomic) */
+	pthread_t closer ;
+
+	/*
+	 * Shared runtimes (UGLY_CAP_ANY_THREAD; langs lock). Each ctx auto entry
+	 * that holds the runtime is a share. One that ugly_rt_get created
+	 * (auto_created) is destroyed with its last share; one that is destroyed
+	 * while shared stays allocated, dead, until its last share goes.
+	 */
+	int shares ;
+	int auto_created ;
+	int destroyed ;
 
 	/* Native refs whose last handle reference was dropped on another thread
 	 * (protected by the handle table's lock). */
@@ -65,7 +77,10 @@ struct ugly_rt {
 
 
 /* ctx.c */
-ugly_status ctx_check(ugly_ctx *ctx) ;                      /* right thread; clears the error */
+ugly_status ctx_check(ugly_ctx *ctx) ;
+int rt_any_thread(const ugly_rt *rt) ;
+void rt_free(ugly_rt *rt) ;
+void rt_unshare(ugly_ctx *ctx, ugly_rt *rt) ;                      /* right thread; clears the error */
 ugly_status ctx_fail(ugly_ctx *ctx, ugly_status status, const char *language, const char *type,
 	const char *fmt, ...) ;
 void ctx_set_error(ugly_ctx *ctx, ugly_error *err) ;
@@ -98,7 +113,12 @@ ugly_lang *lang_builtin_c(void) ;
 void lang_add_rt(ugly_lang *lang, ugly_rt *rt) ;
 void lang_remove_rt(ugly_lang *lang, ugly_rt *rt) ;
 ugly_lang *lang_find(const char *name) ;
-ugly_rt *lang_find_rt_on_thread(ugly_lang *lang) ;     /* the oldest live runtime owned by this thread */     /* a loaded language, or NULL; no load is counted */
+ugly_rt *lang_find_rt_on_thread(ugly_lang *lang) ;
+ugly_rt *lang_share_rt(ugly_lang *lang) ;             /* a live runtime on any thread, with one more share; or NULL */
+void lang_rt_shares(ugly_rt *rt, int delta, int auto_created) ;
+enum { RT_KEEP, RT_DESTROY, RT_FREE } ;
+int lang_rt_unshare(ugly_rt *rt) ;                    /* drops a share: what the caller must do now */
+int lang_rt_mark_destroyed(ugly_rt *rt) ;              /* 1 if no share is left, so it can be freed */     /* the oldest live runtime owned by this thread */     /* a loaded language, or NULL; no load is counted */
 
 /* host.c: the built-in "c" language (callables, lists, maps) */
 extern const ugly_plugin ugly_c_plugin ;

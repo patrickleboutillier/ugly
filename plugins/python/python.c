@@ -393,10 +393,21 @@ static PyObject *args_tuple(ugly_ctx *ctx, const ugly_val *args, size_t n){
 /* ugly.Proxy                                                       */
 /* ---------------------------------------------------------------- */
 
+/*
+ * A call out of Python, through the core into another language. The GIL is
+ * released meanwhile: other threads run Python while the other language
+ * works, and a callback into Python from another thread can't deadlock on
+ * it (it takes the GIL back with PyGILState_Ensure). Arguments are converted
+ * before, results after, with the GIL held.
+ */
+#define OUT(call) ({ ugly_status out_st_ ; Py_BEGIN_ALLOW_THREADS out_st_ = (call) ; Py_END_ALLOW_THREADS out_st_ ; })
+
+
+/* This thread's ctx; a Python thread that has none gets one, deleted when it ends (ugly_ctx_thread). */
 static ugly_ctx *need_ctx(void){
-	ugly_ctx *ctx = ugly_current_ctx() ;
-	if (ctx == NULL){
-		PyErr_SetString(PyExc_RuntimeError, "ugly: no ctx on this thread") ;
+	ugly_ctx *ctx = NULL ;
+	if (ugly_ctx_thread(&ctx) != UGLY_OK){
+		PyErr_SetString(PyExc_RuntimeError, "ugly: can't create a ctx on this thread") ;
 	}
 	return ctx ;
 }
@@ -458,7 +469,7 @@ static PyObject *proxy_call(PyObject *self, PyObject *args, PyObject *kw){
 		return NULL ;
 	}
 	ugly_val out = ugly_null() ;
-	ugly_status st = ugly_call(ctx, ((proxy *)self)->h, a, (size_t)n, UGLY_ANY, &out) ;
+	ugly_status st = OUT(ugly_call(ctx, ((proxy *)self)->h, a, (size_t)n, UGLY_ANY, &out)) ;
 	free_args(ctx, a, n) ;
 	return result(ctx, st, &out) ;
 }
@@ -478,7 +489,7 @@ static PyObject *invoke_bound(PyObject *bound, PyObject *args){
 		return NULL ;
 	}
 	ugly_val out = ugly_null() ;
-	ugly_status st = ugly_invoke(ctx, p->h, name, a, (size_t)n, UGLY_ANY, &out) ;
+	ugly_status st = OUT(ugly_invoke(ctx, p->h, name, a, (size_t)n, UGLY_ANY, &out)) ;
 	free_args(ctx, a, n) ;
 	return result(ctx, st, &out) ;
 }
@@ -510,7 +521,7 @@ static PyObject *proxy_getattro(PyObject *self, PyObject *name){
 		return NULL ;
 	}
 	ugly_val out = ugly_null() ;
-	ugly_status st = ugly_get_member(ctx, ((proxy *)self)->h, n, UGLY_ANY, &out) ;
+	ugly_status st = OUT(ugly_get_member(ctx, ((proxy *)self)->h, n, UGLY_ANY, &out)) ;
 	if ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)){
 		return bound_method(self, name) ;     /* not a member: a method of the foreign object */
 	}
@@ -518,7 +529,7 @@ static PyObject *proxy_getattro(PyObject *self, PyObject *name){
 		/* A callable member is a method: obj.m(...) invokes it, with the foreign receiver rules. */
 		uint32_t traits = 0 ;
 		ugly_val tn ;
-		if ((ugly_describe(ctx, out.as.h, &traits, &tn) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)){
+		if ((OUT(ugly_describe(ctx, out.as.h, &traits, &tn)) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)){
 			ugly_val_release(ctx, &tn) ;
 			ugly_val_release(ctx, &out) ;
 			return bound_method(self, name) ;
@@ -542,7 +553,7 @@ static int proxy_setattro(PyObject *self, PyObject *name, PyObject *value){
 	ugly_val v ;
 	ugly_status st = to_val(ctx, value, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){
-		st = ugly_set_member(ctx, ((proxy *)self)->h, n, v) ;
+		st = OUT(ugly_set_member(ctx, ((proxy *)self)->h, n, v)) ;
 		ugly_val_release(ctx, &v) ;
 	}
 	if (st != UGLY_OK){
@@ -559,7 +570,7 @@ static PyObject *proxy_item(PyObject *self, Py_ssize_t i){
 		return NULL ;
 	}
 	ugly_val out = ugly_null() ;
-	ugly_status st = ugly_get_index(ctx, ((proxy *)self)->h, (int64_t)i, UGLY_ANY, &out) ;
+	ugly_status st = OUT(ugly_get_index(ctx, ((proxy *)self)->h, (int64_t)i, UGLY_ANY, &out)) ;
 	if (st == UGLY_ERR_NOT_FOUND){
 		PyErr_SetString(PyExc_IndexError, "index out of range") ;     /* also ends iteration */
 		return NULL ;
@@ -585,7 +596,7 @@ static PyObject *proxy_subscript(PyObject *self, PyObject *key){
 		return NULL ;
 	}
 	ugly_val out = ugly_null() ;
-	ugly_status st = ugly_get_member(ctx, ((proxy *)self)->h, k, UGLY_ANY, &out) ;
+	ugly_status st = OUT(ugly_get_member(ctx, ((proxy *)self)->h, k, UGLY_ANY, &out)) ;
 	if (st == UGLY_ERR_NOT_FOUND){
 		PyErr_SetObject(PyExc_KeyError, key) ;
 		return NULL ;
@@ -607,10 +618,10 @@ static int proxy_ass_subscript(PyObject *self, PyObject *key, PyObject *value){
 	ugly_status st = to_val(ctx, value, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){
 		if (PyIndex_Check(key)){
-			st = ugly_set_index(ctx, ((proxy *)self)->h, (int64_t)PyNumber_AsSsize_t(key, NULL), v) ;
+			st = OUT(ugly_set_index(ctx, ((proxy *)self)->h, (int64_t)PyNumber_AsSsize_t(key, NULL), v)) ;
 		}
 		else if (PyUnicode_Check(key)){
-			st = ugly_set_member(ctx, ((proxy *)self)->h, PyUnicode_AsUTF8(key), v) ;
+			st = OUT(ugly_set_member(ctx, ((proxy *)self)->h, PyUnicode_AsUTF8(key), v)) ;
 		}
 		else {
 			st = UGLY_ERR_USAGE ;
@@ -631,7 +642,7 @@ static Py_ssize_t proxy_length(PyObject *self){
 		return -1 ;
 	}
 	int64_t n = 0 ;
-	ugly_status st = ugly_length(ctx, ((proxy *)self)->h, &n) ;
+	ugly_status st = OUT(ugly_length(ctx, ((proxy *)self)->h, &n)) ;
 	if (st != UGLY_OK){
 		raise_ugly(ctx, st) ;
 		return -1 ;
@@ -664,7 +675,7 @@ static PyObject *proxy_repr(PyObject *self){
 	uint32_t traits = 0 ;
 	ugly_val tn = ugly_null() ;
 	PyObject *r ;
-	if ((ctx != NULL)&&(ugly_describe(ctx, ((proxy *)self)->h, &traits, &tn) == UGLY_OK)){
+	if ((ctx != NULL)&&(OUT(ugly_describe(ctx, ((proxy *)self)->h, &traits, &tn)) == UGLY_OK)){
 		r = PyUnicode_FromFormat("<ugly.Proxy %s>", tn.as.str.ptr) ;
 	}
 	else {
@@ -762,12 +773,12 @@ static PyObject *mod_module(PyObject *mod, PyObject *args){
 		return NULL ;
 	}
 	ugly_rt *rt ;
-	ugly_status st = ugly_rt_get(ctx, lang, &rt) ;
+	ugly_status st = OUT(ugly_rt_get(ctx, lang, &rt)) ;
 	if (st != UGLY_OK){
 		return raise_ugly(ctx, st) ;
 	}
 	ugly_handle h ;
-	st = ugly_rt_import(ctx, rt, name, &h) ;
+	st = OUT(ugly_rt_import(ctx, rt, name, &h)) ;
 	ugly_val v = ugly_hval(h) ;
 	return result(ctx, st, &v) ;
 }
@@ -786,12 +797,12 @@ static PyObject *mod_eval(PyObject *mod, PyObject *args){
 		return NULL ;
 	}
 	ugly_rt *rt ;
-	ugly_status st = ugly_rt_get(ctx, lang, &rt) ;
+	ugly_status st = OUT(ugly_rt_get(ctx, lang, &rt)) ;
 	if (st != UGLY_OK){
 		return raise_ugly(ctx, st) ;
 	}
 	ugly_val out = ugly_null() ;
-	st = ugly_rt_eval(ctx, rt, code, (size_t)len, UGLY_ANY, &out) ;
+	st = OUT(ugly_rt_eval(ctx, rt, code, (size_t)len, UGLY_ANY, &out)) ;
 	return result(ctx, st, &out) ;
 }
 
@@ -1344,7 +1355,7 @@ static ugly_status py_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
-	.caps = UGLY_CAP_EVAL | UGLY_CAP_ATTACH,
+	.caps = UGLY_CAP_EVAL | UGLY_CAP_ATTACH | UGLY_CAP_ANY_THREAD,     /* the GIL serializes every entry */
 	.name = "python",
 	.init = py_init,
 	.rt_new = py_rt_new,

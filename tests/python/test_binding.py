@@ -83,6 +83,30 @@ ok(sorted(["banana", "Apple", "cherry"], key=string.lower) == ["Apple", "banana"
 ok(string.gsub("hello world", "%w+", str.capitalize) == "Hello World",
    "Lua's string.gsub takes a Python function (a real Lua function in Lua)")
 
+# Threads: a Python thread gets its own ctx and its own Lua; Lua values stay on their thread.
+import threading
+
+seen = {}
+
+
+def work():
+    try:
+        seen["lua"] = ugly.module("lua", "string").upper("abc")
+    except Exception as e:
+        seen["lua"] = e
+    try:
+        string.upper("x")      # the main thread's Lua
+    except Exception as e:
+        seen["other"] = e
+
+
+t = threading.Thread(target=work)
+t.start()
+t.join()
+ok(seen.get("lua") == "ABC", f"a Python thread gets its own ctx and Lua runtime: {seen.get('lua')!r}")
+ok(isinstance(seen.get("other"), ugly.Error) and "another thread" in seen["other"].message,
+   f"  ... and the main thread's Lua values stay the main thread's: {seen.get('other')!r}")
+
 # Foreign functions are Lua functions; classes stay userdata.
 nums = ugly.eval("lua", "return { 3, 1, 2 }")
 ugly.module("lua", "table").sort(nums, lambda a, b: a > b)
