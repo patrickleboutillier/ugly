@@ -33,6 +33,7 @@ typedef struct pyrt {
 static pyrt *current_rt ;        /* the one runtime */
 static PyObject *ugly_module ;
 static PyObject *ErrorType ;
+static PyObject *OptsType ;      /* ugly.Opts: ugly.opts(hint=..., context=...), passed last */
 static PyObject *proxy_cache ;   /* owned handle -> weakref(proxy) */
 static PyTypeObject ProxyType ;
 
@@ -492,6 +493,55 @@ static int py_kwargs(ugly_ctx *ctx, PyObject *kw, ugly_opts *o, ugly_kwarg **out
 }
 
 
+/*
+ * ugly.opts(hint=..., context=...) as the last positional argument: the
+ * call's hint and context (contract §11). Returns the arguments without it
+ * (a new reference); *hold keeps the option strings alive for the call.
+ */
+static PyObject *take_opts(PyObject *args, ugly_opts *o, PyObject **hold){
+	*hold = NULL ;
+	Py_ssize_t n = PyTuple_GET_SIZE(args) ;
+	if ((n == 0)||(OptsType == NULL)||(PyObject_IsInstance(PyTuple_GET_ITEM(args, n - 1), OptsType) != 1)){
+		Py_INCREF(args) ;
+		return args ;
+	}
+	PyObject *opts = PyTuple_GET_ITEM(args, n - 1) ;
+	PyObject *hint = PyObject_GetAttrString(opts, "hint") ;
+	PyObject *context = PyObject_GetAttrString(opts, "context") ;
+	if ((hint == NULL)||(context == NULL)){
+		Py_XDECREF(hint) ;
+		Py_XDECREF(context) ;
+		return NULL ;
+	}
+	o->hint = (PyUnicode_Check(hint) ? PyUnicode_AsUTF8(hint) : NULL) ;
+	o->context = (PyUnicode_Check(context) ? PyUnicode_AsUTF8(context) : NULL) ;
+	*hold = PyTuple_Pack(2, hint, context) ;
+	Py_DECREF(hint) ;
+	Py_DECREF(context) ;
+	return PyTuple_GetSlice(args, 0, n - 1) ;
+}
+
+
+/* ugly.opts(hint=None, context=None): call options for the last argument of a foreign call. */
+static PyObject *mod_opts(PyObject *mod, PyObject *args, PyObject *kwargs){
+	(void)mod ;
+	static char *names[] = { "hint", "context", NULL } ;
+	PyObject *hint = Py_None, *context = Py_None ;
+	if (! PyArg_ParseTupleAndKeywords(args, kwargs, "|$OO:opts", names, &hint, &context)){
+		return NULL ;
+	}
+	if (((hint != Py_None)&&(! PyUnicode_Check(hint)))||((context != Py_None)&&(! PyUnicode_Check(context)))){
+		PyErr_SetString(PyExc_TypeError, "ugly.opts: hint and context are strings") ;
+		return NULL ;
+	}
+	PyObject *o = PyObject_CallNoArgs(OptsType) ;
+	if ((o != NULL)&&((PyObject_SetAttrString(o, "hint", hint) != 0)||(PyObject_SetAttrString(o, "context", context) != 0))){
+		Py_CLEAR(o) ;
+	}
+	return o ;
+}
+
+
 static void free_kwargs(ugly_ctx *ctx, ugly_opts *o, ugly_kwarg *kw){
 	size_t i ;
 	for (i = 0 ; i < o->nkwargs ; i++){
@@ -511,10 +561,18 @@ static PyObject *proxy_call(PyObject *self, PyObject *args, PyObject *kw){
 	if (py_kwargs(ctx, kw, &o, &k) != 0){
 		return NULL ;
 	}
+	PyObject *hold ;
+	args = take_opts(args, &o, &hold) ;
+	if (args == NULL){
+		free_kwargs(ctx, &o, k) ;
+		return NULL ;
+	}
 	ugly_val *a ;
 	Py_ssize_t n = py_args(ctx, args, &a) ;
+	Py_DECREF(args) ;
 	if (n < 0){
 		free_kwargs(ctx, &o, k) ;
+		Py_XDECREF(hold) ;
 		return NULL ;
 	}
 	/*
@@ -541,6 +599,7 @@ static PyObject *proxy_call(PyObject *self, PyObject *args, PyObject *kw){
 	}
 	free_args(ctx, a, n) ;
 	free_kwargs(ctx, &o, k) ;
+	Py_XDECREF(hold) ;
 	return result(ctx, st, &out) ;
 }
 
@@ -558,16 +617,25 @@ static PyObject *invoke_bound(PyObject *bound, PyObject *args, PyObject *kw){
 	if (py_kwargs(ctx, kw, &o, &k) != 0){
 		return NULL ;
 	}
+	PyObject *hold ;
+	args = take_opts(args, &o, &hold) ;
+	if (args == NULL){
+		free_kwargs(ctx, &o, k) ;
+		return NULL ;
+	}
 	ugly_val *a ;
 	Py_ssize_t n = py_args(ctx, args, &a) ;
+	Py_DECREF(args) ;
 	if (n < 0){
 		free_kwargs(ctx, &o, k) ;
+		Py_XDECREF(hold) ;
 		return NULL ;
 	}
 	ugly_val out = ugly_null() ;
 	ugly_status st = OUT(ugly_invoke_opts(ctx, p->h, name, a, (size_t)n, &o, UGLY_ANY, &out)) ;
 	free_args(ctx, a, n) ;
 	free_kwargs(ctx, &o, k) ;
+	Py_XDECREF(hold) ;
 	return result(ctx, st, &out) ;
 }
 
@@ -943,6 +1011,8 @@ static PyMethodDef mod_methods[] = {
 	{ "module", mod_module, METH_VARARGS, "module(lang, name): a module of any language." },
 	{ "eval", mod_eval, METH_VARARGS, "eval(lang, code): the value of code in any language." },
 	{ "rethrow", mod_rethrow, METH_O, "Raise e again; a foreign exception object keeps its identity." },
+	{ "opts", (PyCFunction)(void (*)(void))mod_opts, METH_VARARGS | METH_KEYWORDS,
+		"opts(hint=None, context=None): call options, for the last argument of a foreign call." },
 	{ NULL, NULL, 0, NULL }
 } ;
 
@@ -1443,6 +1513,11 @@ static ugly_status py_init(ugly_ctx *ctx, const char *dir){
 			PyModule_AddObject(ugly_module, "Proxy", (PyObject *)&ProxyType) ;
 			Py_INCREF(ErrorType) ;
 			PyModule_AddObject(ugly_module, "Error", ErrorType) ;
+			OptsType = PyObject_CallFunction((PyObject *)&PyType_Type, "s(){}", "Opts") ;
+			if (OptsType != NULL){
+				Py_INCREF(OptsType) ;
+				PyModule_AddObject(ugly_module, "Opts", OptsType) ;
+			}
 			PyDict_SetItemString(PyImport_GetModuleDict(), "ugly", ugly_module) ;
 		}
 	}

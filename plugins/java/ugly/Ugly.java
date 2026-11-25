@@ -46,6 +46,14 @@ public final class Ugly {
 		return Kw.of(pairs);
 	}
 
+	/**
+	 * Call options, for the last argument of a foreign call:
+	 * {@code Ugly.opts().hint("int")}, {@code Ugly.opts().context("scalar")}.
+	 */
+	public static Opts opts(){
+		return new Opts();
+	}
+
 	/** Keyword arguments from a map, in its order. */
 	public static Kw kw(java.util.Map<String, ?> map){
 		return Kw.of(map);

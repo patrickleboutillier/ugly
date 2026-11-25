@@ -655,13 +655,44 @@ typedef struct { ugly_opts o ; ugly_kwarg *kw ; } perl_kw ;
 
 static void free_kw(ugly_ctx *ctx, perl_kw *k) ;
 
+static int is_marker(pTHX_ SV *sv, const char *cls){
+	return sv_isobject(sv)&&sv_derived_from(sv, cls) ;
+}
+
+
+/* Ugly::opts(hint => ..., context => ...): its strings stay in the object, on the stack for the call. */
+static void take_opts(pTHX_ SV *opts, ugly_opts *o){
+	HV *hv = (HV *)SvRV(opts) ;
+	SV **hint = hv_fetchs(hv, "hint", 0), **context = hv_fetchs(hv, "context", 0) ;
+	o->hint = ((hint != NULL)&&SvOK(*hint) ? SvPVutf8_nolen(*hint) : NULL) ;
+	o->context = ((context != NULL)&&SvOK(*context) ? SvPVutf8_nolen(*context) : NULL) ;
+}
+
+
 static void take_kw(pTHX_ ugly_ctx *ctx, plrt *r, SV **args, int *n, perl_kw *k){
 	k->o = (ugly_opts)UGLY_OPTS_INIT ;
 	k->kw = NULL ;
-	if ((*n == 0)||(! sv_isobject(args[*n - 1]))||(! sv_derived_from(args[*n - 1], "Ugly::Kw"))){
+	/* The trailing Ugly::kw(...) and Ugly::opts(...), at most one of each, in either order. */
+	SV *kwsv = NULL ;
+	int have_opts = 0 ;
+	while (*n > 0){
+		SV *last = args[*n - 1] ;
+		if ((! have_opts)&&is_marker(aTHX_ last, "Ugly::Opts")){
+			take_opts(aTHX_ last, &k->o) ;
+			have_opts = 1 ;
+		}
+		else if ((kwsv == NULL)&&is_marker(aTHX_ last, "Ugly::Kw")){
+			kwsv = last ;
+		}
+		else {
+			break ;
+		}
+		(*n)-- ;
+	}
+	if (kwsv == NULL){
 		return ;
 	}
-	AV *av = (AV *)SvRV(args[--(*n)]) ;
+	AV *av = (AV *)SvRV(kwsv) ;
 	SSize_t len = av_len(av) + 1, i ;
 	if (len % 2 != 0){
 		croak("Ugly::kw takes name => value pairs") ;

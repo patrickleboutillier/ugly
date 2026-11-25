@@ -36,12 +36,35 @@ public final class Kw {
 		return new Kw(n, v);
 	}
 
-	/** The Kw that ends args, or null. */
-	static Kw last(Object[] args){
-		return ((args != null)&&(args.length > 0)&&(args[args.length - 1] instanceof Kw)) ? (Kw)args[args.length - 1] : null;
-	}
+	/**
+	 * A call's trailing markers: a Kw and an Opts, at most one of each, in
+	 * either order. 'args' is what's left.
+	 */
+	static final class Split {
+		final Object[] args;
+		final Kw kw;
+		final Opts opts;
 
-	static Object[] rest(Object[] args){
-		return Arrays.copyOf(args, args.length - 1);
+		Split(Object[] a){
+			Kw k = null;
+			Opts o = null;
+			int n = (a == null ? 0 : a.length);
+			while (n > 0){
+				Object last = a[n - 1];
+				if ((o == null)&&(last instanceof Opts)) o = (Opts)last;
+				else if ((k == null)&&(last instanceof Kw)) k = (Kw)last;
+				else break;
+				n--;
+			}
+			args = (a == null || n == a.length) ? a : Arrays.copyOf(a, n);
+			kw = k;
+			opts = o;
+		}
+
+		boolean plain(){ return (kw == null)&&(opts == null); }
+		String[] names(){ return (kw == null) ? new String[0] : kw.names; }
+		Object[] values(){ return (kw == null) ? new Object[0] : kw.values; }
+		String hint(){ return (opts == null) ? null : opts.hint; }
+		String context(){ return (opts == null) ? null : opts.context; }
 	}
 }

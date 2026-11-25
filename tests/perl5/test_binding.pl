@@ -119,6 +119,9 @@ ok(Ugly::is_error($@) && $@->message =~ /already started/, "  ... and configurin
 ok($py->kw(1, Ugly::kw(c => 3, b => 2)) eq "1 2 3", "keyword arguments reach Python: kw(1, Ugly::kw(c => 3, b => 2))") ;
 ok(conformance::KwBox->new(Ugly::kw(value => 5))->add(Ugly::kw(n => 10)) == 15, "  ... and a class, through use Ugly: KwBox->new(Ugly::kw(value => 5))") ;
 ok(json::dumps(json::loads('[3, 1]'), Ugly::kw(separators => Ugly::eval("python", "(',', ':')"))) eq "[3,1]", "json::dumps with separators") ;
+eval { $py->kw(1, Ugly::opts(context => 'scalar')) } ;
+ok(Ugly::is_error($@) && $@->message =~ /no call context/, "Ugly::opts(context => ...) into Python: refused") ;
+ok($py->kw(1, Ugly::opts(), Ugly::kw(c => 3)) eq "1 0 3", "  ... and Ugly::opts and Ugly::kw last, in either order") ;
 eval { LuaString::upper("x", Ugly::kw(a => 1)) } ;
 ok(Ugly::is_error($@) && $@->message =~ /takes no call options/, "keyword arguments to Lua are refused") ;
 

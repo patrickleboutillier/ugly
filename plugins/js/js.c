@@ -68,7 +68,7 @@ typedef struct jsproxy {
 
 typedef struct { ugly_error *err ; } errbox ;
 
-static JSClassID proxy_class, proxy_fn_class, error_class, kw_class ;
+static JSClassID proxy_class, proxy_fn_class, error_class, kw_class, opts_class ;
 
 
 /*
@@ -699,13 +699,43 @@ static JSValue result(JSContext *c, ugly_ctx *ctx, ugly_status st, ugly_val *out
  */
 typedef struct { ugly_opts o ; ugly_kwarg *kw ; } js_kw ;
 
+/* A string property of an ugly.opts object, copied (NULL if absent). */
+static char *opts_string(JSContext *c, JSValueConst obj, const char *name){
+	JSValue v = JS_GetPropertyStr(c, obj, name) ;
+	char *s = NULL ;
+	if (JS_IsString(v)){
+		const char *t = JS_ToCString(c, v) ;
+		s = (t != NULL ? strdup(t) : NULL) ;
+		JS_FreeCString(c, t) ;
+	}
+	JS_FreeValue(c, v) ;
+	return s ;
+}
+
+
+/* Takes the trailing ugly.kw({...}) and ugly.opts({...}) (one of each at most, either order) off argv. */
 static int take_kw(JSContext *c, ugly_ctx *ctx, int *argc, JSValueConst *argv, js_kw *k){
 	k->o = (ugly_opts)UGLY_OPTS_INIT ;
 	k->kw = NULL ;
-	if ((*argc == 0)||(JS_GetOpaque(argv[*argc - 1], kw_class) == NULL)){
+	int kwi = -1 ;
+	while (*argc > 0){
+		JSValueConst last = argv[*argc - 1] ;
+		if ((k->o.hint == NULL)&&(k->o.context == NULL)&&(JS_GetOpaque(last, opts_class) != NULL)){
+			k->o.hint = opts_string(c, last, "hint") ;
+			k->o.context = opts_string(c, last, "context") ;
+		}
+		else if ((kwi < 0)&&(JS_GetOpaque(last, kw_class) != NULL)){
+			kwi = *argc - 1 ;
+		}
+		else {
+			break ;
+		}
+		(*argc)-- ;
+	}
+	if (kwi < 0){
 		return 0 ;
 	}
-	JSValueConst obj = argv[--(*argc)] ;
+	JSValueConst obj = argv[kwi] ;
 	JSPropertyEnum *tab = NULL ;
 	uint32_t n = 0, i ;
 	if (JS_GetOwnPropertyNames(c, &tab, &n, obj, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0){
@@ -742,6 +772,8 @@ static int take_kw(JSContext *c, ugly_ctx *ctx, int *argc, JSValueConst *argv, j
 }
 
 static void free_kw(ugly_ctx *ctx, js_kw *k){
+	free((char *)k->o.hint) ;
+	free((char *)k->o.context) ;
 	size_t i ;
 	for (i = 0 ; i < k->o.nkwargs ; i++){
 		free((char *)k->kw[i].name) ;
@@ -1034,6 +1066,7 @@ static JSClassDef proxy_def = { "ugly.Proxy", .finalizer = proxy_finalizer, .exo
 static JSClassDef proxy_fn_def = { "ugly.Proxy", .finalizer = proxy_finalizer, .call = proxy_call, .exotic = &proxy_exotic } ;
 static JSClassDef error_def = { "ugly.Error", .finalizer = error_finalizer } ;
 static JSClassDef kw_def = { "ugly.Kw" } ;
+static JSClassDef opts_def = { "ugly.Opts" } ;
 
 
 /* ---------------------------------------------------------------- */
@@ -1171,13 +1204,12 @@ static JSValue api_configure(JSContext *c, JSValueConst this_val, int argc, JSVa
 }
 
 
-/* ugly.kw({ name: value, ... }): keyword arguments, for the last argument of a call. */
-static JSValue api_kw(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
-	(void)this_val ;
+/* A marker object of class cls (ugly.kw, ugly.opts) with argv[0]'s own properties, in order. */
+static JSValue marker(JSContext *c, JSClassID cls, int argc, JSValueConst *argv, const char *usage){
 	if ((argc < 1)||(! JS_IsObject(argv[0]))){
-		return JS_ThrowTypeError(c, "ugly.kw({ name: value, ... })") ;
+		return JS_ThrowTypeError(c, "%s", usage) ;
 	}
-	JSValue k = JS_NewObjectClass(c, (int)kw_class) ;
+	JSValue k = JS_NewObjectClass(c, (int)cls) ;
 	if (JS_IsException(k)){
 		return k ;
 	}
@@ -1194,6 +1226,20 @@ static JSValue api_kw(JSContext *c, JSValueConst this_val, int argc, JSValueCons
 	}
 	js_free(c, tab) ;
 	return k ;
+}
+
+
+/* ugly.kw({ name: value, ... }): keyword arguments, for the last argument of a call. */
+static JSValue api_kw(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	return marker(c, kw_class, argc, argv, "ugly.kw({ name: value, ... })") ;
+}
+
+
+/* ugly.opts({ hint: "...", context: "scalar" }): call options, for the last argument of a call. */
+static JSValue api_opts(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	return marker(c, opts_class, argc, argv, "ugly.opts({ hint: ..., context: ... })") ;
 }
 
 
@@ -1224,6 +1270,7 @@ static const JSCFunctionListEntry api[] = {
 	JS_CFUNC_DEF("eval", 2, api_eval),
 	JS_CFUNC_DEF("configure", 2, api_configure),
 	JS_CFUNC_DEF("kw", 1, api_kw),
+	JS_CFUNC_DEF("opts", 1, api_opts),
 	JS_CFUNC_DEF("isError", 1, api_is_error),
 	JS_CFUNC_DEF("isProxy", 1, api_is_proxy),
 	JS_CFUNC_DEF("gc", 0, api_gc),
@@ -1781,6 +1828,7 @@ static ugly_status js_init(ugly_ctx *ctx, const char *dir){
 		JS_NewClassID(&proxy_fn_class) ;
 		JS_NewClassID(&error_class) ;
 		JS_NewClassID(&kw_class) ;
+		JS_NewClassID(&opts_class) ;
 	}
 	return UGLY_OK ;
 }
@@ -1794,6 +1842,7 @@ static void setup(jsrt *r){
 		JS_NewClass(r->rt, proxy_fn_class, &proxy_fn_def) ;
 		JS_NewClass(r->rt, error_class, &error_def) ;
 		JS_NewClass(r->rt, kw_class, &kw_def) ;
+		JS_NewClass(r->rt, opts_class, &opts_def) ;
 	}
 
 	/* Ugly errors inherit Error.prototype, so they're Errors in JS (instanceof, stack). */

@@ -50,14 +50,15 @@ public final class Foreign {
 
 	/** Calls it; an {@link Ugly#kw} last gives keyword arguments. */
 	public Object call(Object... args){
-		Kw k = Kw.last(args);
-		return (k == null) ? call(handle, args) : callKw(handle, Kw.rest(args), k.names, k.values);
+		Kw.Split s = new Kw.Split(args);
+		return s.plain() ? call(handle, args) : callOpts(handle, s.args, s.names(), s.values(), s.hint(), s.context());
 	}
 
 	/** Invokes a method, with the foreign language's receiver rules; an {@link Ugly#kw} last gives keyword arguments. */
 	public Object invoke(String method, Object... args){
-		Kw k = Kw.last(args);
-		return (k == null) ? invoke(handle, method, args) : invokeKw(handle, method, Kw.rest(args), k.names, k.values);
+		Kw.Split s = new Kw.Split(args);
+		return s.plain() ? invoke(handle, method, args)
+			: invokeOpts(handle, method, s.args, s.names(), s.values(), s.hint(), s.context());
 	}
 	public Object get(String member){ return get(handle, member); }
 	public void set(String member, Object value){ set(handle, member, value); }
@@ -85,8 +86,9 @@ public final class Foreign {
 	/* Natives, registered by the plugin (RegisterNatives). */
 	static native Object call(long h, Object[] args);
 	static native Object invoke(long h, String method, Object[] args);
-	static native Object callKw(long h, Object[] args, String[] names, Object[] values);
-	static native Object invokeKw(long h, String method, Object[] args, String[] names, Object[] values);
+	static native Object callOpts(long h, Object[] args, String[] names, Object[] values, String hint, String context);
+	static native Object invokeOpts(long h, String method, Object[] args, String[] names, Object[] values,
+		String hint, String context);
 	static native Object get(long h, String member);
 	static native void set(long h, String member, Object value);
 	static native Object getIndex(long h, int index);

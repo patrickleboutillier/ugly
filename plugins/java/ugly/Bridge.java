@@ -284,7 +284,43 @@ public final class Bridge {
 
 	private static final int NO = Integer.MAX_VALUE;
 
+	/*
+	 * The hint call option (contract §11): the parameter types of the
+	 * overload to use, as Class.getName() gives them, joined by commas
+	 * ("int,java.lang.String"). Set by the plugin for one call; the call's
+	 * own overload resolution takes it.
+	 */
+	private static final ThreadLocal<String> HINT = new ThreadLocal<>();
+
+	static void hint(String h){
+		if (h == null) HINT.remove(); else HINT.set(h.replace(" ", ""));
+	}
+
+	private static String signature(Executable e){
+		StringBuilder b = new StringBuilder();
+		for (Class<?> p : e.getParameterTypes()){
+			if (b.length() > 0) b.append(',');
+			b.append(p.getName());
+		}
+		return b.toString();
+	}
+
 	private static Executable choose(List<Executable> cands, Object[] args, String what){
+		String hint = HINT.get();
+		HINT.remove();
+		if (hint != null){
+			for (Executable e : cands){
+				if (signature(e).equals(hint)){
+					Class<?>[] ps = e.getParameterTypes();
+					if (ps.length != args.length) throw new TypeMismatch(what + "(" + hint + ") takes " + ps.length + " argument(s)");
+					for (int i = 0 ; i < ps.length ; i++){
+						if (score(args[i], ps[i]) == NO) throw new TypeMismatch("argument " + (i + 1) + " doesn't fit " + what + "(" + hint + ")");
+					}
+					return e;
+				}
+			}
+			throw new NotFound("no overload " + what + "(" + hint + ")");
+		}
 		Executable best = null;
 		int bestScore = NO, ties = 0;
 		for (Executable e : cands){

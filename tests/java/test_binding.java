@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 30;
+	static final int PLAN = 31;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -153,6 +153,8 @@ public class test_binding {
 		check("perl", () -> {
 			Foreign join = (Foreign)Ugly.eval("perl5", "sub { join '-', @_ }");
 			ok("a-b-c".equals(join.call("a", "b", "c")), "a Perl sub called from Java");
+			Foreign want = (Foreign)Ugly.eval("perl5", "sub { wantarray ? 'list' : 'scalar' }");
+			ok("scalar".equals(want.call(Ugly.opts().context("scalar"))), "Ugly.opts().context(\"scalar\") last: Perl's scalar context");
 		});
 
 		check("threads", () -> {

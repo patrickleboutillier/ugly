@@ -27,6 +27,11 @@ heap = ugly.module("java", "java.lang.Runtime").getRuntime().maxMemory()
 ok(heap <= 64 * 1024 * 1024, f"options: -Xmx64m limits the heap ({heap} bytes)")
 conformance = ugly.module("java", "conformance")
 ok(conformance.echo("x") == "x", "classpath: a class from the configured jar")
+# The hint call option (README): String.valueOf(double) rather than valueOf(long).
+String = ugly.module("java", "java.lang.String")
+ok((String.valueOf(65), String.valueOf(65, ugly.opts(hint="double"))) == ("65", "65.0"),
+   "ugly.opts(hint=\"double\") picks String.valueOf(double)")
+
 try:
     ugly.configure("java", options="-Xmx1g")
     ok(False, "configure once the JVM runs raises ugly.Error")

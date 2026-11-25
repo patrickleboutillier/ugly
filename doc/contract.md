@@ -598,8 +598,12 @@ Bindings mark keyword arguments with a value only their API makes, passed
 last: `ugly.kw{ indent = 2 }` (Lua, names in sorted order, since a table has
 none), `ugly.kw({ indent: 2 })` (JS), `Ugly::kw(indent => 2)` (Perl),
 `Ugly.kw("indent", 2)` (Java), and natively `f(x, indent=2)` on a Python
-proxy. Hints and contexts go through `ugly.call(f, ugly.opts{...}, ...)`
-and its equivalents.
+proxy. Hints and contexts are marked the same way, with `opts`, passed last
+(beside a `kw`, in either order): `ugly.opts{ hint = "int" }` (Lua),
+`ugly.opts({ context: "scalar" })` (JS), `Ugly::opts(context => 'scalar')`
+(Perl), `ugly.opts(context="scalar")` (Python), `Ugly.opts().hint("int")`
+(Java). This replaced the `ugly.call(f, ugly.opts{...}, ...)` form of the
+proposal when it was built (2026-11-25): one mechanism for both markers.
 
 ## Decisions
 
