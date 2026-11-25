@@ -23,6 +23,10 @@ print(product)                                      --> 120
 local day = datetime.date(2026, 11, 24)
 print(day:isoformat(), day.year)                    --> 2026-11-24    2026
 
+-- Lua's own library takes Python functions.
+local title = string.gsub("hello world", "%w+", python("builtins").str.capitalize)
+print(title)                                        --> Hello World
+
 -- Python exceptions arrive as errors, with their type and message.
 local ok, err = pcall(json.loads, "{oops")
 print(ok, err.type)                                 --> false   JSONDecodeError
@@ -30,4 +34,5 @@ print(ok, err.type)                                 --> false   JSONDecodeError
 assert(data.name == "ugly" and #data.scores == 5 and data.scores[1] == 3)
 assert(mean == 2.8 and product == 120)
 assert(day:isoformat() == "2026-11-24" and day.year == 2026)
+assert(title == "Hello World")
 assert(not ok and ugly.is_error(err) and err.type == "JSONDecodeError" and err.language == "python")

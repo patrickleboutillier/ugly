@@ -4,7 +4,8 @@
 
 UGLY is a C library for calling between programming languages **inside one
 process**. It embeds the real interpreters (Lua, CPython, QuickJS,
-Perl 5 and the JVM) and routes every cross-language call through a small, language-neutral C core.
+Perl 5 and the JVM) and routes every cross-language call through a small,
+language-neutral C core.
 
 The goal is to replace pairwise bridges with a hub. N languages need
 N(N-1)/2 direct bridges. A hub needs one adapter per language, and any two
@@ -45,6 +46,9 @@ print(functools.reduce(function(a, b) return a * b end, { 1, 2, 3, 4, 5 }))   --
 -- Python objects have methods.
 local day = datetime.date(2026, 11, 24)
 print(day:isoformat(), day.year)                    --> 2026-11-24    2026
+
+-- Lua's own library takes Python functions.
+print((string.gsub("hello world", "%w+", python("builtins").str.capitalize)))   --> Hello World
 
 -- Python exceptions arrive as errors, with their type and message.
 local ok, err = pcall(json.loads, "{oops")
@@ -147,9 +151,11 @@ options for Java. They come before the environment variables that do the
 same (`PYTHONPATH`, `LUA_PATH`...):
 
 ```python
-ugly.configure("java", classpath=["lib/app.jar"], options=["-Xmx512m"])
-ugly.configure("lua", path="./lua/?.lua")
-ugly.module("java", "com.example.App")            # the JVM starts here, with those settings
+ugly.configure("lua", path="./lua/?.lua")         # Lua modules from ./lua, ahead of LUA_PATH
+ugly.configure("java", options=["-Xmx64m"])       # JVM options (and classpath=[...])
+ugly.module("lua", "greet").hello("you")          # finds ./lua/greet.lua
+Runtime = ugly.module("java", "java.lang.Runtime")   # the JVM starts here, with its options
+Runtime.getRuntime().maxMemory()                  # 67108864
 ```
 
 Once a language has started, configuring it raises an error instead of
@@ -212,7 +218,7 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 | `include/ugly_plugin.h` | The plugin contract: what a language plugin implements, and the core services it may use. |
 | `src/` | The core (`libugly`): handle table, call frames and borrows, errors, threads, plugin loading. Also the built-in "c" language, which is the home of C callbacks and core lists and maps. |
 | `plugins/mock/` | A small language written in C, used to test the core and the contract before any real interpreter. |
-| `plugins/lua/` | Lua 5.4. `binding/` builds the same source as the Lua module `ugly`. |
+| `plugins/lua/` | Lua 5.4 or 5.3, chosen at build time (`-Dlua_version`); one Lua per process. `binding/<version>/` builds the same source as the Lua module `ugly`, for every Lua found. |
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
 | `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. `binding/` builds the same source as the native module `ugly.so` for `qjs`. |
 | `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context. Its Perl side (proxies, ties, `use Ugly LANG => MODULE`) is `helper.pm`, embedded at build time. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
@@ -242,14 +248,16 @@ JDK 22.
 ## Building and testing
 
 You need a C toolchain, Meson (0.61 or later) and Ninja. Each language
-plugin, and its binding, is built only if its language is found: Lua 5.4
-(`liblua5.4-dev`), CPython 3.10+ (`python3-dev`), Perl 5 (`libperl-dev`)
+plugin, and its binding, is built only if its language is found: Lua 5.4 or
+5.3 (`liblua5.4-dev`, `liblua5.3-dev`), CPython 3.10+ (`python3-dev`), Perl 5 (`libperl-dev`)
 and a JDK, 21 or later (`openjdk-21-jdk-headless`, found through `javac`).
 QuickJS is built from source: Meson downloads its pinned release at setup,
 and checks the checksum. `-Dlua=disabled`, `-Dpython=disabled`,
 `-Djs=disabled`, `-Dperl5=disabled` and `-Djava=disabled` skip a language;
-`--wrap-mode=nodownload` forbids the download. The Lua binding
-test also needs the `lua5.4` interpreter. Valgrind is optional.
+`--wrap-mode=nodownload` forbids the download. The plugin uses Lua 5.4 if
+it's there, else 5.3 (`-Dlua_version=5.3` chooses), and the Lua binding is
+built for each; its tests need the matching interpreters (`lua5.4`,
+`lua5.3`). Valgrind is optional.
 
 ```sh
 meson setup build
@@ -259,8 +267,8 @@ meson test -C build        # the conformance suite, pairwise tests and examples
 
 The tests need no install step. `meson install -C build` installs the
 library, the two headers, a pkg-config file, the plugins and the bindings
-(the Lua module where Lua looks for C modules, the Python extension in
-site-packages, the Java one in libdir). Plugins are looked up in `<libdir>/ugly/plugins/`, and
+(the Lua module where each Lua version looks for C modules, the Python
+extension in site-packages, the Java one in libdir). Plugins are looked up in `<libdir>/ugly/plugins/`, and
 `UGLY_PLUGIN_PATH` (a colon-separated list of directories) overrides that at
 runtime.
 
@@ -276,8 +284,8 @@ Every test is a TAP stream. The full output is in
 - **Pairwise** (`tests/pairwise.c`): every ordered pair of different
   languages in one process, using each other's values, calls and errors.
 - **Bindings** (`tests/<lang>/test_binding.*`): plain `python3`, `lua5.4`,
-  `qjs`, `perl` and `java` programs using the other languages through `ugly`, in
-  attach mode. The `qjs` is the one built from the QuickJS subproject.
+  `lua5.3`, `qjs`, `perl` and `java` programs using the other languages
+  through `ugly`, in attach mode. The `qjs` is the one built from the QuickJS subproject.
 - **Examples** (`examples/`): run, and checked by exit status. They're the
   programs README quotes.
 
@@ -285,15 +293,21 @@ Every test is a TAP stream. The full output is in
 meson test -C build --suite conformance-lua   # one plugin
 meson test -C build --suite pairwise          # every pair of languages
 meson test -C build --setup valgrind          # everything under valgrind
+meson test -C build --setup helgrind threads-lua threads-python   # data races
 ```
+
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs all of it on
+Ubuntu 22.04 and 24.04, the plugin on Lua 5.3, and builds with each
+language left out.
 
 The valgrind setup fails a test on any memory error and on any definite,
 indirect or possible leak, so the tests delete everything they create.
 Memory that is still reachable at exit is allowed, because a plugin may keep
 process-wide state for the life of the process. `tests/valgrind.supp`
-suppresses one thing: CPython's live objects reported as "possibly lost"
-(from `libpython`, or from a statically linked `python3` host), because
-Python is never finalized. Tests with a JVM in them (suite `jvm`) don't run
+suppresses only CPython's own memory: its live objects reported as
+"possibly lost" (from `libpython`, or from a statically linked `python3`
+host), because Python is never finalized, and the interned strings Python
+3.12 never frees when it is the host. Tests with a JVM in them (suite `jvm`) don't run
 under valgrind: its JIT and GC are beyond what memcheck can judge. They run
 with `-Xcheck:jni` instead (`UGLY_JAVA_CHECK`), where a JNI warning aborts.
 

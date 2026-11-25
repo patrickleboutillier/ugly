@@ -19,7 +19,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - `host.c`: the built-in "c" language, which is the home of C callables and core lists and maps. Each ctx has one runtime of it.
 - **`plugins/<lang>/`** holds the plugins, built as `ugly_<lang>.so` and exporting `ugly_plugin_<lang>()`. Each one's `meson.build` appends to `plugins`, `plugin_dirs` and `test_plugins`, and is optional (`-D<lang>=`).
   - **`mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
-  - **`lua/`** is Lua 5.4.
+  - **`lua/`** is Lua 5.4 or 5.3 (`-Dlua_version=auto|5.4|5.3`; one Lua per process, language `"lua"` either way). The binding is built for every Lua found, in `binding/<version>/` (identical meson files); tests are `binding-lua5.4` and `binding-lua5.3`. A `LUA_VERSION_NUM` shim covers 5.3.
     - Every operation runs under `lua_pcall` (`op_body`), except `call`, which pcalls the target directly so a call costs one of Lua's roughly 200 nested C calls.
     - Proxies are `ugly.proxy` userdata, cached per owned handle in a weak table. A foreign function (CALLABLE, not INSTANTIABLE) is a C closure (`proxy_fn`) over that userdata instead, so Lua's C library takes it; `to_proxy()` recognizes both. A callable member that isn't a class becomes a method closure (`proxy_method`); a class member stays the class. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape.
     - Elements are 0-based in the protocol and 1-based in Lua.
@@ -88,12 +88,13 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## State (2026-11-25)
 
-- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS), Perl 5 and Java, bindings for Lua, Python, JS (qjs), Perl and Java, the conformance suite (48 runs: 8 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (5) and two examples. 85 tests pass; the 66 without a JVM are clean under valgrind, and helgrind finds no races.
+- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS), Perl 5 and Java, bindings for Lua, Python, JS (qjs), Perl and Java, the conformance suite (48 runs: 8 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (7) and two examples. 87 tests pass; the 66 without a JVM are clean under valgrind, and helgrind finds no races.
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
 - **The plan in contract.md is complete** (2026-11-24): QuickJS, the JS binding, and Perl with its binding are done. Perl's open questions were decided with Claude's recommendations (contract decisions 9–12). Decision 6, Latin-1 decoding, was **revised** so that bytes round-trip; it's flagged to the author in the contract.
 - **Java (2026-11-25)** was the first language after the plan, with its binding.
-- **Next:** whatever the author picks from `TODO.md`. The HAProxy and embedded-Lua items are the motivating ones: any-thread runtimes, lazy Python init, and Lua 5.3/LuaJIT. CI and Node.js (N-API) are also there.
+- **Done since (2026-11-25):** Java and its binding, Perl's namespace import and ties (with `ugly_splice`/`ugly_delete_member`), `ugly_configure`, CI, foreign functions as Lua functions, Lua 5.3.
+- **Next:** any-thread runtimes, phase 1 (`UGLY_CAP_ANY_THREAD` for Python and Java, Python releasing the GIL around outgoing calls; agreed with the author), then lazy Python init and an HAProxy proof of concept.
 - **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
 
 ## Landscape (2026)

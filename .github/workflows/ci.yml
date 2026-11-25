@@ -21,7 +21,7 @@ concurrency:
 env:
   DEPS: >-
     meson ninja-build gcc pkg-config
-    liblua5.4-dev lua5.4 python3-dev libperl-dev valgrind
+    liblua5.4-dev lua5.4 liblua5.3-dev lua5.3 python3-dev libperl-dev valgrind
 
 jobs:
   full:
@@ -77,6 +77,28 @@ jobs:
         with:
           name: testlogs-${{ matrix.os }}
           path: build/meson-logs/
+
+  lua53:
+    name: plugin on Lua 5.3
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+      - name: Use JDK 21
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v6
+        with:
+          path: subprojects/packagecache
+          key: quickjs-${{ hashFiles('subprojects/quickjs.wrap') }}
+      - run: meson setup build -Dwerror=true -Dlua=enabled -Dlua_version=5.3
+      - run: meson compile -C build
+      - run: meson test -C build --print-errorlogs
+      - run: meson test -C build --setup valgrind --print-errorlogs
 
   without:
     name: without ${{ matrix.language }}

@@ -485,7 +485,7 @@ How each language maps onto the contract: the four planned ones, and Java,
 added after the plan was complete. "Proxy finalizer" is where a proxy
 releases its handle reference.
 
-| | Lua 5.4 | CPython 3.10+ | QuickJS (`js`) | Perl 5 | Java (JDK 21) |
+| | Lua 5.4 or 5.3 | CPython 3.10+ | QuickJS (`js`) | Perl 5 | Java (JDK 21) |
 |---|---|---|---|---|---|
 | null | `nil` | `None` | `null`, `undefined` (NULL goes in as `null`) | `undef` | `null` |
 | int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IOK → INT, NOK → DOUBLE, POK → STRING; booleans by `SvIsBOOL` (5.36+) or `PL_sv_yes`/`PL_sv_no`'s signature; an explicit `want` numifies only what `looks_like_number` | boxed integers and `BigInteger` (if it fits) → INT, `Double`/`Float` → DOUBLE; INT goes in as `Long`, and narrows to `int`/`short`/`byte` parameters when it fits; integers widen to DOUBLE |
@@ -657,6 +657,13 @@ All of them are in the headers and covered by the conformance suite.
     that caused it returns. The tests set it.
   - The JVM is excluded from the valgrind setup (suite `jvm`): its JIT and
     GC are beyond what memcheck can judge.
+- **Lua 5.3** (2026-11-25), for HAProxy, whose builds commonly use it.
+  One Lua per process, since every version exports the same `lua_*`
+  symbols: the plugin's Lua is a build option (`-Dlua_version`), and the
+  language is `"lua"` either way. The binding is built for every Lua found,
+  because each loads only into its own host. The code difference was one
+  call (`lua_newuserdatauv`); the whole suite and the 5.3 binding pass
+  unchanged.
 - **Foreign functions are Lua functions** (2026-11-25, found writing
   README examples). Lua's C library checks for real functions:
   `string.gsub(s, p, pyfunc)` refused callable userdata. A foreign value

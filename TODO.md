@@ -39,9 +39,8 @@ working setup.
   workers fork, and each worker would inherit a forked interpreter (that
   would need `PyOS_AfterFork_Child`). Initializing on first use, inside the
   worker, avoids it.
-- [ ] **Lua 5.3 support** (HAProxy builds commonly use 5.3). The plugin uses
-  5.4-only API such as `lua_newuserdatauv`. A thin compatibility layer can
-  bridge it, and the binding would be built once per Lua version found.
+- [x] **Lua 5.3 support** (done 2026-11-25): `-Dlua_version`, a binding for
+  every Lua found, and a CI job with the plugin on 5.3.
 - [ ] **Lua 5.1 / LuaJIT support**: OpenResty, Neovim, many games. It's a
   bigger API gap (no integers, `lua_pcall` and registry differences,
   `luaL_setfuncs`), but it reaches the most embedded Luas.
@@ -161,9 +160,8 @@ All additive; none of it breaks existing plugins (contract, "Scope").
   on Ubuntu 22.04 and 24.04 with `-Dwerror=true`, `meson test`, valgrind
   and helgrind (threads group); one build without each language, and one
   with none.
-  - [ ] A Lua version axis, once the plugin builds against 5.3 and LuaJIT
-    (one Lua per process: the version is a build option, and bindings are
-    built for every Lua found).
+  - [x] A Lua version axis: the plugin on 5.3 is a job, and both bindings
+    are tested in the others. LuaJIT joins it when it's supported.
 - [ ] **Attach tests in C.** Attach mode is tested only through the binding
   scripts. A C test that creates its own Lua state and attaches to it would
   bring attach into the conformance suite proper.

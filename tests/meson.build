@@ -115,11 +115,14 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
       suite: ['bindings', 'jvm'], depends: plugins + bindings + [binding_jar])
   endif
 
-  lua_exe = find_program('lua5.4', 'lua', required: false)
-  if lua_exe.found()
-    env = environment(test_env_vars)
-    env.set('LUA_CPATH', binding_dirs['lua'] / '?.so;;')
-    test('binding-lua', lua_exe, args: files('lua' / 'test_binding.lua'), protocol: 'tap', env: env,
-      suite: 'bindings', depends: plugins + bindings)
-  endif
+  # The Lua binding, once per Lua it was built for, under that Lua's own interpreter.
+  foreach v, d : lua_deps
+    lua_exe = find_program('lua' + v, required: false)
+    if lua_exe.found()
+      env = environment(test_env_vars)
+      env.set('LUA_CPATH', binding_dirs['lua' + v] / '?.so;;')
+      test('binding-lua' + v, lua_exe, args: files('lua' / 'test_binding.lua'), protocol: 'tap', env: env,
+        suite: 'bindings', depends: plugins + bindings)
+    endif
+  endforeach
 endif

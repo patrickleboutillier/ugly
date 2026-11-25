@@ -7,7 +7,7 @@ endif
 
 # A plain Lua script using Python's standard library through the Lua binding.
 if binding_dirs.has_key('lua') and test_plugins.contains('python')
-  lua_exe = find_program('lua5.4', 'lua', required: false)
+  lua_exe = find_program('lua' + lua_version, required: false)
   if lua_exe.found()
     env = environment(test_env_vars)
     env.set('LUA_CPATH', binding_dirs['lua'] / '?.so;;')
