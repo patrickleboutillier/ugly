@@ -74,5 +74,9 @@ ok(builtins.int("ff", ugly.kw{ base = 16 }) == 255, "int(\"ff\", base=16) with u
 ok(py.kw(1, ugly.kw{ c = 3, b = 2 }) == "1 2 3", "keyword arguments reach Python: kw(1, ugly.kw{ c = 3, b = 2 })")
 ok(py.KwBox(ugly.kw{ value = 5 }):add(ugly.kw{ n = 10 }) == 15, "  ... and a class with them: KwBox(ugly.kw{ value = 5 }):add(...)")
 
+local refused, e = pcall(py.kw, 1, ugly.opts{ context = "scalar" })
+ok(not refused and tostring(e.message):find("no call context") ~= nil, "ugly.opts{ context = ... } into Python: refused")
+ok(py.kw(1, ugly.opts{}, ugly.kw{ b = 2 }) == "1 2 0", "  ... and ugly.opts and ugly.kw last, in either order")
+
 print("1.." .. count)
 os.exit(failures == 0 and 0 or 1, true)      -- true: close the state, so the binding tears down

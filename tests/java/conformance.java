@@ -55,6 +55,11 @@ public final class conformance {
 
 	public static Object echo(Object x){ return x; }
 
+	/* Overloads, for the hint call option (contract §11). */
+	public static String over(int x){ return "int"; }
+	public static String over(long x){ return "long"; }
+	public static String over(Object x){ return "java.lang.Object"; }
+
 	public static String kind_of(Object x){
 		if (x == null) return "null";
 		if (x instanceof Boolean) return "bool";

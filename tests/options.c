@@ -104,16 +104,42 @@ int main(void){
 		is_status(ctx, st, UGLY_ERR_NOT_SUPPORTED, "a call context: refused (UGLY_ERR_NOT_SUPPORTED)") ;
 	}
 
-	/* An overload hint: refused by every plugin but Java's (§11). */
+	/* An overload hint: Java's picks the overload (over(int), over(long), over(Object)); others refuse it. */
 	ugly_opts h = UGLY_OPTS_INIT ;
 	h.hint = "int" ;
-	st = ugly_invoke_opts(ctx, f.mod, "echo", &one, 1, &h, UGLY_ANY, &v) ;
 	if (strcmp(plugin_name(), "java") != 0){
+		st = ugly_invoke_opts(ctx, f.mod, "echo", &one, 1, &h, UGLY_ANY, &v) ;
 		is_status(ctx, st, UGLY_ERR_NOT_SUPPORTED, "an overload hint: refused (UGLY_ERR_NOT_SUPPORTED)") ;
 	}
 	else {
-		ugly_val_release(ctx, &v) ;
-		skip("java's hints are tested with its fixtures") ;
+		static const char *const hints[][2] = {
+			{ NULL, "long" }, { "int", "int" }, { "long", "long" }, { "java.lang.Object", "java.lang.Object" },
+		} ;
+		size_t i ;
+		for (i = 0 ; i < sizeof(hints) / sizeof(hints[0]) ; i++){
+			h.hint = hints[i][0] ;
+			char what[96] ;
+			snprintf(what, sizeof(what), "over(1) with hint %s", hints[i][0] ? hints[i][0] : "(none): the best fit") ;
+			st = ugly_invoke_opts(ctx, f.mod, "over", &one, 1, &h, UGLY_STRING, &v) ;
+			if (is_status(ctx, st, UGLY_OK, what)){
+				snprintf(what, sizeof(what), "  ... calls over(%s)", hints[i][1]) ;
+				is_str(sval(&v), hints[i][1], what) ;
+				ugly_val_release(ctx, &v) ;
+			}
+		}
+		h.hint = "double" ;
+		st = ugly_invoke_opts(ctx, f.mod, "over", &one, 1, &h, UGLY_STRING, &v) ;
+		is_status(ctx, st, UGLY_ERR_NOT_FOUND, "a hint naming no overload: UGLY_ERR_NOT_FOUND") ;
+		h.hint = "int" ;
+		st = ugly_invoke_opts(ctx, f.mod, "over", &one, 1, &h, UGLY_STRING, &v) ;
+		if (st == UGLY_OK){
+			ugly_val_release(ctx, &v) ;
+		}
+		st = ugly_invoke(ctx, f.mod, "over", &one, 1, UGLY_STRING, &v) ;
+		ok((st == UGLY_OK)&&(strcmp(sval(&v), "long") == 0), "  ... and a hint lasts one call: the next one picks the best fit again") ;
+		if (st == UGLY_OK){
+			ugly_val_release(ctx, &v) ;
+		}
 	}
 
 	/* An options struct from an older caller (smaller 'size'): what it has still counts. */

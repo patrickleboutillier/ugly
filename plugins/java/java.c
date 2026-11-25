@@ -46,7 +46,7 @@ static struct {
 	jclass Bridge, Foreign, ForeignException, NotFound, NotCapable, TypeMismatch, Throwable, Class ;
 	jclass Boolean, Long, Integer, Short, Byte, Double, Float, Character, String, BigInteger, Number, ByteArray ;
 	jmethodID b_importClass, b_traits, b_typeName, b_getMember, b_setMember, b_memberNames, b_length,
-		b_getIndex, b_setIndex, b_deleteMember, b_splice, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf ;
+		b_getIndex, b_setIndex, b_deleteMember, b_splice, b_hint, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf ;
 	jmethodID f_of ;
 	jfieldID f_handle ;
 	jmethodID fe_new, fe_take, fe_payload ;
@@ -612,6 +612,8 @@ static int native_kw(JNIEnv *env, ugly_ctx *ctx, jobjectArray names, jobjectArra
 
 
 static void free_native_kw(ugly_ctx *ctx, ugly_opts *o, ugly_kwarg *kw){
+	free((char *)o->hint) ;
+	free((char *)o->context) ;
 	size_t i ;
 	for (i = 0 ; i < o->nkwargs ; i++){
 		free((char *)kw[i].name) ;
@@ -621,8 +623,15 @@ static void free_native_kw(ugly_ctx *ctx, ugly_opts *o, ugly_kwarg *kw){
 }
 
 
+/* The hint and context of Foreign.callOpts/invokeOpts, as malloc'd strings (NULL for none). */
+static void native_opts(JNIEnv *env, jstring hint, jstring context, ugly_opts *o){
+	o->hint = (hint != NULL ? c_string(env, hint) : NULL) ;
+	o->context = (context != NULL ? c_string(env, context) : NULL) ;
+}
+
+
 static jobject JNICALL n_call_kw(JNIEnv *env, jclass cls, jlong h, jobjectArray args, jobjectArray names,
-	jobjectArray values){
+	jobjectArray values, jstring hint, jstring context){
 
 	(void)cls ;
 	ugly_ctx *ctx = native_ctx(env) ;
@@ -637,6 +646,7 @@ static jobject JNICALL n_call_kw(JNIEnv *env, jclass cls, jlong h, jobjectArray 
 		free_args(ctx, a, n) ;
 		return NULL ;
 	}
+	native_opts(env, hint, context, &o) ;
 	ugly_val out = ugly_null() ;
 	ugly_status st = ugly_call_opts(ctx, (ugly_handle)h, a, n, &o, UGLY_ANY, &out) ;
 	free_args(ctx, a, n) ;
@@ -646,7 +656,7 @@ static jobject JNICALL n_call_kw(JNIEnv *env, jclass cls, jlong h, jobjectArray 
 
 
 static jobject JNICALL n_invoke_kw(JNIEnv *env, jclass cls, jlong h, jstring method, jobjectArray args,
-	jobjectArray names, jobjectArray values){
+	jobjectArray names, jobjectArray values, jstring hint, jstring context){
 
 	(void)cls ;
 	ugly_ctx *ctx = native_ctx(env) ;
@@ -661,6 +671,7 @@ static jobject JNICALL n_invoke_kw(JNIEnv *env, jclass cls, jlong h, jstring met
 		free_args(ctx, a, n) ;
 		return NULL ;
 	}
+	native_opts(env, hint, context, &o) ;
 	char *m = c_string(env, method) ;
 	ugly_val out = ugly_null() ;
 	ugly_status st = ugly_invoke_opts(ctx, (ugly_handle)h, m, a, n, &o, UGLY_ANY, &out) ;
@@ -882,9 +893,10 @@ static void JNICALL n_configure(JNIEnv *env, jclass cls, jstring lang, jstring k
 static JNINativeMethod natives[] = {
 	{ "call", "(J[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_call },
 	{ "invoke", "(JLjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_invoke },
-	{ "callKw", "(J[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_call_kw },
-	{ "invokeKw", "(JLjava/lang/String;[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;",
-		(void *)n_invoke_kw },
+	{ "callOpts", "(J[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;)"
+		"Ljava/lang/Object;", (void *)n_call_kw },
+	{ "invokeOpts", "(JLjava/lang/String;[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/Object;Ljava/lang/String;"
+		"Ljava/lang/String;)Ljava/lang/Object;", (void *)n_invoke_kw },
 	{ "get", "(JLjava/lang/String;)Ljava/lang/Object;", (void *)n_get },
 	{ "set", "(JLjava/lang/String;Ljava/lang/Object;)V", (void *)n_set },
 	{ "getIndex", "(JI)Ljava/lang/Object;", (void *)n_get_index },
@@ -1171,6 +1183,72 @@ static ugly_status jv_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 }
 
 
+/*
+ * Call options (contract §11): Java takes a hint, the parameter types of the
+ * overload to use; it has no keyword arguments and no call context.
+ */
+static ugly_status hint_opts(ugly_ctx *ctx, JNIEnv *env, const ugly_opts *o){
+	if (o->nkwargs > 0){
+		return fail(ctx, UGLY_ERR_NOT_SUPPORTED, "IllegalArgumentException", "Java has no keyword arguments") ;
+	}
+	if (o->context != NULL){
+		return fail(ctx, UGLY_ERR_NOT_SUPPORTED, "IllegalArgumentException", "Java takes no call context") ;
+	}
+	jstring h = (o->hint != NULL ? new_string(env, o->hint, strlen(o->hint)) : NULL) ;
+	(*env)->CallStaticVoidMethod(env, J.Bridge, J.b_hint, h) ;
+	if (h != NULL){
+		(*env)->DeleteLocalRef(env, h) ;
+	}
+	drop_exception(env) ;
+	return UGLY_OK ;
+}
+
+
+static void clear_hint(JNIEnv *env){
+	(*env)->CallStaticVoidMethod(env, J.Bridge, J.b_hint, NULL) ;
+	drop_exception(env) ;
+}
+
+
+static ugly_status jv_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_kind want, ugly_val *out){
+
+	JNIEnv *env = ENV(rt) ;
+	ugly_status st = hint_opts(ctx, env, o) ;
+	if (st == UGLY_OK){
+		st = jv_call(ctx, rt, ref, args, nargs, want, out) ;
+		clear_hint(env) ;
+	}
+	return st ;
+}
+
+
+static ugly_status jv_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
+
+	JNIEnv *env = ENV(rt) ;
+	ugly_status st = hint_opts(ctx, env, o) ;
+	if (st == UGLY_OK){
+		st = jv_invoke(ctx, rt, ref, method, args, nargs, want, out) ;
+		clear_hint(env) ;
+	}
+	return st ;
+}
+
+
+static ugly_status jv_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_handle *out){
+
+	JNIEnv *env = ENV(rt) ;
+	ugly_status st = hint_opts(ctx, env, o) ;
+	if (st == UGLY_OK){
+		st = jv_new_instance(ctx, rt, ref, args, nargs, out) ;
+		clear_hint(env) ;
+	}
+	return st ;
+}
+
+
 static void jv_release(ugly_rt *rt, void *ref){
 	(void)rt ;
 	JNIEnv *env = env_here() ;
@@ -1240,6 +1318,7 @@ static int lookup(JNIEnv *env){
 	J.b_deleteMember = (*env)->GetStaticMethodID(env, J.Bridge, "deleteMember", sig) ;
 	snprintf(sig, sizeof(sig), "(%sII[%s)V", O, O) ;
 	J.b_splice = (*env)->GetStaticMethodID(env, J.Bridge, "splice", sig) ;
+	J.b_hint = (*env)->GetStaticMethodID(env, J.Bridge, "hint", "(Ljava/lang/String;)V") ;
 	snprintf(sig, sizeof(sig), "(%s[%s)%s", O, O, O) ;
 	J.b_call = (*env)->GetStaticMethodID(env, J.Bridge, "call", sig) ;
 	J.b_newInstance = (*env)->GetStaticMethodID(env, J.Bridge, "newInstance", sig) ;
@@ -1403,6 +1482,9 @@ static const ugly_plugin plugin = {
 	.set_index = jv_set_index,
 	.delete_member = jv_delete_member,
 	.splice = jv_splice,
+	.call_opts = jv_call_opts,
+	.invoke_opts = jv_invoke_opts,
+	.new_opts = jv_new_opts,
 	.call = jv_call,
 	.invoke = jv_invoke,
 	.new_instance = jv_new_instance,

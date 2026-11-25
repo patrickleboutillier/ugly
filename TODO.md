@@ -64,7 +64,7 @@ working setup.
 
 All additive; none of it breaks existing plugins (contract, "Scope").
 
-- [ ] **Call options** (contract §11, decided 2026-11-25): keyword
+- [x] **Call options** (contract §11, done 2026-11-25): keyword
   arguments, overload hints, call context.
   - [x] The core (`ugly_call_opts` and friends, plugin ABI 4), keyword
     arguments in Python, Perl and the mock, Perl's context, the `options`
@@ -72,12 +72,13 @@ All additive; none of it breaks existing plugins (contract, "Scope").
   - [x] The bindings' syntax: native on Python proxies, `ugly.kw` (Lua,
     JS), `Ugly::kw` (Perl), `Ugly.kw` (Java); README examples. Calling a
     class that can only be instantiated now constructs it.
-  - [ ] Java's hint; `ugly.call(f, ugly.opts{...})` and its equivalents.
+  - [x] Java's hint (the overload's parameter types), and the `opts` marker
+    for hints and contexts in every binding (done 2026-11-25).
 - [ ] **Iterators and generators**: a protocol for "next" (Python
   iterators, Lua `pairs`/closures, JS iterators), beyond today's indexing.
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
   Python dicts keyed by tuples, JS `Map`.
-- [ ] **Overload hints** (v1's `hint`): the `hint` call option, for Java
+- [x] **Overload hints** (v1's `hint`): the `hint` call option, for Java
   (see call options above).
 - [x] **Resizing and deleting** (done 2026-11-25): `ugly_splice` and
   `ugly_delete_member`, plugin ABI 2. Perl's ties use them.

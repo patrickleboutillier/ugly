@@ -199,6 +199,17 @@ json::dumps($data, Ugly::kw(separators => $pair));   # Perl
 builtins.invoke("int", "ff", Ugly.kw("base", 16));   // Java: 255
 ```
 
+Two more call options go the same way, with `opts`: a Java overload hint,
+and Perl's call context:
+
+```python
+String = ugly.module("java", "java.lang.String")
+String.valueOf(65, ugly.opts(hint="double"))      # '65.0': valueOf(double), not valueOf(long)
+
+localtime = ugly.eval("perl5", "sub { localtime($_[0]) }")
+localtime(0, ugly.opts(context="scalar"))         # a date string, not Perl's 9-element list
+```
+
 Lua, JS and Java have no keyword arguments, so calls into them refuse them
 with an error rather than drop them. Calling a class that can only be
 instantiated (a Perl package, a Java class) constructs it, so

@@ -117,9 +117,16 @@ if "perl5" in built:
     pl = ugly.module("perl5", "conformance")
     ok(pl.kw(1, c=3, b=2) == "1 2 3", "keyword arguments reach Perl as trailing pairs: kw(1, c=3, b=2)")
     ok(pl.KwBox(value=5).add(n=10) == 15, "calling a Perl class constructs it, with keyword arguments: KwBox(value=5).add(n=10)")
+    ok((pl.context(), pl.context(ugly.opts(context="scalar"))) == ("list", "scalar"),
+       "ugly.opts(context=\"scalar\") last: Perl's scalar context")
+    localtime = ugly.eval("perl5", "sub { localtime($_[0]) }")
+    ok(len(localtime(0)) == 9 and isinstance(localtime(0, ugly.opts(context="scalar")), str),
+       "  ... localtime(0): 9 elements in list context, a date string in scalar (README)")
 else:
     skip("keyword arguments into Perl", "perl5")
     skip("calling a Perl class", "perl5")
+    skip("Perl's call context", "perl5")
+    skip("Perl's localtime in scalar context", "perl5")
 
 # Foreign functions are Lua functions; classes stay userdata.
 nums = ugly.eval("lua", "return { 3, 1, 2 }")

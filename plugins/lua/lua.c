@@ -37,6 +37,7 @@
 #define PROXY_MT "ugly.proxy"
 #define ERROR_MT "ugly.error"
 #define KW_MT "ugly.kw"
+#define OPTS_MT "ugly.opts"
 #define PROXY_CACHE "ugly.proxies"
 
 #define REF(p) ((int)(intptr_t)(p))
@@ -788,29 +789,58 @@ static int finish(lua_State *L, ugly_ctx *ctx, ugly_status st, ugly_val *out){
  */
 typedef struct { ugly_opts o ; ugly_kwarg *kw ; } lua_kw ;
 
-static int is_kw(lua_State *L, int idx){
+static int is_marker(lua_State *L, int idx, const char *mt){
 	if ((lua_type(L, idx) != LUA_TTABLE)||(! lua_getmetatable(L, idx))){
 		return 0 ;
 	}
-	luaL_getmetatable(L, KW_MT) ;
+	luaL_getmetatable(L, mt) ;
 	int yes = lua_rawequal(L, -1, -2) ;
 	lua_pop(L, 2) ;
 	return yes ;
+}
+
+
+/* ugly.opts{ hint = ..., context = ... }: the strings stay in the table, on the stack for the call. */
+static void take_opts(lua_State *L, int idx, ugly_opts *o){
+	if (lua_getfield(L, idx, "hint") == LUA_TSTRING){
+		o->hint = lua_tostring(L, -1) ;
+	}
+	lua_pop(L, 1) ;
+	if (lua_getfield(L, idx, "context") == LUA_TSTRING){
+		o->context = lua_tostring(L, -1) ;
+	}
+	lua_pop(L, 1) ;
 }
 
 static int kw_order(const void *a, const void *b){
 	return strcmp(((const ugly_kwarg *)a)->name, ((const ugly_kwarg *)b)->name) ;
 }
 
-/* If the last of n arguments from 'first' is ugly.kw{...}, takes it out (*n shrinks) into k. */
+/*
+ * Takes the trailing ugly.kw{...} and ugly.opts{...} (at most one of each,
+ * in either order) off the n arguments from 'first' (*n shrinks) into k.
+ */
 static ugly_status take_kw(lua_State *L, ugly_ctx *ctx, int first, int *n, lua_kw *k){
 	k->o = (ugly_opts)UGLY_OPTS_INIT ;
 	k->kw = NULL ;
-	int idx = first + *n - 1 ;
-	if ((*n == 0)||(! is_kw(L, idx))){
+	int idx = 0, have_opts = 0 ;
+	while (*n > 0){
+		int last = first + *n - 1 ;
+		if ((! have_opts)&&is_marker(L, last, OPTS_MT)){
+			take_opts(L, last, &k->o) ;
+			have_opts = 1 ;
+		}
+		else if ((idx == 0)&&is_marker(L, last, KW_MT)){
+			idx = last ;
+		}
+		else {
+			break ;
+		}
+		(*n)-- ;
+	}
+	if (idx == 0){
 		return UGLY_OK ;
 	}
-	(*n)-- ;
 	size_t cap = 8, count = 0 ;
 	k->kw = calloc(cap, sizeof(ugly_kwarg)) ;
 	ugly_status st = UGLY_OK ;
@@ -851,6 +881,16 @@ static void free_kw(ugly_ctx *ctx, lua_kw *k){
 		ugly_val_release(ctx, &k->kw[i].value) ;
 	}
 	free(k->kw) ;
+}
+
+
+/* ugly.opts{ hint = "...", context = "scalar" }: call options, for the last argument of a call. */
+static int api_opts(lua_State *L){
+	luaL_checktype(L, 1, LUA_TTABLE) ;
+	lua_settop(L, 1) ;
+	luaL_newmetatable(L, OPTS_MT) ;
+	lua_setmetatable(L, 1) ;
+	return 1 ;
 }
 
 
@@ -1232,7 +1272,7 @@ static int api_is_proxy(lua_State *L){
 
 static const luaL_Reg api[] = {
 	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure },
-	{ "shared_by_threads", api_shared_by_threads }, { "kw", api_kw }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
+	{ "shared_by_threads", api_shared_by_threads }, { "kw", api_kw }, { "opts", api_opts }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
 	{ NULL, NULL }
 } ;
 

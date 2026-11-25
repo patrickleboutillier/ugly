@@ -132,6 +132,17 @@ sub kw {
 	bless [ @_ ], 'Ugly::Kw'
 }
 
+# Ugly::opts(context => 'scalar', hint => '...'): call options, for the last
+# argument of a call (with an Ugly::kw(...) beside it if there are both).
+sub opts {
+	Carp::croak('Ugly::opts(hint => ..., context => ...): expected pairs') if @_ % 2 ;
+	my %o = @_ ;
+	for (keys %o){
+		Carp::croak("Ugly::opts: no option '$_' (hint, context)") unless $_ eq 'hint' || $_ eq 'context' ;
+	}
+	bless { %o }, 'Ugly::Opts'
+}
+
 sub is_error { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Error') }
 sub is_proxy { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Proxy') }
 

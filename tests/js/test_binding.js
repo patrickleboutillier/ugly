@@ -78,5 +78,10 @@ ok(py.kw(1, ugly.kw({ c: 3, b: 2 })) === "1 2 3", "keyword arguments reach Pytho
 ok(new py.KwBox(ugly.kw({ value: 5 })).add(ugly.kw({ n: 10 })) === 15, "  ... new py.KwBox(ugly.kw({ value: 5 })).add(...)");
 ok(ugly.module("python", "builtins").int("ff", ugly.kw({ base: 16 })) === 255, "int('ff', base=16)");
 
+let refused = false;
+try { py.kw(1, ugly.opts({ context: "scalar" })); } catch (e) { refused = ugly.isError(e) && /no call context/.test(e.message); }
+ok(refused, "ugly.opts({ context: ... }) into Python: refused");
+ok(py.kw(1, ugly.kw({ c: 3 }), ugly.opts({})) === "1 0 3", "  ... and ugly.kw and ugly.opts last, in either order");
+
 console.log("1.." + count);
 if (failures > 0) throw new Error(failures + " test(s) failed");
