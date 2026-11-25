@@ -80,9 +80,17 @@ All additive; none of it breaks existing plugins (contract, "Scope").
     plugin, like Lua and Python.
   - Open questions: list vs scalar context (likely a call option beside
     `want`), dualvars, byte vs character strings, `DESTROY` timing.
-- [ ] **A JS binding**, for programs that embed QuickJS themselves. There's
-  no standard QuickJS host executable to attach to, the way there is for
-  Lua and Python, so this waits for a real host.
+- [x] **A JS binding** for `qjs` (done 2026-11-24): `plugins/js/binding/`.
+- [ ] **Node.js**, for the npm ecosystem, which QuickJS can't run because
+  it has no Node APIs (`fs`, `http`, CommonJS packages).
+  - Start with the binding: Node as host, through an N-API addon. N-API is
+    a stable C ABI, with references, finalizers and function calls, so
+    `require("ugly")` from `node` can use Python and Lua.
+  - Calls coming from other threads need `napi_threadsafe_function`. That
+    overlaps the any-thread item above.
+  - Embedding Node as a plugin is the harder half: libnode's C++ API, the
+    event loop owned by Node, and one instance per process. Do it later, if
+    ever.
 - [ ] **Java** through Panama FFM, only if there's a reason. Creating the
   JVM still needs the JNI invocation API.
 

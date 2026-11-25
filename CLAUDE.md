@@ -35,7 +35,10 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
     - Numbers: integral within ±2^53 → INT, else DOUBLE; larger INTs go in as `BigInt`.
     - Errors are `error_class` objects inheriting `Error.prototype`.
     - Modules are ES modules from `UGLY_JS_PATH`, plus the built-in C module `"ugly"` (`module`, `eval`, `isError`, `isProxy`, `gc`).
-    - Jobs run when the outermost call returns (`enter`/`leave`). `JS_FreeRuntime` asserts that nothing is still referenced.
+    - Jobs run when the outermost call returns (`enter`/`leave`), but not when attached, since the host owns the event loop. `JS_FreeRuntime` asserts that nothing is still referenced.
+    - Runtimes are found through a registry (`runtimes`), not the context opaque, because an attached context belongs to `qjs`. Refs are `jsbox` entries linked per runtime.
+    - The binding (`binding/`, `js_init_module`, loaded by `qjs` as `import "…/ugly.so"`) tears down from a global sentinel object, whose `gc_mark` declares every box to QuickJS's GC. Otherwise the external references would keep `qjs`'s context alive past its `JS_FreeRuntime` assertion. The subproject also builds `qjs` (`qjsc`, `repl.c`, `-rdynamic`) for the binding test.
+    - Editing `subprojects/packagefiles/quickjs/` needs `rm -rf subprojects/quickjs-2026-06-04` (git-ignored) to take effect: Meson copies `packagefiles/` only at extraction.
   - Proxies in all three languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
   - **Bindings** (`plugins/<lang>/binding/`) compile the plugin's own source again with `-DUGLY_BINDING`, as the native module `ugly`: `luaopen_ugly`, and `PyInit_ugly` via `pyinst.extension_module`. They link **no interpreter library**, because Debian's `python3` and `lua5.4` are statically linked and a second interpreter in the process would be fatal.
     - On import, a binding calls `ugly_lang_register` (no dlopen) and `ugly_rt_attach` on the host interpreter. Teardown is a `__gc` sentinel in Lua and `atexit` in Python.
@@ -67,7 +70,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## State (2026-11-24)
 
-- **`master`**: the v2 core, plugins for the mock, Lua, CPython and JS (QuickJS), bindings for Lua and Python, the conformance suite (32 runs: 8 groups × 4 plugins), pairwise (12 ordered pairs), the binding tests (2) and two examples. 48 tests pass, clean under valgrind, and helgrind finds no races.
+- **`master`**: the v2 core, plugins for the mock, Lua, CPython and JS (QuickJS), bindings for Lua, Python and JS (qjs), the conformance suite (32 runs: 8 groups × 4 plugins), pairwise (12 ordered pairs), the binding tests (3) and two examples. 49 tests pass, clean under valgrind, and helgrind finds no races.
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
 - **QuickJS is done** (2026-11-24). **Next: the Perl port** (see the notes above, and the open questions in TODO.md). See contract.md "Order of work".

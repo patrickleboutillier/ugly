@@ -79,6 +79,16 @@ Code reached this way can use `ugly` too, and it reaches back into the
 host's own interpreter. For example, Lua called from that Python program
 can `require "ugly"` and use the program's own globals.
 
+A QuickJS program (`qjs`) works the same way, by importing the native module
+([tests/js/test_binding.js](tests/js/test_binding.js)):
+
+```js
+const ugly = await import("/path/to/ugly.so");
+const py = ugly.module("python", "conformance");
+py.apply(x => x * 2, 21);                         // 42: Python calls a JS arrow function
+ugly.module("lua", "string").upper("abc");        // "ABC"
+```
+
 ### From C
 
 A C program can host any languages itself and pass values between them.
@@ -138,7 +148,7 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 | `plugins/mock/` | A small language written in C, used to test the core and the contract before any real interpreter. |
 | `plugins/lua/` | Lua 5.4. `binding/` builds the same source as the Lua module `ugly`. |
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
-| `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. |
+| `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. `binding/` builds the same source as the native module `ugly.so` for `qjs`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs (Lua using Python, and a C host), run as tests. |
 | `doc/` | The contract and the design essay. |
@@ -146,8 +156,8 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 ## Status
 
 Lua, CPython and JavaScript (QuickJS) pass the whole conformance suite, and
-every pair of them works in one process. Lua and Python also call each
-other from a plain `lua` or `python3` program. Next on the plan (in
+every pair of them works in one process. Each one can also be the host:
+plain `lua`, `python3` and `qjs` programs use the other languages. Next on the plan (in
 [doc/contract.md](doc/contract.md), "Order of work") is **Perl**, ported
 from the original plugin.
 
@@ -194,9 +204,9 @@ Every test is a TAP stream. The full output is in
   fixtures are each plugin's `conformance` module, from `tests/<lang>/`.
 - **Pairwise** (`tests/pairwise.c`): every ordered pair of different
   languages in one process, using each other's values, calls and errors.
-- **Bindings** (`tests/python/test_binding.py`, `tests/lua/test_binding.lua`):
-  plain `python3` and `lua5.4` processes using each other through `ugly`,
-  in attach mode.
+- **Bindings** (`tests/<lang>/test_binding.*`): plain `python3`, `lua5.4`
+  and `qjs` programs using the other languages through `ugly`, in attach
+  mode. The `qjs` is the one built from the QuickJS subproject.
 - **Examples** (`examples/`): run, and checked by exit status. They're the
   programs README quotes.
 
