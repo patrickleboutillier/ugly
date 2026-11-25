@@ -1,0 +1,67 @@
+# Source releases. Pushing a tag vX.Y.Z (matching the version in meson.build)
+# builds the source tarball with `meson dist`, which unpacks it, builds it and
+# runs the test suite on it, then publishes it with its checksum as a GitHub
+# Release. The tarball includes QuickJS, so it builds without downloading.
+#
+# Run by hand (workflow_dispatch), it's a dry run: the tarball is kept as an
+# artifact and nothing is published.
+#
+# Binaries aren't released: the Python and Perl plugins are tied to the exact
+# interpreter they were built against, so they're built where they're used.
+
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  source:
+    name: source tarball
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build gcc pkg-config \
+            liblua5.4-dev lua5.4 liblua5.3-dev lua5.3 python3-dev libperl-dev
+
+      - name: Use JDK 21
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: meson setup build
+
+      - name: The tag matches the project version
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(meson introspect build --projectinfo | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but meson.build says version $version"
+            exit 1
+          fi
+
+      - name: Build and test the tarball
+        run: meson dist -C build --include-subprojects --formats xztar
+
+      - name: Keep the tarball
+        uses: actions/upload-artifact@v6
+        with:
+          name: source-tarball
+          path: build/meson-dist/
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/meson-dist/* \
+            --verify-tag --title "UGLY ${GITHUB_REF_NAME#v}" --generate-notes

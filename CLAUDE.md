@@ -89,6 +89,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 ## State (2026-11-25)
 
 - **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS), Perl 5 and Java, bindings for Lua, Python, JS (qjs), Perl and Java, the conformance suite (48 runs: 8 groups × 6 plugins), pairwise (30 ordered pairs), the binding tests (7) and two examples. 87 tests pass; the 66 without a JVM are clean under valgrind, and helgrind finds no races.
+- Releases: source tarballs only (`.github/workflows/release.yml`). To release: set the version in `meson.build` (and `src/meson.build`'s library version if the ABI changed), merge, tag `vX.Y.Z` on master, push the tag; CI checks the tag against the version, runs `meson dist` (build and test from the tarball) and publishes. `gh workflow run release.yml` is a dry run. Releasing is outward-facing: ask the author first.
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
 - **The plan in contract.md is complete** (2026-11-24): QuickJS, the JS binding, and Perl with its binding are done. Perl's open questions were decided with Claude's recommendations (contract decisions 9–12). Decision 6, Latin-1 decoding, was **revised** so that bytes round-trip; it's flagged to the author in the contract.
