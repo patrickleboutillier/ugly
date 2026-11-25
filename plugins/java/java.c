@@ -772,6 +772,23 @@ static jobject JNICALL n_eval(JNIEnv *env, jclass cls, jstring lang, jstring cod
 }
 
 
+static void JNICALL n_configure(JNIEnv *env, jclass cls, jstring lang, jstring key, jstring value){
+	(void)cls ;
+	ugly_ctx *ctx = native_ctx(env) ;
+	if (ctx == NULL){
+		return ;
+	}
+	char *l = c_string(env, lang), *k = c_string(env, key), *v = c_string(env, value) ;
+	ugly_status st = ugly_configure(ctx, l, k, v) ;
+	free(l) ;
+	free(k) ;
+	free(v) ;
+	if (st != UGLY_OK){
+		throw_ugly(env, ctx, st) ;
+	}
+}
+
+
 static JNINativeMethod natives[] = {
 	{ "call", "(J[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_call },
 	{ "invoke", "(JLjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_invoke },
@@ -787,6 +804,7 @@ static JNINativeMethod natives[] = {
 	{ "freeError", "(J)V", (void *)n_free_error },
 	{ "module", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", (void *)n_module },
 	{ "eval", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", (void *)n_eval },
+	{ "configure", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", (void *)n_configure },
 } ;
 
 
@@ -1173,14 +1191,33 @@ static ugly_status jv_init(ugly_ctx *ctx, const char *dir){
 #else
 	jsize n = 0 ;
 	if ((JNI_GetCreatedJavaVMs(&jvm, 1, &n) != JNI_OK)||(n == 0)){
-		/* We start the JVM: the helper jar next to this plugin, then the user's class path. */
+		/*
+		 * We start the JVM. Class path: the helper jar next to this plugin,
+		 * then ugly_configure's "classpath" values, UGLY_JAVA_CLASSPATH and
+		 * CLASSPATH. Its "options" (-Xmx512m, -Dkey=value...) come after ours.
+		 */
 		const char *extra = getenv("UGLY_JAVA_CLASSPATH") ;
 		const char *cp = getenv("CLASSPATH") ;
-		size_t len = strlen(dir) + (extra ? strlen(extra) : 0) + (cp ? strlen(cp) : 0) + 64 ;
+		const char *v ;
+		size_t len = strlen(dir) + (extra ? strlen(extra) : 0) + (cp ? strlen(cp) : 0) + 64, i, nuser = 0 ;
+		for (i = 0 ; (v = ugly_option("java", "classpath", i)) != NULL ; i++){
+			len += strlen(v) + 1 ;
+		}
+		while (ugly_option("java", "options", nuser) != NULL){
+			nuser++ ;
+		}
 		char *opt_cp = malloc(len) ;
-		snprintf(opt_cp, len, "-Djava.class.path=%s/ugly.jar%s%s%s%s", dir,
-			extra ? ":" : "", extra ? extra : "", cp ? ":" : "", cp ? cp : "") ;
-		JavaVMOption options[5] ;
+		JavaVMOption *options = calloc(nuser + 6, sizeof(JavaVMOption)) ;
+		if ((opt_cp == NULL)||(options == NULL)){
+			free(opt_cp) ;
+			free(options) ;
+			return UGLY_ERR_NOMEM ;
+		}
+		size_t at = (size_t)snprintf(opt_cp, len, "-Djava.class.path=%s/ugly.jar", dir) ;
+		for (i = 0 ; (v = ugly_option("java", "classpath", i)) != NULL ; i++){
+			at += (size_t)snprintf(opt_cp + at, len - at, ":%s", v) ;
+		}
+		snprintf(opt_cp + at, len - at, "%s%s%s%s", extra ? ":" : "", extra ? extra : "", cp ? ":" : "", cp ? cp : "") ;
 		int nopt = 0 ;
 		options[nopt++].optionString = opt_cp ;
 		options[nopt++].optionString = "-Xrs" ;     /* leave SIGINT, SIGTERM... to the host */
@@ -1190,6 +1227,9 @@ static ugly_status jv_init(ugly_ctx *ctx, const char *dir){
 		if (getenv("UGLY_JAVA_CHECK") != NULL){
 			options[nopt++].optionString = "-Xcheck:jni" ;
 		}
+		for (i = 0 ; i < nuser ; i++){
+			options[nopt++].optionString = (char *)ugly_option("java", "options", i) ;
+		}
 		JavaVMInitArgs args ;
 		args.version = JNI_VERSION_10 ;
 		args.nOptions = nopt ;
@@ -1197,6 +1237,7 @@ static ugly_status jv_init(ugly_ctx *ctx, const char *dir){
 		args.ignoreUnrecognized = JNI_FALSE ;
 		jint rc = JNI_CreateJavaVM(&jvm, (void **)&env, &args) ;
 		free(opt_cp) ;
+		free(options) ;
 		if (rc != JNI_OK){
 			return UGLY_ERR_INTERNAL ;
 		}
@@ -1255,6 +1296,7 @@ static const ugly_plugin plugin = {
 	.name = "java",
 	.init = jv_init,
 	.rt_new = jv_rt_new,
+	.options = (const char *const []){ "classpath", "options", NULL },
 	.rt_attach = jv_rt_attach,
 	.rt_delete = jv_rt_delete,
 	.import = jv_import,

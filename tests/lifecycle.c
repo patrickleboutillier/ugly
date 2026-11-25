@@ -35,6 +35,14 @@ int main(void){
 	st = ugly_lang_unload(ctx, f.lang) ;
 	is_status(ctx, st, UGLY_ERR_IN_USE, "unload with a live runtime: UGLY_ERR_IN_USE") ;
 
+	/* Options: set before a language loads. */
+	st = ugly_configure(ctx, plugin_name(), "path", "/nowhere") ;
+	is_status(ctx, st, UGLY_ERR_IN_USE, "ugly_configure on a loaded language: UGLY_ERR_IN_USE") ;
+	st = ugly_configure(ctx, "c", "path", "/nowhere") ;
+	is_status(ctx, st, UGLY_ERR_IN_USE, "ugly_configure on the built-in c language: UGLY_ERR_IN_USE") ;
+	st = ugly_configure(ctx, "../etc", "path", "/nowhere") ;
+	is_status(ctx, st, UGLY_ERR_USAGE, "ugly_configure with an invalid language name: UGLY_ERR_USAGE") ;
+
 	/* Optional capabilities fail cleanly when absent. */
 	if (! (caps & UGLY_CAP_EVAL)){
 		st = ugly_rt_eval(ctx, f.rt, "1", 1, UGLY_ANY, &v) ;
@@ -99,6 +107,18 @@ int main(void){
 		ugly_rt_delete(ctx, f.rt) ;
 		st = ugly_lang_unload(ctx, f.lang) ;
 		is_status(ctx, st, UGLY_OK, "unload once the last runtime is gone") ;
+		/* Options again: only if the plugin was torn down (a plugin without 'term' stays initialized). */
+		st = ugly_configure(ctx, plugin_name(), "no_such_option", "x") ;
+		ok((st == UGLY_OK)||(st == UGLY_ERR_IN_USE), "ugly_configure after unload: OK, or UGLY_ERR_IN_USE if the plugin stays initialized") ;
+		if (st == UGLY_OK){
+			st = ugly_lang_load(ctx, plugin_name(), &l2) ;
+			is_status(ctx, st, UGLY_ERR_USAGE, "  ... an option the plugin doesn't take fails the load: UGLY_ERR_USAGE") ;
+			st = ugly_configure(ctx, plugin_name(), "no_such_option", NULL) ;
+			is_status(ctx, st, UGLY_OK, "  ... and a NULL value clears it") ;
+		}
+		else {
+			skip("the plugin stays initialized after unloading") ;
+		}
 		st = ugly_lang_load(ctx, plugin_name(), &f.lang) ;
 		is_status(ctx, st, UGLY_OK, "load again") ;
 		ok(fx_runtime(&f, &f.rt, &f.mod), "  ... and create a runtime") ;

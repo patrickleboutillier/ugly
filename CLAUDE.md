@@ -10,7 +10,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 - **`doc/contract.md`** is the spec. It was approved on 2026-11-24 (PR #1), and its "Decisions" and "Clarifications" sections record everything settled since. Every rule in it should be a test in `tests/`.
 - **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract (the plugin rules plus the core services). The plugin vtable is written by hand; nothing is generated.
-- **`src/`** is the core (`libugly` 2.1.0, plugin ABI 2):
+- **`src/`** is the core (`libugly` 2.1.0, plugin ABI 3):
   - `handles.c`: the handle table. A handle is a slot index plus a generation. It also holds borrow slots, the (home, identity) index and the per-runtime queues of deferred releases, all under one lock. Plugin code never runs under that lock.
   - `ctx.c`: one ctx per thread (`_Thread_local current`) and errors.
   - `rt.c`: runtimes and frames. `rt_enter`/`rt_leave` check the thread, enforce `UGLY_MAX_DEPTH`, drain deferred releases and revoke borrows. `after_call` normalizes plugin results.
@@ -69,7 +69,8 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Binding tests** (suite `bindings`): `tests/python/test_binding.py` runs under the `python3` that Meson found, and `tests/lua/test_binding.lua` under `lua5.4`, and `tests/java/test_binding.java` under `java` (suites `bindings` and `jvm`). All are TAP, and the Lua one ends with `os.exit(code, true)`, so the state closes and the binding tears down.
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
-  - The plugin ABI is 2: `delete_member` and `splice` (libugly 2.1). The core range-checks `splice` with `length` before the plugin runs.
+  - The plugin ABI is 3: `delete_member` and `splice` (2), `options` (3). The core range-checks `splice` with `length` before the plugin runs.
+  - `ugly_configure` (options, `lang.c`) is refused once a language is in the `langs` list, which a plugin without `term` never leaves. Plugins read options with `ugly_option` in `init` (Python, Java) or `rt_new` (Lua, Perl), or at module load (JS); `init` runs under `langs_lock`, so options have their own lock.
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
   - A plugin reports a non-exception failure with `ugly_fail` (chosen status), an exception with `ugly_raise_native` (`RAISED` plus a payload), and a rethrown foreign value with `ugly_raise_handle`.
   - A Lua or Python error must never `longjmp` across a core frame or skip one: catch it at the boundary.

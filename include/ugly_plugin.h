@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define UGLY_PLUGIN_ABI 2     /* 2: delete_member, splice */
+#define UGLY_PLUGIN_ABI 3     /* 2: delete_member, splice; 3: options */
 
 
 /*
@@ -119,6 +119,9 @@ typedef struct ugly_plugin {
 	 * to re-enter, or defer the work itself.
 	 */
 	void (*release)(ugly_rt *rt, void *ref) ;
+
+	/* ABI 3. The option keys this plugin takes (ugly_configure), NULL-terminated; NULL for none. */
+	const char *const *options ;
 } ugly_plugin ;
 
 
@@ -138,6 +141,12 @@ ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_la
 
 /* The calling thread's ctx, for native code (a proxy's __call) that wasn't handed one. NULL if none. */
 ugly_ctx *ugly_current_ctx(void) ;
+
+/*
+ * Value i of option 'key' for language 'lang' (ugly_configure), in the
+ * order given; NULL past the last. Valid for the life of the process.
+ */
+const char *ugly_option(const char *lang, const char *key, size_t i) ;
 
 /* The plugin's per-runtime state, as returned by rt_new/rt_attach. */
 void *ugly_rt_native(const ugly_rt *rt) ;

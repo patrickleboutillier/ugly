@@ -30,6 +30,10 @@ working setup.
     work is in the runtime thread check in `rt_enter`, deferred releases,
     and the threads conformance group.
   - The contract anticipated this relaxation (§6).
+- [x] **Options for runtimes created on demand** (done 2026-11-25):
+  `ugly_configure` and `configure` in every binding (paths, Lua's cpath,
+  Java's class path and JVM options). Perl could also take modules to load
+  first; nothing else is planned.
 - [ ] **Lazy Python initialization**, for hosts that fork. In HAProxy's
   master-worker mode, a `lua-load` script may run in the master before the
   workers fork, and each worker would inherit a forked interpreter (that

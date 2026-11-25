@@ -135,6 +135,23 @@ string.invoke("format", "%d items at %.2f", 3, 9.5);   // "3 items at 9.50"
 java -cp ugly.jar:. -Djava.library.path=<libdir> Main
 ```
 
+### Configuring languages
+
+Languages start on first use, so their settings are given beforehand, with
+`configure` in any binding (or `ugly_configure` in C). Options are module
+paths for every language, `cpath` for Lua, and the class path and JVM
+options for Java. They come before the environment variables that do the
+same (`PYTHONPATH`, `LUA_PATH`...):
+
+```python
+ugly.configure("java", classpath=["lib/app.jar"], options=["-Xmx512m"])
+ugly.configure("lua", path="./lua/?.lua")
+ugly.module("java", "com.example.App")            # the JVM starts here, with those settings
+```
+
+Once a language has started, configuring it raises an error instead of
+being silently ignored.
+
 ### From C
 
 A C program can host any languages itself and pass values between them.

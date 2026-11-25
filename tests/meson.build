@@ -29,6 +29,8 @@ test_env_vars = {
   'UGLY_JS_PATH': meson.current_source_dir() / 'js',
   'PERL5LIB': meson.current_source_dir() / 'perl5',
   'UGLY_JAVA_CLASSPATH': java_fixture_cp,
+  # Modules found only through ugly_configure (binding tests).
+  'UGLY_TEST_CONFIGURED': meson.current_source_dir() / 'configured',
   # -Xcheck:jni: the JVM checks the plugin's JNI use (its warnings break the TAP stream, failing the test).
   'UGLY_JAVA_CHECK': '1',
 }
@@ -88,6 +90,16 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
     env.set('PERL_DESTRUCT_LEVEL', '2')
     test('binding-perl5', perl_prog, args: files('perl5' / 'test_binding.pl'), protocol: 'tap', env: env,
       suite: 'bindings', depends: plugins + bindings)
+  endif
+
+  # The JVM configured from Python: class path and JVM options (ugly_configure).
+  if test_plugins.contains('java')
+    env = environment(test_env_vars)
+    env.prepend('PYTHONPATH', binding_dirs['python'])
+    env.set('UGLY_JAVA_CLASSPATH', '')
+    env.set('UGLY_TEST_JAR', java_fixture_cp)
+    test('configure-java', pyinst, args: files('java' / 'test_configure.py'), protocol: 'tap', env: env,
+      suite: ['bindings', 'jvm'], depends: plugins + bindings)
   endif
 
   # A plain java program; teardown at JVM exit prints the last test. Its VM

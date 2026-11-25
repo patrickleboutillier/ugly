@@ -29,6 +29,15 @@ public final class Ugly {
 		return Foreign.eval(lang, code);
 	}
 
+	/**
+	 * Options for a language that hasn't started yet: Ugly.configure("python",
+	 * "path", "lib/py") or Ugly.configure("lua", "path", "lua/?.lua"). Each
+	 * value is appended; see ugly_configure in ugly.h for the options.
+	 */
+	public static void configure(String lang, String key, String... values){
+		for (String v : values) Foreign.configure(lang, key, v);
+	}
+
 	/** Whether x is a value from another language (or a Java interface wrapping one). */
 	public static boolean isForeign(Object x){
 		return (x instanceof Foreign)||(Bridge.foreignOf(x) != null);

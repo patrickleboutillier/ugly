@@ -13,6 +13,9 @@ function ok(cond, what) {
 const ugly = await import(std.getenv("UGLY_JS_BINDING"));
 ok(typeof ugly.module === "function" && typeof ugly.eval === "function", "import ugly.so in a plain qjs program");
 
+// Options for Lua, before anything starts it.
+ugly.configure("lua", { path: [std.getenv("UGLY_TEST_CONFIGURED") + "/?.lua"] });
+
 const py = ugly.module("python", "conformance");
 ok(ugly.isProxy(py), "ugly.module('python', ...) gives a Python module, as a proxy");
 ok(py.echo("héllo") === "héllo", "a string goes to Python and back");
@@ -64,6 +67,11 @@ ok(ugly.eval("python", "__import__('ugly').eval('js', 'shared.answer')") === 42,
 // (its JS_FreeRuntime asserts that nothing is referenced).
 py.kept = () => 42;
 ok(py.kept() === 42, "Python keeps a JS function (until exit)");
+
+ok(ugly.module("lua", "ugly_configured").where === "configured", "ugly.configure('lua', { path: ... }): Lua finds the module");
+let late = false;
+try { ugly.configure("lua", { path: "/too/late" }); } catch (e) { late = ugly.isError(e); }
+ok(late, "  ... and configuring it again once started throws");
 
 console.log("1.." + count);
 if (failures > 0) throw new Error(failures + " test(s) failed");

@@ -10,6 +10,9 @@ end
 local ugly = require "ugly"
 ok(type(ugly.module) == "function" and type(ugly.eval) == "function", 'require "ugly" in a plain lua process')
 
+-- Options for Python, before anything starts it.
+ugly.configure("python", { path = { os.getenv("UGLY_TEST_CONFIGURED") } })
+
 local py = ugly.module("python", "conformance")
 ok(ugly.is_proxy(py), "ugly.module('python', ...) gives a Python module, as a proxy")
 ok(py.echo("h\u{e9}llo") == "h\u{e9}llo", "a string goes to Python and back")
@@ -43,6 +46,10 @@ ok(ugly.eval("python", "__import__('ugly').module('lua', 'string').upper('abc')"
 shared = { answer = 42 }
 ok(ugly.eval("python", "__import__('ugly').module('lua', '_G').shared.answer") == 42,
 	"  ... and sees this script's own globals")
+
+ok(ugly.module("python", "ugly_configured").where == "configured",
+	"ugly.configure('python', { path = ... }): Python finds the module")
+ok(not pcall(ugly.configure, "python", { path = "/too/late" }), "  ... and configuring it again once started fails")
 
 print("1.." .. count)
 os.exit(failures == 0 and 0 or 1, true)      -- true: close the state, so the binding tears down
