@@ -1,9 +1,19 @@
 """The Python binding: a plain python3 process uses Lua through `import ugly` (TAP)."""
 
+import os
 import sys
 
 count = 0
 failures = 0
+
+
+built = os.environ.get("UGLY_TEST_LANGS", "").split(",")
+
+
+def skip(what, lang):
+    global count
+    count += 1
+    print("ok", count, "-", what, f"# SKIP {lang} isn't built", flush=True)
 
 
 def ok(cond, what):
@@ -14,7 +24,6 @@ def ok(cond, what):
     print(("ok" if cond else "not ok"), count, "-", what, flush=True)
 
 
-import os
 import ugly
 
 ok(hasattr(ugly, "module") and hasattr(ugly, "eval"), "import ugly in a plain python3 process")
@@ -85,8 +94,14 @@ ok(ugly.eval("lua", "return require('ugly').module('python', '__main__').obj") i
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")
 ok(ugly.eval("lua", "return package.cpath").startswith("/configured/?.so;"), "  ... and cpath comes first in package.cpath")
-ok(ugly.module("js", "ugly_configured").where == "configured", "configure('js', path=...): JS finds the module")
-ok(ugly.module("perl5", "ugly_configured").where() == "configured", "configure('perl5', path=...): Perl finds the module")
+if "js" in built:
+    ok(ugly.module("js", "ugly_configured").where == "configured", "configure('js', path=...): JS finds the module")
+else:
+    skip("configure('js', path=...)", "js")
+if "perl5" in built:
+    ok(ugly.module("perl5", "ugly_configured").where() == "configured", "configure('perl5', path=...): Perl finds the module")
+else:
+    skip("configure('perl5', path=...)", "perl5")
 try:
     ugly.configure("lua", path="/too/late/?.lua")
     ok(False, "configure after the language started raises ugly.Error")

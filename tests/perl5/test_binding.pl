@@ -12,6 +12,8 @@ BEGIN {
 }
 
 my ($count, $failures) = (0, 0) ;
+my %built = map { ($_ => 1) } split(/,/, $ENV{UGLY_TEST_LANGS} // '') ;
+sub skip_test { my ($what, $lang) = @_ ; $count++ ; print "ok $count - $what # SKIP $lang isn't built\n" }
 sub ok {
 	my ($cond, $what) = @_ ;
 	$count++ ;
@@ -46,7 +48,8 @@ ok(ref($@) && $@ == $mine, "a Perl exception object crossing Python comes back a
 
 ok(abs(Ugly::module("python", "math")->sqrt(2) - 1.4142135623731) < 1e-9, "Python's math.sqrt from Perl") ;
 ok(Ugly::module("lua", "string")->upper("abc") eq "ABC", "Lua's string.upper from Perl") ;
-ok(Ugly::module("js", "conformance")->echo(41) + 1 == 42, "a JS module from Perl") ;
+if ($built{js}){ ok(Ugly::module("js", "conformance")->echo(41) + 1 == 42, "a JS module from Perl") }
+else { skip_test("a JS module from Perl", "js") }
 ok(Ugly::eval("python", "6 * 7") == 42, "Ugly::eval('python', code)") ;
 
 # Python code using Perl through its own ugly module, reaching back into this very interpreter.
@@ -88,9 +91,12 @@ my $t = Ugly::eval("lua", "return { 1, 2, 3 }") ;
 push @$t, 4 ;
 splice(@$t, 0, 1) ;
 ok(join(',', @$t) eq '2,3,4', "push and splice on a Lua table") ;
-my $a = Ugly::eval("js", "[2, 3]") ;
-unshift @$a, 1 ;
-ok(join(',', @$a) eq '1,2,3', "unshift on a JS array") ;
+if ($built{js}){
+	my $a = Ugly::eval("js", "[2, 3]") ;
+	unshift @$a, 1 ;
+	ok(join(',', @$a) eq '1,2,3', "unshift on a JS array") ;
+}
+else { skip_test("unshift on a JS array", "js") }
 
 my $d = Ugly::eval("python", "{'a': 1, 'b': None}") ;
 ok(exists($d->{b}) && ! defined($d->{b}), "exists on a member whose value is None") ;
@@ -98,9 +104,12 @@ ok(! exists($d->{zz}), "  ... and not on a missing one") ;
 ok(delete($d->{a}) == 1 && ! exists($d->{a}), "delete returns the value and removes the key") ;
 %$d = (x => 1, y => 2) ;
 ok(join(',', sort keys %$d) eq 'x,y', "hash assignment clears, then stores") ;
-my $obj = Ugly::eval("js", "({ k: 1 })") ;
-delete $obj->{k} ;
-ok(! exists($obj->{k}), "delete on a JS object") ;
+if ($built{js}){
+	my $obj = Ugly::eval("js", "({ k: 1 })") ;
+	delete $obj->{k} ;
+	ok(! exists($obj->{k}), "delete on a JS object") ;
+}
+else { skip_test("delete on a JS object", "js") }
 
 ok(Ugly::module("python", "ugly_configured")->{where} eq "configured", "Ugly::configure(python => { path => ... }): Python finds the module") ;
 eval { Ugly::configure(python => { path => '/too/late' }) } ;
