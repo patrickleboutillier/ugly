@@ -73,13 +73,13 @@ if valgrind.found()
       '--keep-debuginfo=yes',
       '--suppressions=' + (meson.project_source_root() / 'tests' / 'valgrind.supp'),
     ],
-    exclude_suites: ['jvm'],
+    exclude_suites: ['jvm', 'haproxy'],
     timeout_multiplier: 10,
   )
   # Data races, on the threads group: meson test --setup helgrind threads-mock threads-lua ...
   add_test_setup('helgrind',
     exe_wrapper: [valgrind, '--tool=helgrind', '--error-exitcode=99', '--num-callers=30'],
-    exclude_suites: ['jvm'],
+    exclude_suites: ['jvm', 'haproxy'],
     timeout_multiplier: 10,
   )
 endif

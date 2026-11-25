@@ -62,6 +62,35 @@ arrives as the original object, never as a proxy of a proxy. Errors keep
 their identity too: an exception raised in Python that crosses Lua is caught
 in Python as the same object.
 
+### In HAProxy
+
+HAProxy has Lua built in, and the Lua binding attaches to it, so a Lua
+action can ask Python whether to let a request through
+([examples/haproxy/](examples/haproxy/), run by the tests when `haproxy` is
+installed):
+
+```lua
+-- poc.lua, loaded with lua-load-per-thread
+local ugly = require "ugly"
+local policy
+
+core.register_action("decide", { "http-req" }, function(txn)
+    local ok, verdict = pcall(function()
+        policy = policy or ugly.module("python", "policy")    -- Python starts on the first request
+        return policy.decide(txn.sf:src(), txn.sf:path(), txn.sf:req_hdr("user-agent"))
+    end)
+    txn:set_var("txn.verdict", ok and verdict[1] or "deny")    -- fail closed
+end)
+```
+
+`policy.py` is plain Python. With `lua-load-per-thread`, each HAProxy worker
+thread has its own Lua state, and they all share the one Python. Use `ugly`
+inside actions, not when the file loads: HAProxy loads Lua on its main
+thread, and in its master process before forking. A single Lua state shared
+by several threads (`lua-load` with `nbthread` above 1) isn't supported yet.
+The Python call runs synchronously in the action, so it suits quick
+decisions, not I/O.
+
 ### From Python
 
 The other way round works the same, with `import ugly` in a plain `python3`

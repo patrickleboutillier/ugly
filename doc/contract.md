@@ -446,6 +446,15 @@ essay's "2N" becomes about N plus N thin API wrappers.
     passes.
   - Only the thread that loaded the binding can use it. Other Java threads
     get `IllegalStateException` (TODO.md: any-thread runtimes).
+- **Lua attaches on first use** (2026-11-25, found by the HAProxy proof of
+  concept). HAProxy loads every Lua state on its main thread and then runs
+  each one on a worker thread, so attaching at `require "ugly"` gave the
+  runtime to the wrong thread. The binding now attaches on the first use of
+  `ugly`, on that thread, with that thread's ctx (`ugly_ctx_thread`), and
+  attaches the state's main thread, not the coroutine HAProxy's action runs
+  in. With `lua-load-per-thread`, each worker's state is its own runtime
+  and all of them share Python (§6). One state run by several threads
+  (`lua-load` with several threads) is refused with a message saying so.
 - **Perl's sugar** (2026-11-25). Proxies are native through overloads and
   ties: `$p->(...)`, `$p->m(...)`, `$p->{k}`, `$p->[i]`, and the whole tie
   interfaces: `exists`, `delete`, `keys`, `push`, `pop`, `shift`, `unshift`,
