@@ -18,3 +18,6 @@
 !/subprojects/packagefiles/
 /subprojects/packagecache/
 __pycache__/
+
+# Scratch space for small programs and experiments, never committed
+/stuff/
