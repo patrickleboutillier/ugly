@@ -181,6 +181,41 @@ ugly_status ugly_set_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_val v){
 }
 
 
+ugly_status ugly_delete_member(ugly_ctx *ctx, ugly_handle h, const char *name){
+	call c ;
+	ugly_status st = begin(&c, ctx, h, NULL, 0, NULL) ;
+	if (st == UGLY_OK){
+		if (name == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_delete_member: name is required") ;
+		}
+		else if ((st = NOT_IMPL(c.p->delete_member)) == UGLY_OK){
+			st = c.p->delete_member(ctx, c.rt, c.ref, name) ;
+		}
+	}
+	return end(&c, st, "delete_member", UGLY_ANY, NULL) ;
+}
+
+
+ugly_status ugly_splice(ugly_ctx *ctx, ugly_handle h, int64_t offset, int64_t remove, const ugly_val *insert, size_t n){
+	call c ;
+	ugly_status st = begin(&c, ctx, h, insert, n, NULL) ;
+	if (st == UGLY_OK){
+		int64_t len = 0 ;
+		if (((st = NOT_IMPL(c.p->splice)) == UGLY_OK)&&((st = NOT_IMPL(c.p->length)) == UGLY_OK)
+			&&((st = c.p->length(ctx, c.rt, c.ref, &len)) == UGLY_OK)){
+			if ((offset < 0)||(remove < 0)||(offset > len)||(remove > len - offset)){
+				st = ctx_fail(ctx, UGLY_ERR_NOT_FOUND, "core", "", "ugly_splice: %lld..%lld is outside 0..%lld",
+					(long long)offset, (long long)offset + (long long)remove, (long long)len) ;
+			}
+			else {
+				st = c.p->splice(ctx, c.rt, c.ref, offset, remove, c.bargs, n) ;
+			}
+		}
+	}
+	return end(&c, st, "splice", UGLY_ANY, NULL) ;
+}
+
+
 ugly_status ugly_call(ugly_ctx *ctx, ugly_handle fn, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out){
 	call c ;
 	ugly_status st = begin(&c, ctx, fn, args, nargs, out) ;

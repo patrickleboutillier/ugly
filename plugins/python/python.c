@@ -948,6 +948,29 @@ static ugly_status py_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 }
 
 
+/* del d[k] or del o.name; a member that isn't there is not an error. */
+static ugly_status py_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st = UGLY_OK ;
+	ENTER ;
+	int rc = 0 ;
+	if (PyDict_Check(o)){
+		PyObject *k = PyUnicode_FromString(name) ;
+		rc = ((k == NULL) ? -1 : (PyDict_Contains(o, k) == 1 ? PyDict_DelItem(o, k) : 0)) ;
+		Py_XDECREF(k) ;
+	}
+	else if (PyObject_HasAttrString(o, name)){
+		rc = PyObject_DelAttrString(o, name) ;
+	}
+	if (rc != 0){
+		st = py_failure(ctx) ;
+	}
+	LEAVE ;
+	return st ;
+}
+
+
 static ugly_status py_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	(void)rt ;
 	PyObject *o = ref ;
@@ -1041,6 +1064,41 @@ static ugly_status py_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i
 		if (rc != 0){
 			st = py_failure(ctx) ;
 		}
+	}
+	LEAVE ;
+	return st ;
+}
+
+
+/* seq[offset:offset + remove] = insert, on any mutable sequence. */
+static ugly_status py_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st = UGLY_OK ;
+	ENTER ;
+	if ((! PySequence_Check(o))||PyDict_Check(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements") ;
+	}
+	else if (! PyObject_HasAttrString(o, "__setitem__")){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "the sequence is immutable") ;
+	}
+	else {
+		PyObject *l = PyList_New((Py_ssize_t)n) ;
+		size_t i ;
+		for (i = 0 ; (l != NULL)&&(i < n) ; i++){
+			PyObject *pv = from_val(ctx, insert[i]) ;
+			if (pv == NULL){
+				Py_CLEAR(l) ;
+				break ;
+			}
+			PyList_SET_ITEM(l, (Py_ssize_t)i, pv) ;
+		}
+		if ((l == NULL)||(PySequence_SetSlice(o, (Py_ssize_t)offset, (Py_ssize_t)(offset + remove), l) != 0)){
+			st = py_failure(ctx) ;
+		}
+		Py_XDECREF(l) ;
 	}
 	LEAVE ;
 	return st ;
@@ -1232,6 +1290,8 @@ static const ugly_plugin plugin = {
 	.length = py_length,
 	.get_index = py_get_index,
 	.set_index = py_set_index,
+	.delete_member = py_delete_member,
+	.splice = py_splice,
 	.call = py_call,
 	.invoke = py_invoke,
 	.new_instance = py_new_instance,

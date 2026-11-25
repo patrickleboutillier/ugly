@@ -88,6 +88,21 @@ py.apply(x => x * 2, 21);                         // 42: Python calls a JS arrow
 ugly.module("lua", "string").upper("abc");        // "ABC"
 ```
 
+A plain `perl` program binds modules of other languages to Perl packages,
+and foreign lists and dicts behave as Perl arrays and hashes
+([tests/perl5/test_binding.pl](tests/perl5/test_binding.pl)):
+
+```perl
+use Ugly python => [ 'math', 'json' ], java => 'java.util.ArrayList' ;
+
+math::sqrt(16) ;                                  # 4
+my $l = json::loads('[1, 2, 3]') ;                # a Python list
+push @$l, 4 ;  shift @$l ;  splice(@$l, 0, 1, 'x') ;   # Python sees ['x', 3, 4]
+my $al = java::util::ArrayList->new ;             # classes are packages with new()
+my $d = json::loads('{"k": 1}') ;                 # a Python dict
+delete $d->{k} ;  exists $d->{k} ;                # false
+```
+
 A plain `java` program uses `ugly.Ugly`, with `ugly.jar` on the class path
 and `libugly_jni.so` on `java.library.path`
 ([tests/java/test_binding.java](tests/java/test_binding.java)):
@@ -169,7 +184,7 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 | `plugins/lua/` | Lua 5.4. `binding/` builds the same source as the Lua module `ugly`. |
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
 | `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. `binding/` builds the same source as the native module `ugly.so` for `qjs`. |
-| `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
+| `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context. Its Perl side (proxies, ties, `use Ugly LANG => MODULE`) is `helper.pm`, embedded at build time. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
 | `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Bridge`) are `ugly.jar`. `binding/` builds the same source as `libugly_jni.so`, which `ugly.Foreign` loads in a plain `java` program. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs (Lua using Python, and a C host), run as tests. |

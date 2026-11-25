@@ -251,12 +251,27 @@ ugly_status ugly_describe(ugly_ctx *ctx, ugly_handle h, uint32_t *traits, ugly_v
 
 ugly_status ugly_get_member(ugly_ctx *ctx, ugly_handle h, const char *name, ugly_kind want, ugly_val *out) ;
 ugly_status ugly_set_member(ugly_ctx *ctx, ugly_handle h, const char *name, ugly_val v) ;
+/*
+ * Removes a member (Python del, Lua t[k] = nil, JS delete, Perl delete,
+ * Map.remove). A member that isn't there is not an error.
+ * UGLY_ERR_NOT_CAPABLE if the value's members can't be removed.
+ */
+ugly_status ugly_delete_member(ugly_ctx *ctx, ugly_handle h, const char *name) ;
 /* The member names, as a core list handle of strings. */
 ugly_status ugly_member_names(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
 
 ugly_status ugly_length(ugly_ctx *ctx, ugly_handle h, int64_t *out) ;
 ugly_status ugly_get_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_kind want, ugly_val *out) ;
 ugly_status ugly_set_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_val v) ;
+/*
+ * Replaces 'remove' elements from 'offset' with the 'n' values of 'insert',
+ * resizing the sequence: append is (length, 0, v, 1), pop is (length - 1,
+ * 1, NULL, 0), clear is (0, length, NULL, 0). The range must lie within
+ * 0..length, otherwise UGLY_ERR_NOT_FOUND (the core checks it, with
+ * ugly_length, before the plugin runs). UGLY_ERR_NOT_CAPABLE for a sequence
+ * of fixed size (a Java array, a Python tuple).
+ */
+ugly_status ugly_splice(ugly_ctx *ctx, ugly_handle h, int64_t offset, int64_t remove, const ugly_val *insert, size_t n) ;
 
 /*
  * 'want' is the kind the caller needs back. UGLY_ANY lets the home language

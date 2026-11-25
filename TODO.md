@@ -65,6 +65,18 @@ All additive; none of it breaks existing plugins (contract, "Scope").
   part of the call options above. Java picks overloads by scoring how well
   the arguments convert, which settles most calls; a hint would settle the
   ties (`f(int)` against `f(long)`, `f(Object)` against `f(String)`).
+- [x] **Resizing and deleting** (done 2026-11-25): `ugly_splice` and
+  `ugly_delete_member`, plugin ABI 2. Perl's ties use them.
+  - [ ] The other bindings' proxies could too: `del p[k]`, `p.append(x)`
+    and slice assignment in Python; `table.insert` can't reach a proxy in
+    Lua, but a `__newindex` past the end already appends; JS `delete` and
+    `push` on proxies.
+- [ ] **Perl sugar still missing**: stringifying a proxy with its own
+  language's `str()`/`tostring` (needs a "to string" operation), `0+`,
+  `<=>` and `cmp` overloads (today `fallback => 1` turns `$p + 1` into
+  arithmetic on the debug string), and `each` over foreign iterators (needs
+  the iterator protocol above). Instances aren't blessed into the packages
+  `use Ugly` makes, so `ref($obj)` stays `Ugly::Proxy`.
 - [ ] **Async/coroutines across runtimes.** It's hard, and probably needs
   each plugin to expose its scheduler.
 - [ ] **Python subinterpreters** (per-interpreter GIL, 3.12+), which would

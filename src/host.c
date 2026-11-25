@@ -226,6 +226,25 @@ static ugly_status c_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const cha
 }
 
 
+static ugly_status c_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	(void)rt ;
+	cobj *o = ref ;
+	if (o->kind != C_MAP){
+		return not_capable(ctx, "value has no members") ;
+	}
+	long i = map_find(o, name) ;
+	if (i >= 0){
+		ugly_val gone = o->items[i] ;
+		free(o->keys[i]) ;
+		memmove(&o->keys[i], &o->keys[i + 1], (o->n - (size_t)i - 1) * sizeof(char *)) ;
+		memmove(&o->items[i], &o->items[i + 1], (o->n - (size_t)i - 1) * sizeof(ugly_val)) ;
+		o->n-- ;
+		unstore(&gone) ;
+	}
+	return UGLY_OK ;
+}
+
+
 static ugly_status c_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	(void)rt ;
 	cobj *o = ref ;
@@ -298,6 +317,59 @@ static ugly_status c_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i,
 }
 
 
+static ugly_status c_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	(void)rt ;
+	cobj *o = ref ;
+	if (o->kind != C_LIST){
+		return not_capable(ctx, "value has no elements") ;
+	}
+	size_t off = (size_t)offset, rm = (size_t)remove, nn = o->n - rm + n, i ;
+	ugly_val *stored = calloc(n + 1, sizeof(ugly_val)) ;
+	ugly_val *gone = calloc(rm + 1, sizeof(ugly_val)) ;
+	if ((stored == NULL)||(gone == NULL)){
+		free(stored) ;
+		free(gone) ;
+		return ctx_fail(ctx, UGLY_ERR_NOMEM, "c", "", "out of memory") ;
+	}
+	for (i = 0 ; i < n ; i++){
+		ugly_status st = store(ctx, insert[i], &stored[i]) ;
+		if (st != UGLY_OK){
+			while (i-- > 0){
+				unstore(&stored[i]) ;
+			}
+			free(stored) ;
+			free(gone) ;
+			return ctx_fail(ctx, st, "c", "", "can't store value") ;
+		}
+	}
+	if (nn > o->cap){
+		ugly_val *ni = realloc(o->items, nn * sizeof(ugly_val)) ;
+		if (ni == NULL){
+			for (i = 0 ; i < n ; i++){
+				unstore(&stored[i]) ;
+			}
+			free(stored) ;
+			free(gone) ;
+			return ctx_fail(ctx, UGLY_ERR_NOMEM, "c", "", "out of memory") ;
+		}
+		o->items = ni ;
+		o->cap = nn ;
+	}
+	memcpy(gone, &o->items[off], rm * sizeof(ugly_val)) ;
+	memmove(&o->items[off + n], &o->items[off + rm], (o->n - off - rm) * sizeof(ugly_val)) ;
+	memcpy(&o->items[off], stored, n * sizeof(ugly_val)) ;
+	o->n = nn ;
+	for (i = 0 ; i < rm ; i++){     /* last: releasing may run finalizers */
+		unstore(&gone[i]) ;
+	}
+	free(stored) ;
+	free(gone) ;
+	return UGLY_OK ;
+}
+
+
 static ugly_status c_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 	ugly_kind want, ugly_val *out){
 
@@ -347,6 +419,8 @@ const ugly_plugin ugly_c_plugin = {
 	.length = c_length,
 	.get_index = c_get_index,
 	.set_index = c_set_index,
+	.delete_member = c_delete_member,
+	.splice = c_splice,
 	.call = c_call,
 	.invoke = c_invoke,
 	.release = c_release,

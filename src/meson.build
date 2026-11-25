@@ -12,7 +12,7 @@ libugly = shared_library('ugly',
   include_directories: ugly_inc,
   c_args: ['-DUGLY_PLUGIN_DIR="@0@"'.format(ugly_plugin_dir)],
   dependencies: [threads, libdl, libm],
-  version: '2.0.0',
+  version: '2.1.0',
   install: true,
 )
 

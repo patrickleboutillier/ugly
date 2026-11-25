@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define UGLY_PLUGIN_ABI 1
+#define UGLY_PLUGIN_ABI 2     /* 2: delete_member, splice */
 
 
 /*
@@ -106,6 +106,10 @@ typedef struct ugly_plugin {
 		size_t nargs, ugly_kind want, ugly_val *out) ;
 	ugly_status (*new_instance)(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 		ugly_handle *out) ;
+	/* ABI 2. The core has checked 0 <= offset <= offset + remove <= length. */
+	ugly_status (*delete_member)(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name) ;
+	ugly_status (*splice)(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+		const ugly_val *insert, size_t n) ;
 
 	/*
 	 * Drops the plugin's reference. Always called on the runtime's thread:

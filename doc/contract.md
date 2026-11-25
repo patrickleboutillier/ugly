@@ -98,13 +98,28 @@ This is Truffle's idea, reduced:
 
 | Trait | Operations |
 |---|---|
-| `MEMBERS` | `get_member`, `set_member`, `member_names`: string keys, so fields, methods and dict/hash/table entries |
-| `ELEMENTS` | `length`, `get_index`, `set_index`: integer indexes |
+| `MEMBERS` | `get_member`, `set_member`, `member_names`, `delete_member`: string keys, so fields, methods and dict/hash/table entries |
+| `ELEMENTS` | `length`, `get_index`, `set_index`, `splice`: integer indexes |
 | `CALLABLE` | `call` |
 | `INSTANTIABLE` | `new` |
 
 Plus `invoke` (a method call) and `describe` (the traits, plus the type name
 in the home language's terms).
+
+`delete_member` and `splice` came with libugly 2.1 and plugin ABI 2
+(2026-11-25), for bindings that make foreign containers native (Perl's
+`delete`, `push`, `pop`, `shift`, `splice`):
+- `delete_member` removes a member; one that isn't there is not an error.
+  Values whose members are fixed (a Java object, a mock object) refuse it
+  with `UGLY_ERR_NOT_CAPABLE`.
+- `splice(offset, remove, insert...)` replaces a range, resizing the
+  sequence. One operation covers append, insert, remove, truncate and
+  clear. The core checks the range against `length` first
+  (`UGLY_ERR_NOT_FOUND` outside it), so plugins see only valid ones. A
+  sequence of fixed size (a Java array, a Python tuple) refuses it with
+  `UGLY_ERR_NOT_CAPABLE`.
+- A plugin that leaves either slot NULL gets `UGLY_ERR_NOT_IMPLEMENTED`
+  from the core, as for any operation.
 
 `invoke` is not "get member, then call". Receivers differ between languages:
 - Python returns bound methods;
@@ -372,6 +387,20 @@ essay's "2N" becomes about N plus N thin API wrappers.
     passes.
   - Only the thread that loaded the binding can use it. Other Java threads
     get `IllegalStateException` (TODO.md: any-thread runtimes).
+- **Perl's sugar** (2026-11-25). Proxies are native through overloads and
+  ties: `$p->(...)`, `$p->m(...)`, `$p->{k}`, `$p->[i]`, and the whole tie
+  interfaces: `exists`, `delete`, `keys`, `push`, `pop`, `shift`, `unshift`,
+  `splice`, `$#a = n` and list assignment (through `delete_member` and
+  `splice`). `use Ugly python => 'json'` binds a module to a Perl package:
+  - its callable members are subs, defined on first use, so `json::dumps(...)`
+    and `json->dumps(...)` both work;
+  - its other members read as subs (`math::pi()`);
+  - its classes become nested packages with `new`
+    (`conformance::Point->new(3, 4)`, `java::util::ArrayList->new`);
+  - `use Ugly lua => { string => 'LuaString' }` names the package.
+
+  The Perl side is `plugins/perl5/helper.pm`, embedded in the plugin at
+  build time.
 
 ## 9. The conformance suite
 
@@ -410,7 +439,7 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 | Group | Covers |
 |---|---|
 | values | every kind round-trips through `echo`; int64 extremes; NaN and ±inf; strings with NUL and non-ASCII; bytes; `want` conversions per the language's own rules |
-| protocol | traits from `describe`; members, elements and `length`; `invoke` versus get-then-call; `new` |
+| protocol | traits from `describe`; members, elements and `length`; `invoke` versus get-then-call; `new`; `splice` (replace, append, remove, clear, the range check) and `delete_member` (exact, or refused where members are fixed) |
 | ownership | `release` runs the native finalizer (`finalized()` goes up); `dup` keeps the object alive; a stale handle is detected; **a borrowed handle kept after the call is detected**; `ugly_same` after round trips |
 | identity | the same object exported twice gives the same handle; proxies unwrap when they return home, so there's no proxy of a proxy |
 | callbacks | C → L → C → L to depth 100; runaway recursion fails cleanly, every level unwinds, and the runtime survives; L1 → L2 → L1 across runtimes; the C host owns callable lifetimes |

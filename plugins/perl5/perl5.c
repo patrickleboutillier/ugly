@@ -695,6 +695,80 @@ XS(xs_proxy_set){
 }
 
 
+/* Ugly::Proxy::_has($proxy, $name): whether the member exists (even if it is undef). */
+XS(xs_proxy_has){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 2)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_val out = ugly_null() ;
+	ugly_status st = ugly_get_member(ctx, PROXY_HANDLE(ST(0)), SvPV_nolen(ST(1)), UGLY_ANY, &out) ;
+	ugly_val_release(ctx, &out) ;
+	if ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)){
+		XSRETURN_NO ;
+	}
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	XSRETURN_YES ;
+}
+
+
+/* Ugly::Proxy::_delete($proxy, $name) */
+XS(xs_proxy_delete){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 2)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_status st = ugly_delete_member(ctx, PROXY_HANDLE(ST(0)), SvPV_nolen(ST(1))) ;
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	XSRETURN_EMPTY ;
+}
+
+
+/* Ugly::Proxy::_splice($proxy, $offset, $remove, @insert) */
+XS(xs_proxy_splice){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 3)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	int64_t off = (int64_t)SvIV(ST(1)), rm = (int64_t)SvIV(ST(2)) ;
+	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(3), items - 3) ;
+	ugly_status st = ugly_splice(ctx, PROXY_HANDLE(ST(0)), off, rm, a, (size_t)(items - 3)) ;
+	free_args(ctx, a, items - 3) ;
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	XSRETURN_EMPTY ;
+}
+
+
+/* Ugly::Proxy::_new($class_proxy, @args) */
+XS(xs_proxy_new){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 1)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(1), items - 1) ;
+	ugly_handle h = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_new(ctx, PROXY_HANDLE(ST(0)), a, (size_t)(items - 1), &h) ;
+	free_args(ctx, a, items - 1) ;
+	ugly_val out = ugly_hval(h) ;
+	ST(0) = xs_result(aTHX_ ctx, r, st, &out) ;
+	XSRETURN(1) ;
+}
+
+
 /* Ugly::Proxy::_length($proxy) */
 XS(xs_proxy_length){
 	dXSARGS ;
@@ -846,47 +920,8 @@ XS(xs_eval){
 }
 
 
-/* The Perl side of proxies, errors and packages, loaded into every runtime. */
-static const char *helper_pm =
-	"package Ugly::Proxy ;\n"
-	"use overload\n"
-	"  '&{}' => sub { my $s = shift ; sub { Ugly::Proxy::_call($s, @_) } },\n"
-	"  '@{}' => sub { my @a ; tie @a, 'Ugly::Proxy::Array', $_[0] ; \\@a },\n"
-	"  '%{}' => sub { my %h ; tie %h, 'Ugly::Proxy::Hash', $_[0] ; \\%h },\n"
-	"  '==' => sub { Ugly::Proxy::_same($_[0], $_[1]) },\n"
-	"  'eq' => sub { Ugly::Proxy::_same($_[0], $_[1]) },\n"
-	"  'bool' => sub { 1 },\n"
-	"  '\"\"' => sub { 'Ugly::Proxy(' . ${$_[0]} . ')' },\n"
-	"  fallback => 1 ;\n"
-	"our $AUTOLOAD ;\n"
-	"sub AUTOLOAD { my $s = shift ; (my $m = $AUTOLOAD) =~ s/.*::// ; Ugly::Proxy::_invoke($s, $m, @_) }\n"
-	"sub can { my ($s, $m) = @_ ; ref($s) ? sub { Ugly::Proxy::_invoke(shift, $m, @_) } : UNIVERSAL::can($s, $m) }\n"
-	"sub DESTROY { Ugly::Proxy::_release($_[0]) }\n"
-	"package Ugly::Proxy::Hash ;\n"
-	"sub TIEHASH { bless [ $_[1], undef, 0 ], $_[0] }\n"
-	"sub FETCH { Ugly::Proxy::_get($_[0][0], $_[1], 0) }\n"
-	"sub STORE { Ugly::Proxy::_set($_[0][0], $_[1], $_[2], 0) }\n"
-	"sub EXISTS { defined Ugly::Proxy::_get($_[0][0], $_[1], 0) }\n"
-	"sub FIRSTKEY { $_[0][1] = [ Ugly::Proxy::_keys($_[0][0]) ] ; $_[0][2] = 0 ; $_[0][1][0] }\n"
-	"sub NEXTKEY { $_[0][1][ ++$_[0][2] ] }\n"
-	"package Ugly::Proxy::Array ;\n"
-	"sub TIEARRAY { bless [ $_[1] ], $_[0] }\n"
-	"sub FETCH { Ugly::Proxy::_get($_[0][0], $_[1], 1) }\n"
-	"sub STORE { Ugly::Proxy::_set($_[0][0], $_[1], $_[2], 1) }\n"
-	"sub FETCHSIZE { Ugly::Proxy::_length($_[0][0]) }\n"
-	"sub STORESIZE { }\n"
-	"sub PUSH { my $s = shift ; Ugly::Proxy::_set($s->[0], $s->FETCHSIZE, $_, 1) for @_ }\n"
-	"package Ugly::Error ;\n"
-	"use overload '\"\"' => sub { \"[$_[0]{language}] $_[0]{type}: $_[0]{message}\" }, fallback => 1 ;\n"
-	"sub type { $_[0]{type} } sub message { $_[0]{message} } sub language { $_[0]{language} } sub payload { $_[0]{payload} }\n"
-	"sub DESTROY { Ugly::Error::_free($_[0]) }\n"
-	"package Ugly::Package ;\n"
-	"sub name { ${$_[0]} }\n"
-	"package Ugly ;\n"
-	"sub is_error { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Error') }\n"
-	"sub is_proxy { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Proxy') }\n"
-	"$INC{'Ugly.pm'} = __FILE__ ;\n"
-	"1 ;\n" ;
+/* The Perl side of proxies, errors, packages and imports (helper.pm), loaded into every runtime. */
+#include "helper_pm.h"
 
 
 EXTERN_C void boot_DynaLoader(pTHX_ CV *cv) ;
@@ -898,6 +933,10 @@ static void register_xs(pTHX){
 	newXS("Ugly::Proxy::_get", xs_proxy_get, file) ;
 	newXS("Ugly::Proxy::_set", xs_proxy_set, file) ;
 	newXS("Ugly::Proxy::_length", xs_proxy_length, file) ;
+	newXS("Ugly::Proxy::_has", xs_proxy_has, file) ;
+	newXS("Ugly::Proxy::_delete", xs_proxy_delete, file) ;
+	newXS("Ugly::Proxy::_splice", xs_proxy_splice, file) ;
+	newXS("Ugly::Proxy::_new", xs_proxy_new, file) ;
 	newXS("Ugly::Proxy::_keys", xs_proxy_keys, file) ;
 	newXS("Ugly::Proxy::_traits", xs_proxy_traits, file) ;
 	newXS("Ugly::Proxy::_same", xs_proxy_same, file) ;
@@ -1151,6 +1190,23 @@ static ugly_status pl_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 }
 
 
+/* delete $h->{name}; a package's members (subs) aren't deleted. */
+static ugly_status pl_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	plrt *r = RT(rt) ;
+	ENTER_PERL(r) ;
+	SV *sv = ref ;
+	ugly_status st = UGLY_OK ;
+	if ((! SvROK(sv))||IS_PACKAGE(sv)||(SvTYPE(SvRV(sv)) != SVt_PVHV)){
+		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "only hashes have members to delete") ;
+	}
+	else {
+		(void)hv_delete((HV *)SvRV(sv), name, (I32)strlen(name), G_DISCARD) ;
+	}
+	LEAVE_PERL() ;
+	return st ;
+}
+
+
 static ugly_status pl_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	plrt *r = RT(rt) ;
 	ENTER_PERL(r) ;
@@ -1269,6 +1325,51 @@ static ugly_status pl_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i
 			av_store(av, (SSize_t)i, pv) ;
 		}
 	}
+	LEAVE_PERL() ;
+	return st ;
+}
+
+
+/* splice(@a, offset, remove, @insert): the tail is kept, the array cut at offset, then refilled. */
+static ugly_status pl_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	plrt *r = RT(rt) ;
+	ENTER_PERL(r) ;
+	AV *av = array_of(aTHX_ ref) ;
+	ugly_status st = UGLY_OK ;
+	if (av == NULL){
+		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements") ;
+		LEAVE_PERL() ;
+		return st ;
+	}
+	SSize_t len = av_len(av) + 1, off = (SSize_t)offset, tail = len - off - (SSize_t)remove, j ;
+	SV **ins = calloc(n + 1, sizeof(SV *)) ;
+	SV **keep = calloc((size_t)tail + 1, sizeof(SV *)) ;
+	size_t i ;
+	for (i = 0 ; i < n ; i++){
+		if ((ins[i] = from_val(aTHX_ ctx, r, insert[i], &st)) == NULL){
+			while (i-- > 0){
+				SvREFCNT_dec(ins[i]) ;
+			}
+			break ;
+		}
+	}
+	if (st == UGLY_OK){
+		for (j = 0 ; j < tail ; j++){
+			SV **e = av_fetch(av, off + (SSize_t)remove + j, 0) ;
+			keep[j] = ((e != NULL) ? SvREFCNT_inc(*e) : newSV(0)) ;
+		}
+		av_fill(av, off - 1) ;     /* frees the removed elements (and our tail's slots) */
+		for (i = 0 ; i < n ; i++){
+			av_push(av, ins[i]) ;
+		}
+		for (j = 0 ; j < tail ; j++){
+			av_push(av, keep[j]) ;
+		}
+	}
+	free(ins) ;
+	free(keep) ;
 	LEAVE_PERL() ;
 	return st ;
 }
@@ -1506,6 +1607,8 @@ static const ugly_plugin plugin = {
 	.length = pl_length,
 	.get_index = pl_get_index,
 	.set_index = pl_set_index,
+	.delete_member = pl_delete_member,
+	.splice = pl_splice,
 	.call = pl_call,
 	.invoke = pl_invoke,
 	.new_instance = pl_new_instance,

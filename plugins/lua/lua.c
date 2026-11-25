@@ -352,7 +352,7 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 /* ---------------------------------------------------------------- */
 
 enum { OP_IMPORT, OP_GLOBALS, OP_EVAL, OP_DESCRIBE, OP_GET_MEMBER, OP_SET_MEMBER, OP_MEMBER_NAMES,
-	OP_LENGTH, OP_GET_INDEX, OP_SET_INDEX, OP_INVOKE, OP_NEW } ;
+	OP_LENGTH, OP_GET_INDEX, OP_SET_INDEX, OP_INVOKE, OP_NEW, OP_DELETE_MEMBER, OP_SPLICE } ;
 
 typedef struct op {
 	int code ;
@@ -362,6 +362,7 @@ typedef struct op {
 	const char *name ;
 	size_t len ;
 	int64_t index ;
+	int64_t count ;       /* splice: how many to remove */
 	const ugly_val *args ;
 	size_t nargs ;
 	ugly_kind want ;
@@ -490,6 +491,49 @@ static int op_body(lua_State *L){
 			CHECK(o, push_val(ctx, r, L, o->v)) ;
 			lua_setfield(L, 2, o->name) ;
 			return 0 ;
+
+		case OP_DELETE_MEMBER:
+			if (! indexable(L, 2)){
+				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
+			}
+			lua_pushnil(L) ;
+			lua_setfield(L, 2, o->name) ;
+			return 0 ;
+
+		case OP_SPLICE: {
+			/* On the sequence 1..#t, through the table's metamethods like set_index. */
+			if (lua_type(L, 2) != LUA_TTABLE){
+				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements") ;
+			}
+			lua_Integer n = luaL_len(L, 2), off = (lua_Integer)o->index, rm = (lua_Integer)o->count ;
+			lua_Integer ins = (lua_Integer)o->nargs, i ;
+			luaL_checkstack(L, (int)o->nargs + 2, "too many values to insert") ;
+			int base = lua_gettop(L) ;
+			if (! push_args(o)){     /* convert them all before changing anything */
+				return 0 ;
+			}
+			if (ins < rm){
+				for (i = off + rm + 1 ; i <= n ; i++){
+					lua_geti(L, 2, i) ;
+					lua_seti(L, 2, i - rm + ins) ;
+				}
+				for (i = n ; i > n - rm + ins ; i--){
+					lua_pushnil(L) ;
+					lua_seti(L, 2, i) ;
+				}
+			}
+			else if (ins > rm){
+				for (i = n ; i > off + rm ; i--){
+					lua_geti(L, 2, i) ;
+					lua_seti(L, 2, i + ins - rm) ;
+				}
+			}
+			for (i = 0 ; i < ins ; i++){
+				lua_pushvalue(L, base + 1 + (int)i) ;
+				lua_seti(L, 2, off + 1 + i) ;
+			}
+			return 0 ;
+		}
 
 		case OP_MEMBER_NAMES: {
 			if (lua_type(L, 2) != LUA_TTABLE){
@@ -1117,6 +1161,25 @@ static ugly_status lua_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t 
 }
 
 
+static ugly_status lua_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	op o = mkop(OP_DELETE_MEMBER, ctx, rt, ref) ;
+	o.name = name ;
+	return run(&o) ;
+}
+
+
+static ugly_status lua_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	op o = mkop(OP_SPLICE, ctx, rt, ref) ;
+	o.index = offset ;
+	o.count = remove ;
+	o.args = insert ;
+	o.nargs = n ;
+	return run(&o) ;
+}
+
+
 /*
  * Calls are the hot path of re-entry, and Lua limits nested C calls (about
  * 200), so a call costs one: the target is pcalled directly, not through
@@ -1192,6 +1255,8 @@ static const ugly_plugin plugin = {
 	.length = lua_length_op,
 	.get_index = lua_get_index,
 	.set_index = lua_set_index,
+	.delete_member = lua_delete_member,
+	.splice = lua_splice,
 	.call = lua_call_op,
 	.invoke = lua_invoke,
 	.new_instance = lua_new_instance,
