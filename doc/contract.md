@@ -27,9 +27,12 @@ for Lua, CPython and QuickJS, and Perl 5 is ported last.
 - async/await and coroutines across runtimes;
 - collecting cycles across runtimes;
 - sandboxing;
-- Java.
+- Java (added since: §10).
 
-Each of these can be added later without breaking the contract.
+Each of these can be added later without breaking the contract. Since v2.0,
+besides Java: threads shared between runtimes (§6), options for runtimes
+created on demand (§7), resizing and deleting (§2) and call options (§11).
+The rest of the list is still open ([TODO.md](../TODO.md)).
 
 ## What changes from v1
 
@@ -82,9 +85,9 @@ needs.
 - This is essay point 1 (types flow from the static side), with the caller
   as the static side.
 
-v1's `hint` (a string to choose between overloads) is not in v2.0: none of
-the four planned languages has overloading. It returns with Java, as an
-optional call-options struct.
+v1's `hint` (a string to choose between overloads) wasn't in v2.0: none of
+the four planned languages has overloading. It came back with Java, as the
+`hint` call option (§11, libugly 2.4).
 
 ## 2. Handles and the interop protocol
 
@@ -262,9 +265,10 @@ A thread has at most one ctx. The core checks both on every call and returns `UG
 only exception is `ugly_release`, for the reason given in §3.
 
 This rules out handing a runtime between threads, even with external
-locking. Allowing that is a v2.x relaxation, if per-interpreter-GIL CPython
-or free-threaded builds justify it. Relaxing a rule later is easy;
-tightening one later breaks users.
+locking. That was v2.0's rule, and the simplest one that is true: relaxing
+a rule later is easy, tightening one later breaks users. It was relaxed in
+libugly 2.2 and 2.3, for the languages and hosts that can serve several
+threads (below).
 
 **Relaxed for UGLY_CAP_ANY_THREAD** (libugly 2.2, 2026-11-25). Hosts like
 HAProxy run their Lua from several worker threads, one Lua state per thread,
