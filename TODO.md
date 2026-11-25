@@ -18,18 +18,17 @@ the logic you need already written in Python. `ugly.so` links no Lua of its
 own, so it already uses the host's. These items stand between that and a
 working setup.
 
-- [ ] **Calling a runtime from any thread** (the real blocker). HAProxy runs
-  Lua from several worker threads: one shared state behind a lock
-  (`lua-load`), or one state per thread (`lua-load-per-thread`). UGLY binds
-  a runtime to the thread that created it, and Python has one runtime per
-  process, so every other thread gets `UGLY_ERR_WRONG_THREAD`.
-  - Proposal: a capability, `UGLY_CAP_ANY_THREAD`, for plugins that
-    serialize access themselves. Python does already, since every entry
-    takes the GIL, which works from any thread.
-  - The core already has one ctx per thread and a locked handle table. The
-    work is in the runtime thread check in `rt_enter`, deferred releases,
-    and the threads conformance group.
-  - The contract anticipated this relaxation (§6).
+- [x] **Calling a runtime from any thread, phase 1** (done 2026-11-25):
+  `UGLY_CAP_ANY_THREAD` for Python (the GIL, released around calls out)
+  and Java (a JNIEnv per thread); `ugly_rt_get` shares such a runtime
+  between threads; `ugly_ctx_thread` gives threads that Python or Java
+  start a ctx of their own. That covers HAProxy's `lua-load-per-thread`:
+  a Lua state per thread, one Python. Contract §6.
+- [ ] **Phase 2: a runtime the host serializes.** HAProxy's `lua-load`
+  shares one Lua state between threads behind its own lock. That needs a
+  way for an attaching binding to say "the host serializes this runtime",
+  so the core allows other threads in without the plugin locking (a lock
+  there would deadlock against callbacks). Only if `lua-load` matters.
 - [x] **Options for runtimes created on demand** (done 2026-11-25):
   `ugly_configure` and `configure` in every binding (paths, Lua's cpath,
   Java's class path and JVM options). Perl could also take modules to load
@@ -121,9 +120,8 @@ All additive; none of it breaks existing plugins (contract, "Scope").
   - [x] **A Java binding** (done 2026-11-25): `ugly.Foreign` loads
     `libugly_jni.so`, whose `JNI_OnLoad` attaches; teardown at JVMTI
     VMDeath.
-  - [ ] **Java threads.** A runtime is the JVM seen from one thread; other
-    Java threads calling foreign values get `IllegalStateException`. "Calling a
-    runtime from any thread" (above) would lift that.
+  - [x] **Java threads** (done 2026-11-25): any thread uses the JVM, and
+    Java's own threads get a ctx (`ugly_ctx_thread`).
   - [ ] **Panama FFM** for the helper side once JDK 22+ is the baseline.
     Creating the JVM still needs the JNI invocation API.
 - [ ] **Ruby (CRuby)**: closest in shape to Python (`ruby_init` once per

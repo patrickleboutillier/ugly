@@ -208,7 +208,11 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
   rethrown as that same object.
 - **Callbacks** are just callable handles. Calls can nest across languages,
   up to a limit, and going past the limit fails cleanly.
-- **Threads**: a runtime belongs to the thread that created it.
+- **Threads**: a runtime belongs to the thread that created it, except
+  where its language can serve every thread (Python, through the GIL, and
+  the JVM): those are shared, so each thread of a host like HAProxy can
+  have its own Lua and still reach the one Python in the process. Threads
+  that Python or Java start get a context of their own automatically.
 
 ## Layout
 

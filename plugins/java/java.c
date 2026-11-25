@@ -30,9 +30,13 @@
 
 static JavaVM *jvm ;
 
+/*
+ * The runtime: the JVM, from any thread (UGLY_CAP_ANY_THREAD). Each
+ * operation uses its own thread's JNIEnv (env_here), attaching the thread
+ * if it's new to the JVM.
+ */
 typedef struct jrt {
 	ugly_rt *urt ;
-	JNIEnv *env ;                /* the runtime's thread */
 } jrt ;
 
 static jrt *the_rt ;             /* one runtime at a time */
@@ -55,7 +59,8 @@ static struct {
 static JNIEnv *env_here(void){
 	JNIEnv *env = NULL ;
 	if ((*jvm)->GetEnv(jvm, (void **)&env, JNI_VERSION_10) == JNI_EDETACHED){
-		(*jvm)->AttachCurrentThread(jvm, (void **)&env, NULL) ;
+		/* As a daemon: a thread that ends without detaching mustn't hold up DestroyJavaVM. */
+		(*jvm)->AttachCurrentThreadAsDaemon(jvm, (void **)&env, NULL) ;
 	}
 	return env ;
 }
@@ -491,11 +496,12 @@ static void throw_ugly(JNIEnv *env, ugly_ctx *ctx, ugly_status st){
 /* Natives behind ugly.Foreign                                      */
 /* ---------------------------------------------------------------- */
 
+/* This thread's ctx; a Java thread that has none gets one, deleted when it ends (ugly_ctx_thread). */
 static ugly_ctx *native_ctx(JNIEnv *env){
-	ugly_ctx *ctx = ugly_current_ctx() ;
-	if (ctx == NULL){
+	ugly_ctx *ctx = NULL ;
+	if (ugly_ctx_thread(&ctx) != UGLY_OK){
 		jclass ise = (*env)->FindClass(env, "java/lang/IllegalStateException") ;
-		(*env)->ThrowNew(env, ise, "ugly: this thread has no UGLY context") ;
+		(*env)->ThrowNew(env, ise, "ugly: can't create a ctx on this thread") ;
 	}
 	return ctx ;
 }
@@ -813,7 +819,8 @@ static JNINativeMethod natives[] = {
 /* ---------------------------------------------------------------- */
 
 static JNIEnv *ENV(ugly_rt *rt){
-	return ((jrt *)ugly_rt_native(rt))->env ;
+	(void)rt ;
+	return env_here() ;     /* this thread's, whichever thread it is */
 }
 
 
@@ -1264,7 +1271,7 @@ static ugly_status jv_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 		return UGLY_ERR_NOMEM ;
 	}
 	r->urt = rt ;
-	r->env = env_here() ;     /* attaches this thread if it isn't yet */
+	env_here() ;     /* attaches this thread if it isn't yet */
 	the_rt = r ;
 	*native = r ;
 	return UGLY_OK ;
@@ -1292,7 +1299,7 @@ static ugly_status jv_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
-	.caps = UGLY_CAP_ATTACH,
+	.caps = UGLY_CAP_ATTACH | UGLY_CAP_ANY_THREAD,     /* the JVM is multi-threaded; JNIEnv per thread */
 	.name = "java",
 	.init = jv_init,
 	.rt_new = jv_rt_new,
@@ -1347,13 +1354,9 @@ static int b_owns_ctx ;
 
 
 static void JNICALL b_vm_death(jvmtiEnv *jvmti, JNIEnv *env){
-	(void)jvmti ;
+	(void)jvmti ; (void)env ;     /* operations get this thread's JNIEnv themselves (env_here) */
 	if ((b_rt == NULL)||(ugly_current_ctx() != b_ctx)){
 		return ;
-	}
-	/* main's JNIEnv went with DetachCurrentThread: DestroyJavaVM reattached this thread. */
-	if (the_rt != NULL){
-		the_rt->env = env ;
 	}
 	ugly_rt_delete(b_ctx, b_rt) ;
 	ugly_lang_unload(b_ctx, b_lang) ;

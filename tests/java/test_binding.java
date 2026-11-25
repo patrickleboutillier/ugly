@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 25;
+	static final int PLAN = 27;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -141,14 +141,21 @@ public class test_binding {
 		});
 
 		check("threads", () -> {
-			Throwable[] seen = new Throwable[1];
+			Object[] got = new Object[3];
 			Thread t = new Thread(() -> {
-				try { lua.invoke("echo", 1); }
-				catch (Throwable e){ seen[0] = e; }
+				try { got[0] = ((Foreign)Ugly.module("python", "math")).invoke("sqrt", 9.0); }
+				catch (Throwable e){ got[0] = e; }
+				try { got[1] = ((Foreign)Ugly.module("lua", "string")).invoke("upper", "abc"); }
+				catch (Throwable e){ got[1] = e; }
+				try { got[2] = lua.invoke("echo", 1); }
+				catch (Throwable e){ got[2] = e; }
 			});
 			t.start();
 			t.join();
-			ok(seen[0] instanceof IllegalStateException, "another Java thread is refused (IllegalStateException)");
+			ok(Double.valueOf(3.0).equals(got[0]), "another Java thread gets its own ctx, and shares Python (UGLY_CAP_ANY_THREAD): " + got[0]);
+			ok("ABC".equals(got[1]), "  ... and gets its own Lua: " + got[1]);
+			ok(got[2] instanceof RuntimeException && String.valueOf(((Throwable)got[2]).getMessage()).contains("another thread"),
+				"  ... but the main thread's Lua values stay the main thread's: " + got[2]);
 		});
 
 		check("teardown", () -> {

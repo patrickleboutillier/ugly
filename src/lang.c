@@ -391,11 +391,59 @@ void lang_remove_rt(ugly_lang *lang, ugly_rt *rt){
 }
 
 
+/* Shares of runtimes, under the langs lock (see ugly_rt in internal.h). */
+static int rt_live(ugly_rt *rt){
+	return (! __atomic_load_n(&rt->dying, __ATOMIC_SEQ_CST))&&(! __atomic_load_n(&rt->closing, __ATOMIC_SEQ_CST))
+		&&(! rt->destroyed) ;
+}
+
+
+ugly_rt *lang_share_rt(ugly_lang *lang){
+	pthread_mutex_lock(&langs_lock) ;
+	ugly_rt *rt ;
+	for (rt = lang->rts ; (rt != NULL)&&(! rt_live(rt)) ; rt = rt->lang_next){
+	}
+	if (rt != NULL){
+		rt->shares++ ;
+	}
+	pthread_mutex_unlock(&langs_lock) ;
+	return rt ;
+}
+
+
+void lang_rt_shares(ugly_rt *rt, int delta, int auto_created){
+	pthread_mutex_lock(&langs_lock) ;
+	rt->shares += delta ;
+	rt->auto_created |= auto_created ;
+	pthread_mutex_unlock(&langs_lock) ;
+}
+
+
+int lang_rt_unshare(ugly_rt *rt){
+	pthread_mutex_lock(&langs_lock) ;
+	int what = RT_KEEP ;
+	if (--rt->shares == 0){
+		what = (rt->destroyed ? RT_FREE : (rt->auto_created ? RT_DESTROY : RT_KEEP)) ;
+	}
+	pthread_mutex_unlock(&langs_lock) ;
+	return what ;
+}
+
+
+int lang_rt_mark_destroyed(ugly_rt *rt){
+	pthread_mutex_lock(&langs_lock) ;
+	rt->destroyed = 1 ;
+	int free_now = (rt->shares == 0) ;
+	pthread_mutex_unlock(&langs_lock) ;
+	return free_now ;
+}
+
+
 ugly_rt *lang_find_rt_on_thread(ugly_lang *lang){
 	pthread_mutex_lock(&langs_lock) ;
 	ugly_rt *rt ;
 	for (rt = lang->rts ; rt != NULL ; rt = rt->lang_next){
-		if (on_thread(rt->thread)&&(! rt->dying)){
+		if (on_thread(rt->thread)&&rt_live(rt)){
 			break ;
 		}
 	}

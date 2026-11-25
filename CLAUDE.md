@@ -10,7 +10,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 - **`doc/contract.md`** is the spec. It was approved on 2026-11-24 (PR #1), and its "Decisions" and "Clarifications" sections record everything settled since. Every rule in it should be a test in `tests/`.
 - **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract (the plugin rules plus the core services). The plugin vtable is written by hand; nothing is generated.
-- **`src/`** is the core (`libugly` 2.1.0, plugin ABI 3):
+- **`src/`** is the core (`libugly` 2.2.0, plugin ABI 3):
   - `handles.c`: the handle table. A handle is a slot index plus a generation. It also holds borrow slots, the (home, identity) index and the per-runtime queues of deferred releases, all under one lock. Plugin code never runs under that lock.
   - `ctx.c`: one ctx per thread (`_Thread_local current`) and errors.
   - `rt.c`: runtimes and frames. `rt_enter`/`rt_leave` check the thread, enforce `UGLY_MAX_DEPTH`, drain deferred releases and revoke borrows. `after_call` normalizes plugin results.
@@ -69,6 +69,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Binding tests** (suite `bindings`): `tests/python/test_binding.py` runs under the `python3` that Meson found, and `tests/lua/test_binding.lua` under `lua5.4`, and `tests/java/test_binding.java` under `java` (suites `bindings` and `jvm`). All are TAP, and the Lua one ends with `os.exit(code, true)`, so the state closes and the binding tears down.
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
+  - Threads (contract §6): `UGLY_CAP_ANY_THREAD` (Python, Java) lets any thread enter; `rt_enter` counts itself in (`depth`, atomic) before checking `closing`, `rt_destroy` sets `closing` before checking `depth`. Releases to such runtimes are always queued. `ugly_rt_get` shares them (`shares`, `auto_created`, `destroyed` under the langs lock; `rt_unshare`). `ugly_ctx_thread` makes a ctx deleted at thread exit (pthread key); Python's `need_ctx` and Java's `native_ctx` use it. Python wraps calls out in `OUT()` (GIL released).
   - The plugin ABI is 3: `delete_member` and `splice` (2), `options` (3). The core range-checks `splice` with `length` before the plugin runs.
   - `ugly_configure` (options, `lang.c`) is refused once a language is in the `langs` list, which a plugin without `term` never leaves. Plugins read options with `ugly_option` in `init` (Python, Java) or `rt_new` (Lua, Perl), or at module load (JS); `init` runs under `langs_lock`, so options have their own lock.
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
@@ -94,8 +95,8 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
 - **The plan in contract.md is complete** (2026-11-24): QuickJS, the JS binding, and Perl with its binding are done. Perl's open questions were decided with Claude's recommendations (contract decisions 9–12). Decision 6, Latin-1 decoding, was **revised** so that bytes round-trip; it's flagged to the author in the contract.
 - **Java (2026-11-25)** was the first language after the plan, with its binding.
-- **Done since (2026-11-25):** Java and its binding, Perl's namespace import and ties (with `ugly_splice`/`ugly_delete_member`), `ugly_configure`, CI, foreign functions as Lua functions, Lua 5.3.
-- **Next:** any-thread runtimes, phase 1 (`UGLY_CAP_ANY_THREAD` for Python and Java, Python releasing the GIL around outgoing calls; agreed with the author), then lazy Python init and an HAProxy proof of concept.
+- **Done since (2026-11-25):** Java and its binding, Perl's namespace import and ties (with `ugly_splice`/`ugly_delete_member`), `ugly_configure`, CI, foreign functions as Lua functions, Lua 5.3, source releases (none published yet: the author tags), any-thread runtimes phase 1.
+- **Next:** lazy Python init (forking hosts), then an HAProxy proof of concept. Any-thread phase 1 is done; phase 2 (a host-serialized Lua state, for `lua-load`) only if needed.
 - **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
 
 ## Landscape (2026)

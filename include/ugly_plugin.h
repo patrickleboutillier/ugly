@@ -57,7 +57,13 @@ extern "C" {
  *     releasing the payload handle or freeing the error: either may drop the
  *     last reference, and the core then releases the ref you resolved.
  *  8. Threads: the core has already checked that the caller is the runtime's
- *     thread. 'release' is the one exception (see below).
+ *     thread. 'release' is the one exception (see below). A plugin with
+ *     UGLY_CAP_ANY_THREAD waives that: every entry point, release and
+ *     rt_delete included, may be called from any thread, concurrently, and
+ *     the plugin serializes what needs it (Python's GIL; the JVM, with a
+ *     JNIEnv per thread). It must not hold a lock of its own while calling
+ *     out through the core: another thread may be calling back in (Python
+ *     releases the GIL around calls out).
  */
 
 
@@ -114,7 +120,8 @@ typedef struct ugly_plugin {
 	/*
 	 * Drops the plugin's reference. Always called on the runtime's thread:
 	 * releases from other threads are queued by the core and drained at the
-	 * next entry into this runtime. May be called while the runtime is in
+	 * next entry into this runtime (on any thread, for UGLY_CAP_ANY_THREAD,
+	 * whose releases are always queued). May be called while the runtime is in
 	 * the middle of a call (a finalizer releasing a proxy): it must be safe
 	 * to re-enter, or defer the work itself.
 	 */

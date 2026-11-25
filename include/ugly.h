@@ -131,6 +131,12 @@ void ugly_val_release(ugly_ctx *ctx, ugly_val *v) ;
 /* A ctx belongs to the thread that created it. One per thread: a second ugly_ctx_new on the same thread is UGLY_ERR_USAGE. */
 ugly_status ugly_ctx_new(ugly_ctx **out) ;
 void ugly_ctx_delete(ugly_ctx *ctx) ;
+/*
+ * This thread's ctx: the one it has, or a new one that is deleted when the
+ * thread exits. For bindings, whose host language starts and ends threads
+ * on its own (Python's threading, Java threads).
+ */
+ugly_status ugly_ctx_thread(ugly_ctx **out) ;
 
 /* The error from the last call on ctx, or NULL. Valid until the next call on ctx. */
 const ugly_error *ugly_last_error(const ugly_ctx *ctx) ;
@@ -165,6 +171,7 @@ ugly_status ugly_raise(ugly_ctx *ctx, ugly_status status, const char *type, cons
 #define UGLY_CAP_RESTARTABLE    (1u << 1)  /* can unload and load again in one process */
 #define UGLY_CAP_ATTACH         (1u << 2)  /* can attach to an interpreter it didn't create */
 #define UGLY_CAP_EVAL           (1u << 3)  /* supports ugly_rt_eval */
+#define UGLY_CAP_ANY_THREAD     (1u << 4)  /* runtimes can be entered from any thread, concurrently (§6) */
 
 /*
  * Loads ugly_<name>.so by full path, from the first directory in UGLY_PLUGIN_PATH
@@ -219,6 +226,12 @@ ugly_lang *ugly_rt_lang(const ugly_rt *rt) ;
  * of it owned by this thread (whoever created it), or else a new one, which
  * the ctx owns and deletes in ugly_ctx_delete (unloading the language if
  * this call loaded it). What a binding's ugly.module(lang, name) uses.
+ *
+ * For a language with UGLY_CAP_ANY_THREAD, a live runtime created on another
+ * thread is shared rather than a new one made (Python has only one): the ctx
+ * holds a share, and a runtime ugly_rt_get created is deleted with its last
+ * share, on whichever thread drops it. One deleted while shared is dead at
+ * once (its handles are stale) and freed with its last share.
  */
 ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out) ;
 /* The oldest live runtime of lang owned by the calling thread, or NULL. */

@@ -223,7 +223,13 @@ static int unref_locked(uint32_t i, ugly_rt **home, void **ref){
 	void *r = slots[i].ref ;
 	id_remove(i) ;
 	free_slot(i) ;
-	if (on_thread(h->thread)){
+	/*
+	 * Released here, on its home thread; otherwise queued for the next entry
+	 * into the home runtime. A runtime any thread may enter is always
+	 * queued: released here, it could race with its deletion on another
+	 * thread, while an entry holds it.
+	 */
+	if (on_thread(h->thread)&&(! rt_any_thread(h))){
 		*home = h ;
 		*ref = r ;
 		return 1 ;

@@ -264,6 +264,35 @@ locking. Allowing that is a v2.x relaxation, if per-interpreter-GIL CPython
 or free-threaded builds justify it. Relaxing a rule later is easy;
 tightening one later breaks users.
 
+**Relaxed for UGLY_CAP_ANY_THREAD** (libugly 2.2, 2026-11-25). Hosts like
+HAProxy run their Lua from several worker threads, one Lua state per thread,
+and those threads all need the one Python of the process.
+- A plugin with `UGLY_CAP_ANY_THREAD` promises that every entry point, its
+  release and runtime deletion included, may run on any thread,
+  concurrently. It serializes what needs it itself, and holds no lock of
+  its own while calling out through the core, since another thread may be
+  calling back in. Python (the GIL, released around its calls out) and
+  Java (a `JNIEnv` per thread, attached as a daemon) have it.
+- Entry and deletion can't race: entering counts itself in, then looks for
+  a deletion; deletion marks the runtime closing, then looks for entries.
+  One of the two sees the other and backs off (`UGLY_ERR_STALE_HANDLE`, or
+  `UGLY_ERR_IN_USE`). The deleting thread may still enter, for finalizers.
+- Releases to such a runtime are always queued and drained by the next
+  entry, from any thread: a release done on the spot could race with a
+  deletion on another thread.
+- `ugly_rt_get` shares such a runtime instead of making another: the ctx
+  holds a share; one `ugly_rt_get` created is deleted with its last share,
+  on whichever thread drops it; one deleted while shared is dead at once
+  and freed with its last share.
+- `ugly_ctx_thread()` gives a thread its ctx, creating one that is deleted
+  when the thread exits. The Python and Java bindings use it, so threads
+  their host language starts work too: they share Python and Java, and get
+  a Lua of their own.
+- Other runtimes stay with their thread. Lua, Perl and QuickJS can't be
+  entered by a second thread while one is inside, and a lock around them
+  would deadlock against callbacks; a host that serializes them itself
+  (HAProxy's shared `lua-load` state) is phase 2, in TODO.md.
+
 ## 7. Lifecycle: languages and runtimes
 
 **Capabilities.** Plugins declare what they can do, instead of failing at
@@ -474,7 +503,7 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 | identity | the same object exported twice gives the same handle; proxies unwrap when they return home, so there's no proxy of a proxy |
 | callbacks | C → L → C → L to depth 100; runaway recursion fails cleanly, every level unwinds, and the runtime survives; L1 → L2 → L1 across runtimes; the C host owns callable lifetimes |
 | errors | type and message are preserved; **the payload rethrown at home is the identical object**; an error crossing three runtimes |
-| threads | calls from another thread give `WRONG_THREAD`; a release from another thread is deferred and drained |
+| threads | calls from another thread give `WRONG_THREAD`, or work with `UGLY_CAP_ANY_THREAD`; a release from another thread is deferred and drained; for `UGLY_CAP_ANY_THREAD`, 4 threads at once in the shared runtime (`ugly_rt_get`), and a runtime deleted while another thread holds a share |
 | lifecycle | capabilities are honoured; runtime delete makes outstanding handles stale; unload is refused while runtimes are alive; restart is tested only with `RESTARTABLE` |
 | pairwise | values, identity, calls, caught and rethrown errors, and alternating recursion between two languages; deleting one language's runtime while the other holds its values |
 | memory | the whole suite under the valgrind setup: no errors and no leaks |
