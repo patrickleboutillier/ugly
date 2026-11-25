@@ -40,10 +40,19 @@ typedef struct pcache_entry {
 	struct pcache_entry *next ;
 } pcache_entry ;
 
+/* A native ref: one JSValue reference held for a handle, linked per runtime. */
+typedef struct jsbox {
+	JSValue v ;
+	struct jsbox *prev, *next ;
+} jsbox ;
+
 typedef struct jsrt {
+	struct jsrt *next ;          /* the registry of live runtimes */
+	jsbox *boxes ;               /* every native ref held for a handle */
 	ugly_rt *urt ;
 	JSRuntime *rt ;
 	JSContext *c ;
+	int owns ;                   /* created by rt_new; attached ones belong to the host */
 	int depth ;                  /* our entries in progress: jobs run when the outermost returns */
 	JSValue error_proto ;        /* prototype of ugly errors (inherits Error.prototype) */
 	JSValue array_buffer ;       /* the ArrayBuffer constructor */
@@ -62,8 +71,38 @@ typedef struct { ugly_error *err ; } errbox ;
 static JSClassID proxy_class, proxy_fn_class, error_class ;
 
 
+/*
+ * Live runtimes, created or attached. A lookup by context, rather than
+ * the context opaque, because an attached context belongs to the host. Proxy
+ * finalizers check it too, since a proxy can outlive a detached runtime.
+ */
+static jsrt *runtimes ;
+
+
 static jsrt *R(JSContext *c){
-	return JS_GetContextOpaque(c) ;
+	jsrt *r ;
+	for (r = runtimes ; (r != NULL)&&(r->c != c) ; r = r->next){
+	}
+	return r ;
+}
+
+
+static int registered(jsrt *r){
+	jsrt *x ;
+	for (x = runtimes ; (x != NULL)&&(x != r) ; x = x->next){
+	}
+	return (x != NULL) ;
+}
+
+
+static void unregister(jsrt *r){
+	jsrt **p ;
+	for (p = &runtimes ; *p != NULL ; p = &(*p)->next){
+		if (*p == r){
+			*p = r->next ;
+			return ;
+		}
+	}
 }
 
 
@@ -133,8 +172,9 @@ static void enter(jsrt *r){
 }
 
 
+/* Pending jobs run when the outermost call returns, unless the host owns the event loop (attached). */
 static ugly_status leave(jsrt *r, ugly_status st){
-	if (--r->depth == 0){
+	if ((--r->depth == 0)&&(r->owns)){
 		run_jobs(r) ;
 	}
 	return st ;
@@ -195,17 +235,49 @@ static void pc_remove(jsrt *r, ugly_handle h, void *obj){
 /* JS -> ugly_val                                                   */
 /* ---------------------------------------------------------------- */
 
+/* A box for a JS value reference (consumed). */
+static jsbox *new_box(jsrt *r, JSValue v){
+	jsbox *b = malloc(sizeof(jsbox)) ;
+	if (b == NULL){
+		JS_FreeValueRT(r->rt, v) ;
+		return NULL ;
+	}
+	b->v = v ;
+	b->prev = NULL ;
+	b->next = r->boxes ;
+	if (r->boxes != NULL){
+		r->boxes->prev = b ;
+	}
+	r->boxes = b ;
+	return b ;
+}
+
+
+static void free_box(jsrt *r, jsbox *b){
+	if (b->prev != NULL){
+		b->prev->next = b->next ;
+	}
+	else {
+		r->boxes = b->next ;
+	}
+	if (b->next != NULL){
+		b->next->prev = b->prev ;
+	}
+	JS_FreeValueRT(r->rt, b->v) ;
+	free(b) ;
+}
+
+
 /* Exports a JS value as an owned handle; our own proxies unwrap to their handle (rule 5). */
 static ugly_status export_val(ugly_ctx *ctx, jsrt *r, JSValueConst v, ugly_handle *out){
 	jsproxy *p = proxy_of(v) ;
 	if (p != NULL){
 		return ugly_dup(ctx, p->h, out) ;
 	}
-	JSValue *box = malloc(sizeof(JSValue)) ;
+	jsbox *box = new_box(r, JS_DupValue(r->c, v)) ;
 	if (box == NULL){
 		return UGLY_ERR_NOMEM ;
 	}
-	*box = JS_DupValue(r->c, v) ;
 	uintptr_t identity = (JS_VALUE_HAS_REF_COUNT(v) ? (uintptr_t)JS_VALUE_GET_PTR(v) : 0) ;
 	return ugly_export(ctx, r->urt, box, identity, out) ;
 }
@@ -414,7 +486,7 @@ static JSValue from_val(ugly_ctx *ctx, jsrt *r, ugly_val v){
 				return throw_ugly(c, ctx, st) ;
 			}
 			if (ref != NULL){
-				return JS_DupValue(c, *(JSValue *)ref) ;
+				return JS_DupValue(c, ((jsbox *)ref)->v) ;
 			}
 			return proxy_for(ctx, r, v.as.h) ;
 		}
@@ -447,7 +519,7 @@ static JSValue throw_ugly(JSContext *c, ugly_ctx *ctx, ugly_status st){
 	void *ref = NULL ;
 	if ((payload != UGLY_NO_HANDLE)&&(ugly_resolve(ctx, r->urt, payload, &ref) == UGLY_OK)&&(ref != NULL)){
 		/* Take our reference first: releasing the error may free the box 'ref' points to. */
-		JSValue original = JS_DupValue(c, *(JSValue *)ref) ;
+		JSValue original = JS_DupValue(c, ((jsbox *)ref)->v) ;
 		ugly_release(ctx, payload) ;
 		ugly_error_free(err) ;
 		return JS_Throw(c, original) ;
@@ -549,13 +621,11 @@ static ugly_status js_failure(ugly_ctx *ctx, jsrt *r){
 		JS_FreeValue(c, e) ;
 		return ugly_raise_native(ctx, r->urt, type, message, NULL, 0) ;
 	}
-	JSValue *box = malloc(sizeof(JSValue)) ;
+	uintptr_t identity = (JS_VALUE_HAS_REF_COUNT(e) ? (uintptr_t)JS_VALUE_GET_PTR(e) : 0) ;
+	jsbox *box = new_box(r, e) ;     /* the payload owns the exception's reference */
 	if (box == NULL){
-		JS_FreeValue(c, e) ;
 		return ugly_raise_native(ctx, r->urt, type, message, NULL, 0) ;
 	}
-	*box = e ;     /* the payload owns the exception's reference */
-	uintptr_t identity = (JS_VALUE_HAS_REF_COUNT(e) ? (uintptr_t)JS_VALUE_GET_PTR(e) : 0) ;
 	return ugly_raise_native(ctx, r->urt, type, message, box, identity) ;
 }
 
@@ -854,7 +924,9 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val){
 	(void)rt ;
 	jsproxy *p = proxy_of(val) ;
 	if (p != NULL){
-		pc_remove(p->r, p->h, JS_VALUE_GET_PTR(val)) ;
+		if (registered(p->r)){
+			pc_remove(p->r, p->h, JS_VALUE_GET_PTR(val)) ;
+		}
 		ugly_release(ugly_current_ctx(), p->h) ;
 		free(p) ;
 	}
@@ -1144,7 +1216,7 @@ static ugly_status js_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t 
 static ugly_status js_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
 	jsrt *r = RT(rt) ;
 	JSContext *c = r->c ;
-	JSValueConst v = *(JSValue *)ref ;
+	JSValueConst v = ((jsbox *)ref)->v ;
 	enter(r) ;
 	uint32_t t = 0 ;
 	if (JS_IsObject(v)){
@@ -1209,7 +1281,7 @@ static int member(jsrt *r, JSValueConst obj, const char *name, JSValue *val){
 
 static ugly_status js_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_kind want, ugly_val *out){
 	jsrt *r = RT(rt) ;
-	JSValueConst obj = *(JSValue *)ref ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
 	if (! JS_IsObject(obj)){
 		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
 	}
@@ -1225,7 +1297,7 @@ static ugly_status js_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 
 static ugly_status js_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_val v){
 	jsrt *r = RT(rt) ;
-	JSValueConst obj = *(JSValue *)ref ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
 	if (! JS_IsObject(obj)){
 		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
 	}
@@ -1242,7 +1314,7 @@ static ugly_status js_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 static ugly_status js_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	jsrt *r = RT(rt) ;
 	JSContext *c = r->c ;
-	JSValueConst obj = *(JSValue *)ref ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
 	if (! JS_IsObject(obj)){
 		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
 	}
@@ -1291,7 +1363,7 @@ static int64_t array_length(jsrt *r, JSValueConst obj){
 static ugly_status js_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
 	jsrt *r = RT(rt) ;
 	enter(r) ;
-	int64_t n = array_length(r, *(JSValue *)ref) ;
+	int64_t n = array_length(r, ((jsbox *)ref)->v) ;
 	ugly_status st = (n == -2 ? js_failure(ctx, r)
 		: n == -1 ? fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements")
 		: UGLY_OK) ;
@@ -1304,7 +1376,7 @@ static ugly_status js_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out
 
 static ugly_status js_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want, ugly_val *out){
 	jsrt *r = RT(rt) ;
-	JSValueConst obj = *(JSValue *)ref ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
 	enter(r) ;
 	int64_t n = array_length(r, obj) ;
 	ugly_status st ;
@@ -1326,7 +1398,7 @@ static ugly_status js_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i
 
 static ugly_status js_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_val v){
 	jsrt *r = RT(rt) ;
-	JSValueConst obj = *(JSValue *)ref ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
 	enter(r) ;
 	int64_t n = array_length(r, obj) ;
 	ugly_status st = UGLY_OK ;
@@ -1353,7 +1425,7 @@ static ugly_status js_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val
 	ugly_kind want, ugly_val *out){
 
 	jsrt *r = RT(rt) ;
-	JSValueConst f = *(JSValue *)ref ;
+	JSValueConst f = ((jsbox *)ref)->v ;
 	if (! JS_IsFunction(r->c, f)){
 		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not callable") ;
 	}
@@ -1373,7 +1445,7 @@ static ugly_status js_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *
 	size_t nargs, ugly_kind want, ugly_val *out){
 
 	jsrt *r = RT(rt) ;
-	JSValueConst obj = *(JSValue *)ref ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
 	if (! JS_IsObject(obj)){
 		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no methods") ;
 	}
@@ -1407,7 +1479,7 @@ static ugly_status js_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 	ugly_handle *out){
 
 	jsrt *r = RT(rt) ;
-	JSValueConst cls = *(JSValue *)ref ;
+	JSValueConst cls = ((jsbox *)ref)->v ;
 	if (! JS_IsConstructor(r->c, cls)){
 		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not a constructor") ;
 	}
@@ -1427,9 +1499,7 @@ static ugly_status js_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 
 
 static void js_release(ugly_rt *rt, void *ref){
-	jsrt *r = RT(rt) ;
-	JS_FreeValue(r->c, *(JSValue *)ref) ;
-	free(ref) ;
+	free_box(RT(rt), ref) ;     /* JS_FreeValueRT: works while the host frees its context */
 }
 
 
@@ -1448,28 +1518,14 @@ static ugly_status js_init(ugly_ctx *ctx, const char *dir){
 }
 
 
-static ugly_status js_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
-	jsrt *r = calloc(1, sizeof(jsrt)) ;
-	if (r == NULL){
-		return UGLY_ERR_NOMEM ;
-	}
-	r->urt = rt ;
-	r->rt = JS_NewRuntime() ;
-	r->c = (r->rt != NULL ? JS_NewContext(r->rt) : NULL) ;
-	if (r->c == NULL){
-		if (r->rt != NULL){
-			JS_FreeRuntime(r->rt) ;
-		}
-		free(r) ;
-		return ugly_fail(ctx, rt, UGLY_ERR_NOMEM, "InternalError", "can't create a QuickJS runtime") ;
-	}
+/* What every runtime needs, created or attached: our classes, prototypes, and an entry in the registry. */
+static void setup(jsrt *r){
 	JSContext *c = r->c ;
-	JS_SetRuntimeOpaque(r->rt, r) ;
-	JS_SetContextOpaque(c, r) ;
-	JS_NewClass(r->rt, proxy_class, &proxy_def) ;
-	JS_NewClass(r->rt, proxy_fn_class, &proxy_fn_def) ;
-	JS_NewClass(r->rt, error_class, &error_def) ;
-	JS_SetModuleLoaderFunc(r->rt, NULL, module_loader, r) ;
+	if (! JS_IsRegisteredClass(r->rt, proxy_class)){
+		JS_NewClass(r->rt, proxy_class, &proxy_def) ;
+		JS_NewClass(r->rt, proxy_fn_class, &proxy_fn_def) ;
+		JS_NewClass(r->rt, error_class, &error_def) ;
+	}
 
 	/* Ugly errors inherit Error.prototype, so they're Errors in JS (instanceof, stack). */
 	JSValue global = JS_GetGlobalObject(c) ;
@@ -1486,6 +1542,52 @@ static ugly_status js_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 	JS_FreeValue(c, symbol) ;
 	JS_FreeValue(c, global) ;
 
+	r->next = runtimes ;
+	runtimes = r ;
+}
+
+
+static ugly_status js_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
+	jsrt *r = calloc(1, sizeof(jsrt)) ;
+	if (r == NULL){
+		return UGLY_ERR_NOMEM ;
+	}
+	r->urt = rt ;
+	r->owns = 1 ;
+	r->rt = JS_NewRuntime() ;
+	r->c = (r->rt != NULL ? JS_NewContext(r->rt) : NULL) ;
+	if (r->c == NULL){
+		if (r->rt != NULL){
+			JS_FreeRuntime(r->rt) ;
+		}
+		free(r) ;
+		return ugly_fail(ctx, rt, UGLY_ERR_NOMEM, "InternalError", "can't create a QuickJS runtime") ;
+	}
+	JS_SetModuleLoaderFunc(r->rt, NULL, module_loader, r) ;
+	setup(r) ;
+	*native = r ;
+	return UGLY_OK ;
+}
+
+
+/*
+ * An existing context: the host's, when a QuickJS program (qjs) loads the
+ * binding. Its module loader, event loop and runtime opaque stay the host's.
+ */
+static ugly_status js_rt_attach(ugly_ctx *ctx, ugly_rt *rt, void *existing, void **native){
+	(void)ctx ;
+	if (existing == NULL){
+		return UGLY_ERR_USAGE ;
+	}
+	jsrt *r = calloc(1, sizeof(jsrt)) ;
+	if (r == NULL){
+		return UGLY_ERR_NOMEM ;
+	}
+	r->urt = rt ;
+	r->owns = 0 ;
+	r->c = existing ;
+	r->rt = JS_GetRuntime(r->c) ;
+	setup(r) ;
 	*native = r ;
 	return UGLY_OK ;
 }
@@ -1494,12 +1596,14 @@ static ugly_status js_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
 static ugly_status js_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 	(void)ctx ; (void)rt ;
 	jsrt *r = native ;
-	JSContext *c = r->c ;
-	JS_FreeValue(c, r->error_proto) ;
-	JS_FreeValue(c, r->array_buffer) ;
-	JS_FreeAtom(c, r->to_string_tag) ;
-	JS_FreeContext(c) ;
-	JS_FreeRuntime(r->rt) ;     /* runs the remaining finalizers: proxies release their handles */
+	unregister(r) ;
+	JS_FreeValueRT(r->rt, r->error_proto) ;
+	JS_FreeValueRT(r->rt, r->array_buffer) ;
+	JS_FreeAtomRT(r->rt, r->to_string_tag) ;
+	if (r->owns){
+		JS_FreeContext(r->c) ;
+		JS_FreeRuntime(r->rt) ;     /* runs the remaining finalizers: proxies release their handles */
+	}
 	size_t i ;
 	for (i = 0 ; i < sizeof(r->pcache) / sizeof(r->pcache[0]) ; i++){
 		while (r->pcache[i] != NULL){
@@ -1515,10 +1619,11 @@ static ugly_status js_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
-	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_RESTARTABLE | UGLY_CAP_EVAL,
+	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_RESTARTABLE | UGLY_CAP_EVAL | UGLY_CAP_ATTACH,
 	.name = "js",
 	.init = js_init,
 	.rt_new = js_rt_new,
+	.rt_attach = js_rt_attach,
 	.rt_delete = js_rt_delete,
 	.import = js_import,
 	.globals = js_globals,
@@ -1540,3 +1645,96 @@ static const ugly_plugin plugin = {
 const ugly_plugin *ugly_plugin_js(void){
 	return &plugin ;
 }
+
+
+#ifdef UGLY_BINDING
+/* ---------------------------------------------------------------- */
+/* The binding: import "ugly.so" from a plain qjs program           */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Built from this same file as ugly.so, without QuickJS: its engine symbols
+ * come from qjs (linked -rdynamic). qjs loads it as a native ES module and
+ * calls js_init_module. It registers this plugin as "js", attaches to qjs's
+ * context, and returns the same ugly module embedded runtimes get.
+ *
+ * Teardown must happen before qjs's JS_FreeRuntime, which asserts that no
+ * object is still referenced, and other languages may hold JS values when
+ * qjs exits. QuickJS has no runtime-finalizer hook, so a sentinel object on
+ * the global object holds the teardown, and declares every reference the
+ * binding holds (the boxes behind handles, the cached prototype and
+ * constructor) to the GC through gc_mark. While the sentinel is reachable,
+ * so is everything it holds. When qjs frees its context, the whole graph
+ * becomes garbage together, the sentinel's finalizer tears down, and it
+ * releases exactly the references gc_mark declared, as QuickJS expects of a
+ * finalizer.
+ */
+static ugly_ctx *b_ctx ;
+static ugly_lang *b_lang ;
+static ugly_rt *b_rt ;
+static int b_owns_ctx ;
+static JSClassID binding_class ;
+
+static void binding_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func){
+	(void)val ;
+	jsrt *r = (b_rt != NULL ? ugly_rt_native(b_rt) : NULL) ;
+	if (r == NULL){
+		return ;
+	}
+	jsbox *b ;
+	for (b = r->boxes ; b != NULL ; b = b->next){
+		JS_MarkValue(rt, b->v, mark_func) ;
+	}
+	JS_MarkValue(rt, r->error_proto, mark_func) ;
+	JS_MarkValue(rt, r->array_buffer, mark_func) ;
+}
+
+
+static void binding_finalizer(JSRuntime *rt, JSValue val){
+	(void)rt ; (void)val ;
+	if (b_rt != NULL){
+		ugly_rt_delete(b_ctx, b_rt) ;
+		ugly_lang_unload(b_ctx, b_lang) ;
+		if (b_owns_ctx){
+			ugly_ctx_delete(b_ctx) ;     /* also deletes the runtimes ugly.module created */
+		}
+		b_rt = NULL ;
+	}
+}
+
+static JSClassDef binding_def = { "ugly.Binding", .finalizer = binding_finalizer, .gc_mark = binding_mark } ;
+
+
+JSModuleDef *js_init_module(JSContext *c, const char *module_name){
+	if (b_rt == NULL){
+		b_ctx = ugly_current_ctx() ;
+		if (b_ctx == NULL){
+			if (ugly_ctx_new(&b_ctx) != UGLY_OK){
+				JS_ThrowInternalError(c, "ugly: can't create a context") ;
+				return NULL ;
+			}
+			b_owns_ctx = 1 ;
+		}
+		ugly_status st = ugly_lang_register(b_ctx, &plugin, &b_lang) ;
+		if (st == UGLY_OK){
+			st = ugly_rt_attach(b_ctx, b_lang, c, &b_rt) ;
+		}
+		if (st != UGLY_OK){
+			const ugly_error *e = ugly_last_error(b_ctx) ;
+			JS_ThrowInternalError(c, "ugly: can't attach: %s", e ? ugly_error_message(e) : "?") ;
+			return NULL ;
+		}
+		JSRuntime *rt = JS_GetRuntime(c) ;
+		JS_NewClassID(&binding_class) ;
+		JS_NewClass(rt, binding_class, &binding_def) ;
+		JSValue global = JS_GetGlobalObject(c) ;
+		JS_DefinePropertyValueStr(c, global, "__ugly_binding", JS_NewObjectClass(c, (int)binding_class), 0) ;
+		JS_FreeValue(c, global) ;
+	}
+	JSModuleDef *m = JS_NewCModule(c, module_name, api_init) ;
+	if (m != NULL){
+		JS_AddModuleExportList(c, m, api, sizeof(api) / sizeof(api[0])) ;
+	}
+	return m ;
+}
+#endif

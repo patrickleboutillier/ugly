@@ -15,4 +15,10 @@ if qjs_dep.found()
   plugins += ugly_js
   plugin_dirs += meson.current_build_dir()
   test_plugins += 'js'
+  subdir('binding')
+  # qjs, when QuickJS comes from our subproject: the host for the binding's tests.
+  qjs_sub = subproject('quickjs', required: false)
+  if qjs_sub.found()
+    qjs_exe = qjs_sub.get_variable('qjs')
+  endif
 endif

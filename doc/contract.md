@@ -301,7 +301,7 @@ value code. v2 makes this structural:
 So each language needs one adapter with two modes, not two adapters. The
 essay's "2N" becomes about N plus N thin API wrappers.
 
-**As built (Lua and Python, 2026-11-24).**
+**As built (Lua, Python and JS, 2026-11-24).**
 
 - **One source file, compiled twice.** Each plugin's source is built as the
   plugin (`ugly_<lang>.so`, linked with the interpreter library) and as the
@@ -333,6 +333,19 @@ essay's "2N" becomes about N plus N thin API wrappers.
 - **Teardown.** The binding deletes what it created when the host shuts
   down: a `__gc` sentinel in Lua (`os.exit(code, true)` or the end of the
   script closes the state), and `atexit` in Python.
+- **JS** (`qjs`): `qjs` loads a native ES module (`import "…/ugly.so"`) by
+  calling its `js_init_module`, and `qjs` is linked `-rdynamic`, so the
+  binding uses its engine.
+  - Teardown has to happen before `qjs`'s `JS_FreeRuntime`, which asserts
+    that no object is still referenced, and other languages may hold JS
+    values at exit. QuickJS has no runtime-finalizer hook.
+  - So a sentinel object on the global object declares every reference the
+    binding holds to QuickJS's GC (`gc_mark`): the boxed values behind
+    handles, and the cached objects. At exit, the whole graph becomes
+    garbage together, and the sentinel's finalizer tears down, releasing
+    exactly what it declared.
+  - The binding must come from the same QuickJS release as the `qjs` it
+    runs in. The tests build both from the same pinned wrap.
 
 ## 9. The conformance suite
 

@@ -60,6 +60,13 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
   test('binding-python', pyinst, args: files('python' / 'test_binding.py'), protocol: 'tap', env: env,
     suite: 'bindings', depends: plugins + bindings)
 
+  if binding_dirs.has_key('js') and is_variable('qjs_exe')
+    env = environment(test_env_vars)
+    env.set('UGLY_JS_BINDING', binding_dirs['js'] / 'ugly.so')
+    test('binding-js', qjs_exe, args: files('js' / 'test_binding.js'), protocol: 'tap', env: env,
+      suite: 'bindings', depends: plugins + bindings)
+  endif
+
   lua_exe = find_program('lua5.4', 'lua', required: false)
   if lua_exe.found()
     env = environment(test_env_vars)
