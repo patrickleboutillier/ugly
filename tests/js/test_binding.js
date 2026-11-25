@@ -73,5 +73,10 @@ let late = false;
 try { ugly.configure("lua", { path: "/too/late" }); } catch (e) { late = ugly.isError(e); }
 ok(late, "  ... and configuring it again once started throws");
 
+// Keyword arguments (contract §11): ugly.kw({...}) last.
+ok(py.kw(1, ugly.kw({ c: 3, b: 2 })) === "1 2 3", "keyword arguments reach Python: kw(1, ugly.kw({ c: 3, b: 2 }))");
+ok(new py.KwBox(ugly.kw({ value: 5 })).add(ugly.kw({ n: 10 })) === 15, "  ... new py.KwBox(ugly.kw({ value: 5 })).add(...)");
+ok(ugly.module("python", "builtins").int("ff", ugly.kw({ base: 16 })) === 255, "int('ff', base=16)");
+
 console.log("1.." + count);
 if (failures > 0) throw new Error(failures + " test(s) failed");

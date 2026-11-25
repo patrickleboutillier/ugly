@@ -40,6 +40,7 @@ typedef struct {
 	PyObject_HEAD
 	ugly_handle h ;              /* one owned reference */
 	PyObject *weakrefs ;
+	int traits ;                 /* the value's traits, once asked for (proxy_call); -1 until then */
 } proxy ;
 
 #define ENTER PyGILState_STATE gil_ = PyGILState_Ensure()
@@ -335,6 +336,7 @@ static PyObject *proxy_for(ugly_ctx *ctx, ugly_handle borrowed){
 	}
 	p->h = h ;
 	p->weakrefs = NULL ;
+	p->traits = -1 ;
 	PyObject *w = PyWeakref_NewRef((PyObject *)p, NULL) ;
 	if (w != NULL){
 		PyDict_SetItem(proxy_cache, key, w) ;
@@ -454,47 +456,123 @@ static PyObject *result(ugly_ctx *ctx, ugly_status st, ugly_val *out){
 }
 
 
+/*
+ * Python keyword arguments -> call options (contract §11): names point into
+ * the dict's keys, which the caller holds; values are owned (free_kwargs).
+ * 0, or -1 with an exception set.
+ */
+static int py_kwargs(ugly_ctx *ctx, PyObject *kw, ugly_opts *o, ugly_kwarg **out){
+	*o = (ugly_opts)UGLY_OPTS_INIT ;
+	*out = NULL ;
+	if ((kw == NULL)||(PyDict_Size(kw) == 0)){
+		return 0 ;
+	}
+	Py_ssize_t n = PyDict_Size(kw), pos = 0, i = 0 ;
+	*out = calloc((size_t)n, sizeof(ugly_kwarg)) ;
+	PyObject *key, *value ;
+	while (PyDict_Next(kw, &pos, &key, &value)){
+		const char *name = PyUnicode_AsUTF8(key) ;
+		ugly_status st = (name != NULL ? to_val(ctx, value, UGLY_ANY, &(*out)[i].value) : UGLY_ERR_TYPE) ;
+		if (st != UGLY_OK){
+			while (i-- > 0){
+				ugly_val_release(ctx, &(*out)[i].value) ;
+			}
+			free(*out) ;
+			*out = NULL ;
+			if (! PyErr_Occurred()){
+				raise_ugly(ctx, st) ;
+			}
+			return -1 ;
+		}
+		(*out)[i++].name = name ;
+	}
+	o->kwargs = *out ;
+	o->nkwargs = (size_t)i ;
+	return 0 ;
+}
+
+
+static void free_kwargs(ugly_ctx *ctx, ugly_opts *o, ugly_kwarg *kw){
+	size_t i ;
+	for (i = 0 ; i < o->nkwargs ; i++){
+		ugly_val_release(ctx, &kw[i].value) ;
+	}
+	free(kw) ;
+}
+
+
 static PyObject *proxy_call(PyObject *self, PyObject *args, PyObject *kw){
 	ugly_ctx *ctx = need_ctx() ;
 	if (ctx == NULL){
 		return NULL ;
 	}
-	if ((kw != NULL)&&(PyDict_Size(kw) > 0)){
-		PyErr_SetString(PyExc_TypeError, "ugly: foreign calls don't take keyword arguments") ;
+	ugly_opts o ;
+	ugly_kwarg *k ;
+	if (py_kwargs(ctx, kw, &o, &k) != 0){
 		return NULL ;
 	}
 	ugly_val *a ;
 	Py_ssize_t n = py_args(ctx, args, &a) ;
 	if (n < 0){
+		free_kwargs(ctx, &o, k) ;
 		return NULL ;
 	}
+	/*
+	 * Calling a class that can't be called but can be instantiated (a Perl
+	 * package, a Lua or Java class) constructs it, as calling a class does
+	 * in Python: Point(3, 4), KwBox(value=5).
+	 */
+	proxy *p = (proxy *)self ;
+	if (p->traits < 0){
+		uint32_t t = 0 ;
+		ugly_val tn = ugly_null() ;
+		p->traits = ((OUT(ugly_describe(ctx, p->h, &t, &tn)) == UGLY_OK) ? (int)t : 0) ;
+		ugly_val_release(ctx, &tn) ;
+	}
 	ugly_val out = ugly_null() ;
-	ugly_status st = OUT(ugly_call(ctx, ((proxy *)self)->h, a, (size_t)n, UGLY_ANY, &out)) ;
+	ugly_status st ;
+	if ((p->traits & UGLY_TRAIT_INSTANTIABLE)&&(! (p->traits & UGLY_TRAIT_CALLABLE))){
+		ugly_handle h = UGLY_NO_HANDLE ;
+		st = OUT(ugly_new_opts(ctx, p->h, a, (size_t)n, &o, &h)) ;
+		out = ugly_hval(h) ;
+	}
+	else {
+		st = OUT(ugly_call_opts(ctx, p->h, a, (size_t)n, &o, UGLY_ANY, &out)) ;
+	}
 	free_args(ctx, a, n) ;
+	free_kwargs(ctx, &o, k) ;
 	return result(ctx, st, &out) ;
 }
 
 
 /* A bound foreign method: self is (proxy, name). */
-static PyObject *invoke_bound(PyObject *bound, PyObject *args){
+static PyObject *invoke_bound(PyObject *bound, PyObject *args, PyObject *kw){
 	ugly_ctx *ctx = need_ctx() ;
 	if (ctx == NULL){
 		return NULL ;
 	}
 	proxy *p = (proxy *)PyTuple_GET_ITEM(bound, 0) ;
 	const char *name = PyUnicode_AsUTF8(PyTuple_GET_ITEM(bound, 1)) ;
+	ugly_opts o ;
+	ugly_kwarg *k ;
+	if (py_kwargs(ctx, kw, &o, &k) != 0){
+		return NULL ;
+	}
 	ugly_val *a ;
 	Py_ssize_t n = py_args(ctx, args, &a) ;
 	if (n < 0){
+		free_kwargs(ctx, &o, k) ;
 		return NULL ;
 	}
 	ugly_val out = ugly_null() ;
-	ugly_status st = OUT(ugly_invoke(ctx, p->h, name, a, (size_t)n, UGLY_ANY, &out)) ;
+	ugly_status st = OUT(ugly_invoke_opts(ctx, p->h, name, a, (size_t)n, &o, UGLY_ANY, &out)) ;
 	free_args(ctx, a, n) ;
+	free_kwargs(ctx, &o, k) ;
 	return result(ctx, st, &out) ;
 }
 
-static PyMethodDef invoke_def = { "method", invoke_bound, METH_VARARGS, "a method of a foreign object" } ;
+static PyMethodDef invoke_def = { "method", (PyCFunction)(void (*)(void))invoke_bound, METH_VARARGS | METH_KEYWORDS,
+	"a method of a foreign object" } ;
 
 
 static PyObject *bound_method(PyObject *self, PyObject *name){

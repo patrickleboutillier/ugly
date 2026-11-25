@@ -588,6 +588,12 @@ ugly_status ugly_new_opts(ctx, cls, args, nargs, opts, out) ;
 | Lua, JS | refused | refused | refused |
 | mock | appended as pairs, like Perl | refused | refused |
 
+Calling a proxy of a class that can be instantiated but not called (a Perl
+package, a Lua or Java class) constructs it, as calling a class does in
+Python: `KwBox(value=5)` from Python or Lua, `new KwBox(...)` in JS. A class
+reached as a member stays the class in every binding, so its own members
+and constructor stay reachable.
+
 Bindings mark keyword arguments with a value only their API makes, passed
 last: `ugly.kw{ indent = 2 }` (Lua, names in sorted order, since a table has
 none), `ugly.kw({ indent: 2 })` (JS), `Ugly::kw(indent => 2)` (Perl),

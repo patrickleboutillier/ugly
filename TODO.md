@@ -69,8 +69,9 @@ All additive; none of it breaks existing plugins (contract, "Scope").
   - [x] The core (`ugly_call_opts` and friends, plugin ABI 4), keyword
     arguments in Python, Perl and the mock, Perl's context, the `options`
     conformance group.
-  - [ ] The bindings' syntax: Python proxies, `ugly.kw` (Lua, JS),
-    `Ugly::kw` (Perl), `Ugly.kw` (Java); README examples.
+  - [x] The bindings' syntax: native on Python proxies, `ugly.kw` (Lua,
+    JS), `Ugly::kw` (Perl), `Ugly.kw` (Java); README examples. Calling a
+    class that can only be instantiated now constructs it.
   - [ ] Java's hint; `ugly.call(f, ugly.opts{...})` and its equivalents.
 - [ ] **Iterators and generators**: a protocol for "next" (Python
   iterators, Lua `pairs`/closures, JS iterators), beyond today's indexing.

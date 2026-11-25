@@ -66,5 +66,13 @@ ok(type(datetime.date) == "userdata" and datetime.date.today().year >= 2026,
 	"a class reached as a member keeps its members: datetime.date.today()")
 ok(datetime.date(2026, 11, 25):isoformat() == "2026-11-25", "  ... and calling it still instantiates")
 
+-- Keyword arguments (contract §11): ugly.kw{...} last.
+local json = ugly.module("python", "json")
+local compact = json.dumps(json.loads("[1, 2]"), ugly.kw{ separators = ugly.eval("python", "(\",\", \":\")") })
+ok(compact == "[1,2]", "json.dumps(..., separators=(\",\", \":\")) with ugly.kw")
+ok(builtins.int("ff", ugly.kw{ base = 16 }) == 255, "int(\"ff\", base=16) with ugly.kw{ base = 16 }")
+ok(py.kw(1, ugly.kw{ c = 3, b = 2 }) == "1 2 3", "keyword arguments reach Python: kw(1, ugly.kw{ c = 3, b = 2 })")
+ok(py.KwBox(ugly.kw{ value = 5 }):add(ugly.kw{ n = 10 }) == 15, "  ... and a class with them: KwBox(ugly.kw{ value = 5 }):add(...)")
+
 print("1.." .. count)
 os.exit(failures == 0 and 0 or 1, true)      -- true: close the state, so the binding tears down

@@ -19,7 +19,7 @@ if java_ok
   )
 
   ugly_jar = jar('ugly',
-    'ugly/Bridge.java', 'ugly/Foreign.java', 'ugly/ForeignException.java', 'ugly/Ugly.java',
+    'ugly/Bridge.java', 'ugly/Foreign.java', 'ugly/ForeignException.java', 'ugly/Kw.java', 'ugly/Ugly.java',
     install: true,
     install_dir: ugly_plugin_dir,
   )
