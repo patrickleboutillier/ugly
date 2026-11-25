@@ -281,6 +281,9 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
   rethrown as that same object.
 - **Callbacks** are just callable handles. Calls can nest across languages,
   up to a limit, and going past the limit fails cleanly.
+- **Call options** carry what isn't an argument: keyword arguments, a Java
+  overload hint, Perl's call context. The callee's language honours each,
+  or refuses the call; none is silently dropped.
 - **Threads**: a runtime belongs to the thread that created it, except
   where its language can serve every thread (Python, through the GIL, and
   the JVM): those are shared, so each thread of a host like HAProxy can
@@ -298,22 +301,23 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 | `plugins/lua/` | Lua 5.4 or 5.3, chosen at build time (`-Dlua_version`); one Lua per process. `binding/<version>/` builds the same source as the Lua module `ugly`, for every Lua found. |
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
 | `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. `binding/` builds the same source as the native module `ugly.so` for `qjs`. |
-| `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context. Its Perl side (proxies, ties, `use Ugly LANG => MODULE`) is `helper.pm`, embedded at build time. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
-| `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Bridge`) are `ugly.jar`. `binding/` builds the same source as `libugly_jni.so`, which `ugly.Foreign` loads in a plain `java` program. |
+| `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context, unless a call asks for another. Its Perl side (proxies, ties, `use Ugly LANG => MODULE`) is `helper.pm`, embedded at build time. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
+| `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Kw`, `ugly.Opts`, `ugly.Bridge`) are `ugly.jar`. `binding/` builds the same source as `libugly_jni.so`, which `ugly.Foreign` loads in a plain `java` program. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
-| `examples/` | Example programs (Lua using Python, and a C host), run as tests. |
+| `examples/` | Example programs, run as tests: Lua using Python, a C host, and HAProxy asking Python for a decision on each request (`haproxy/`). |
 | `doc/` | The contract and the design essay. |
 
 ## Status
 
-Lua, CPython, JavaScript (QuickJS), Perl 5 and Java pass the whole
-conformance suite, and every pair of them works in one process. Each one can
-also be the host: plain `lua`, `python3`, `qjs`, `perl` and `java` programs
-use the other languages. The plan in [doc/contract.md](doc/contract.md) is
-complete, and Java came after it.
+Lua (5.4 or 5.3), CPython, JavaScript (QuickJS), Perl 5 and Java pass the
+whole conformance suite, and every pair of them works in one process. Each
+one can also be the host: plain `lua`, `python3`, `qjs`, `perl` and `java`
+programs use the other languages, and so does HAProxy's built-in Lua, on
+several threads. Everything [doc/contract.md](doc/contract.md) specifies is
+built, and the current release is on the Releases page.
 
-Other ideas and open work, including embedding in hosts like HAProxy that
-have Lua built in, are in [TODO.md](TODO.md).
+Open work (LuaJIT, iterators, more languages, packages) is in
+[TODO.md](TODO.md).
 
 History is in the tags. `v0.01` is the original 2013–2014 code, including an
 early Java plugin and a JNA binding. `v0.02` is that first design brought
@@ -364,17 +368,20 @@ runtime.
 Every test is a TAP stream. The full output is in
 `build/meson-logs/testlog.txt`.
 
-- **Conformance** (`tests/*.c`): eight groups, which are values, protocol,
-  ownership, identity, callbacks, errors, threads and lifecycle. Each group
+- **Conformance** (`tests/*.c`): nine groups, which are values, protocol,
+  ownership, identity, callbacks, errors, threads, lifecycle and call
+  options. Each group
   runs against every plugin built, as suite `conformance-<plugin>`. The
   fixtures are each plugin's `conformance` module, from `tests/<lang>/`.
 - **Pairwise** (`tests/pairwise.c`): every ordered pair of different
   languages in one process, using each other's values, calls and errors.
 - **Bindings** (`tests/<lang>/test_binding.*`): plain `python3`, `lua5.4`,
   `lua5.3`, `qjs`, `perl` and `java` programs using the other languages
-  through `ugly`, in attach mode. The `qjs` is the one built from the QuickJS subproject.
+  through `ugly`, in attach mode. The `qjs` is the one built from the
+  QuickJS subproject.
 - **Examples** (`examples/`): run, and checked by exit status. They're the
-  programs README quotes.
+  programs README quotes. The HAProxy ones run when `haproxy` is installed,
+  against the Lua binding that matches its Lua.
 
 ```sh
 meson test -C build --suite conformance-lua   # one plugin
@@ -394,9 +401,11 @@ process-wide state for the life of the process. `tests/valgrind.supp`
 suppresses only CPython's own memory: its live objects reported as
 "possibly lost" (from `libpython`, or from a statically linked `python3`
 host), because Python is never finalized, and the interned strings Python
-3.12 never frees when it is the host. Tests with a JVM in them (suite `jvm`) don't run
-under valgrind: its JIT and GC are beyond what memcheck can judge. They run
-with `-Xcheck:jni` instead (`UGLY_JAVA_CHECK`), where a JNI warning aborts.
+3.12 never frees when it is the host. Tests with a JVM in them (suite
+`jvm`) don't run under valgrind: its JIT and GC are beyond what memcheck can
+judge. They run with `-Xcheck:jni` instead (`UGLY_JAVA_CHECK`), where a JNI
+warning aborts. The HAProxy tests (suite `haproxy`) are left out too:
+valgrind would wrap their runner, not HAProxy.
 
 ## License
 
