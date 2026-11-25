@@ -491,19 +491,53 @@ static ugly_status perl_failure(pTHX_ ugly_ctx *ctx, plrt *r){
  * list context, collapsing the result: none -> null, one -> it, more -> an
  * array. The result is converted with 'want'.
  */
+/*
+ * Calls fn (or method on invocant) with args, then the call options' keyword
+ * arguments as trailing name => value pairs (contract §11), in the context
+ * they ask for: list (the default, collapsed as decision 9 says), scalar or
+ * void. A hint is refused.
+ */
 static ugly_status call_perl(pTHX_ ugly_ctx *ctx, plrt *r, SV *fn, const char *method, SV *invocant,
-	const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out){
+	const ugly_val *args, size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
 
+	I32 gimme = G_LIST ;
+	size_t nkw = 0 ;
+	if (o != NULL){
+		if (o->hint != NULL){
+			return fail(ctx, r, UGLY_ERR_NOT_SUPPORTED, "Error", "Perl takes no call hint") ;
+		}
+		if (o->context == NULL || strcmp(o->context, "list") == 0){
+			gimme = G_LIST ;
+		}
+		else if (strcmp(o->context, "scalar") == 0){
+			gimme = G_SCALAR ;
+		}
+		else if (strcmp(o->context, "void") == 0){
+			gimme = G_VOID ;
+		}
+		else {
+			return fail(ctx, r, UGLY_ERR_USAGE, "Error", "a call context is list, scalar or void") ;
+		}
+		nkw = o->nkwargs ;
+	}
 	ENTER ;
 	SAVETMPS ;
 	/* Convert every argument before touching the stack, so a failure leaves no mark behind. */
-	SV **svs = calloc(nargs + 1, sizeof(SV *)) ;
+	size_t total = nargs + 2 * nkw ;
+	SV **svs = calloc(total + 1, sizeof(SV *)) ;
 	size_t i ;
 	ugly_status st = UGLY_OK ;
 	for (i = 0 ; (i < nargs)&&(st == UGLY_OK) ; i++){
 		svs[i] = from_val(aTHX_ ctx, r, args[i], &st) ;
 		if (svs[i] != NULL){
 			sv_2mortal(svs[i]) ;
+		}
+	}
+	for (i = 0 ; (i < nkw)&&(st == UGLY_OK) ; i++){
+		svs[nargs + 2 * i] = sv_2mortal(newSVpvn_utf8(o->kwargs[i].name, strlen(o->kwargs[i].name), 1)) ;
+		svs[nargs + 2 * i + 1] = from_val(aTHX_ ctx, r, o->kwargs[i].value, &st) ;
+		if (svs[nargs + 2 * i + 1] != NULL){
+			sv_2mortal(svs[nargs + 2 * i + 1]) ;
 		}
 	}
 	if (st != UGLY_OK){
@@ -517,12 +551,12 @@ static ugly_status call_perl(pTHX_ ugly_ctx *ctx, plrt *r, SV *fn, const char *m
 	if (invocant != NULL){
 		XPUSHs(invocant) ;
 	}
-	for (i = 0 ; i < nargs ; i++){
+	for (i = 0 ; i < total ; i++){
 		XPUSHs(svs[i]) ;
 	}
 	PUTBACK ;
 	free(svs) ;
-	int count = (method != NULL ? call_method(method, G_LIST | G_EVAL) : call_sv(fn, G_LIST | G_EVAL)) ;
+	int count = (method != NULL ? call_method(method, gimme | G_EVAL) : call_sv(fn, gimme | G_EVAL)) ;
 	SPAGAIN ;
 	if (SvTRUE(ERRSV)){
 		SP -= count ;
@@ -1391,8 +1425,8 @@ static ugly_status pl_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offs
 }
 
 
-static ugly_status pl_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_kind want, ugly_val *out){
+static ugly_status call_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_kind want, ugly_val *out){
 
 	plrt *r = RT(rt) ;
 	ENTER_PERL(r) ;
@@ -1402,7 +1436,7 @@ static ugly_status pl_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val
 		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not code") ;
 	}
 	else {
-		st = call_perl(aTHX_ ctx, r, sv, NULL, NULL, args, nargs, want, out) ;
+		st = call_perl(aTHX_ ctx, r, sv, NULL, NULL, args, nargs, o, want, out) ;
 	}
 	LEAVE_PERL() ;
 	return st ;
@@ -1410,8 +1444,8 @@ static ugly_status pl_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val
 
 
 /* A package's function is called as pkg::f(args); an object's method as $obj->m(args); a hash's code entry as is. */
-static ugly_status pl_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
-	size_t nargs, ugly_kind want, ugly_val *out){
+static ugly_status invoke_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
 
 	plrt *r = RT(rt) ;
 	ENTER_PERL(r) ;
@@ -1420,20 +1454,20 @@ static ugly_status pl_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *
 	if (IS_PACKAGE(sv)){
 		CV *cv = package_sub(aTHX_ PACKAGE_NAME(sv), method) ;
 		st = (cv == NULL ? fail(ctx, r, UGLY_ERR_NOT_FOUND, "Error", method)
-			: call_perl(aTHX_ ctx, r, sv_2mortal(newRV_inc((SV *)cv)), NULL, NULL, args, nargs, want, out)) ;
+			: call_perl(aTHX_ ctx, r, sv_2mortal(newRV_inc((SV *)cv)), NULL, NULL, args, nargs, o, want, out)) ;
 	}
 	else if (SvROK(sv)&&SvOBJECT(SvRV(sv))){
 		if (gv_fetchmethod_autoload(SvSTASH(SvRV(sv)), method, TRUE) == NULL){
 			st = fail(ctx, r, UGLY_ERR_NOT_FOUND, "Error", method) ;
 		}
 		else {
-			st = call_perl(aTHX_ ctx, r, NULL, method, sv, args, nargs, want, out) ;
+			st = call_perl(aTHX_ ctx, r, NULL, method, sv, args, nargs, o, want, out) ;
 		}
 	}
 	else if (SvROK(sv)&&(SvTYPE(SvRV(sv)) == SVt_PVHV)){
 		SV **v = hv_fetch((HV *)SvRV(sv), method, (I32)strlen(method), 0) ;
 		st = (((v == NULL)||(! SvROK(*v))||(SvTYPE(SvRV(*v)) != SVt_PVCV)) ? fail(ctx, r, UGLY_ERR_NOT_FOUND, "Error", method)
-			: call_perl(aTHX_ ctx, r, *v, NULL, NULL, args, nargs, want, out)) ;
+			: call_perl(aTHX_ ctx, r, *v, NULL, NULL, args, nargs, o, want, out)) ;
 	}
 	else {
 		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no methods") ;
@@ -1443,8 +1477,8 @@ static ugly_status pl_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *
 }
 
 
-static ugly_status pl_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_handle *out){
+static ugly_status new_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_handle *out){
 
 	plrt *r = RT(rt) ;
 	ENTER_PERL(r) ;
@@ -1456,13 +1490,44 @@ static ugly_status pl_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 	else {
 		ugly_val v = ugly_null() ;
 		SV *cls = sv_2mortal(newSVpv(PACKAGE_NAME(sv), 0)) ;
-		st = call_perl(aTHX_ ctx, r, NULL, "new", cls, args, nargs, UGLY_HANDLE, &v) ;
+		st = call_perl(aTHX_ ctx, r, NULL, "new", cls, args, nargs, o, UGLY_HANDLE, &v) ;
 		if (st == UGLY_OK){
 			*out = v.as.h ;
 		}
 	}
 	LEAVE_PERL() ;
 	return st ;
+}
+
+
+static ugly_status pl_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_kind want, ugly_val *out){
+	return call_entry(ctx, rt, ref, args, nargs, NULL, want, out) ;
+}
+
+static ugly_status pl_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_kind want, ugly_val *out){
+	return call_entry(ctx, rt, ref, args, nargs, o, want, out) ;
+}
+
+static ugly_status pl_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, ugly_kind want, ugly_val *out){
+	return invoke_entry(ctx, rt, ref, method, args, nargs, NULL, want, out) ;
+}
+
+static ugly_status pl_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
+	return invoke_entry(ctx, rt, ref, method, args, nargs, o, want, out) ;
+}
+
+static ugly_status pl_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_handle *out){
+	return new_entry(ctx, rt, ref, args, nargs, NULL, out) ;
+}
+
+static ugly_status pl_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_handle *out){
+	return new_entry(ctx, rt, ref, args, nargs, o, out) ;
 }
 
 
@@ -1634,6 +1699,9 @@ static const ugly_plugin plugin = {
 	.length = pl_length,
 	.get_index = pl_get_index,
 	.set_index = pl_set_index,
+	.call_opts = pl_call_opts,
+	.invoke_opts = pl_invoke_opts,
+	.new_opts = pl_new_opts,
 	.delete_member = pl_delete_member,
 	.splice = pl_splice,
 	.call = pl_call,

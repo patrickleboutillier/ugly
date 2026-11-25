@@ -551,6 +551,50 @@ releases its handle reference.
 | restartable | yes | no | yes | no | no (`DestroyJavaVM` is one-way) |
 | multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY); `PERL_SYS_INIT3` once per process, never `PERL_SYS_TERM` | no: one JVM per process, created at plugin load, or the one already running |
 
+## 11. Call options
+
+A call carries positional arguments; three other things languages put on a
+call travel as **call options** (decided 2026-11-25, decisions 13 to 17):
+keyword arguments (`json.dumps(data, indent=2)`), an overload hint (Java),
+and the call context (Perl).
+
+```c
+typedef struct ugly_kwarg { const char *name ; ugly_val value ; } ugly_kwarg ;
+typedef struct ugly_opts {
+	uint32_t size ;              /* sizeof(ugly_opts): fields may be added */
+	const ugly_kwarg *kwargs ; size_t nkwargs ;
+	const char *hint ;           /* language-specific, NULL for none */
+	const char *context ;        /* "list", "scalar", "void", NULL for the default */
+} ugly_opts ;
+ugly_status ugly_call_opts(ctx, fn, args, nargs, opts, want, out) ;
+ugly_status ugly_invoke_opts(ctx, obj, method, args, nargs, opts, want, out) ;
+ugly_status ugly_new_opts(ctx, cls, args, nargs, opts, out) ;
+```
+
+- With no options, the `_opts` forms are `ugly_call`, `ugly_invoke` and
+  `ugly_new`. Keyword values are borrowed for the call, like positional ones.
+- Plugins implement `call_opts`, `invoke_opts` and `new_opts` (ABI 4). One
+  without them refuses every option: the core fails the call with
+  `UGLY_ERR_NOT_SUPPORTED`.
+- **Exact or refused:** a plugin honours an option with its language's own
+  meaning, or refuses the call with `UGLY_ERR_NOT_SUPPORTED`, naming it. It
+  never drops one.
+
+| | keyword arguments | hint | context |
+|---|---|---|---|
+| Python | `f(*args, **kwargs)`; an unknown name is Python's own `TypeError` | refused | refused |
+| Perl | appended as `name => value` pairs, in the order given | refused | `list` (default, collapsing as in decision 9), `scalar`, `void` |
+| Java | refused | the overload's parameter types, `"int,java.lang.String"` | refused |
+| Lua, JS | refused | refused | refused |
+| mock | appended as pairs, like Perl | refused | refused |
+
+Bindings mark keyword arguments with a value only their API makes, passed
+last: `ugly.kw{ indent = 2 }` (Lua, names in sorted order, since a table has
+none), `ugly.kw({ indent: 2 })` (JS), `Ugly::kw(indent => 2)` (Perl),
+`Ugly.kw("indent", 2)` (Java), and natively `f(x, indent=2)` on a Python
+proxy. Hints and contexts go through `ugly.call(f, ugly.opts{...}, ...)`
+and its equivalents.
+
 ## Decisions
 
 The review questions, decided on 2026-11-24 (the recommendation was taken
@@ -602,6 +646,21 @@ written (the recommendations were taken):
 12. **`DESTROY`** runs when the last reference goes, as Perl's refcounting
     does. Releasing a handle runs it immediately. Cycles leak, as Perl's own
     do, and `perl_destruct` runs the rest when the runtime is deleted.
+
+Call options (§11), decided on 2026-11-25 (the recommendations were taken):
+
+13. **Names:** `ugly_call_opts`, `ugly_invoke_opts`, `ugly_new_opts`, taking
+    an `ugly_opts` (the type can't share the function's name in C); `kw` in
+    each binding (`ugly.kw`, `Ugly::kw`, `Ugly.kw`).
+14. **Lua and JS refuse keyword arguments.** An options table or object
+    last is their convention, not their language; callers pass one
+    positionally, as they can already.
+15. **Perl takes keyword arguments as trailing pairs**, its own idiom
+    (`Class->new(name => value)`), not as a hash reference.
+16. **Java hints are parameter type names** as `Class.getName()` gives them,
+    joined by commas (`"int,java.lang.String"`), not JNI signatures.
+17. **All three options are in the struct from the start**, so the plugin
+    ABI changes once. Keyword arguments come first, then context, then hints.
 
 ## Clarifications from the first implementation
 

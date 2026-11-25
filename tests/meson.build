@@ -38,7 +38,7 @@ test_env_vars = {
 }
 test_env_base = environment(test_env_vars)
 
-groups = ['values', 'protocol', 'ownership', 'identity', 'callbacks', 'errors', 'threads', 'lifecycle']
+groups = ['values', 'protocol', 'ownership', 'identity', 'callbacks', 'errors', 'threads', 'lifecycle', 'options']
 group_exes = {}
 foreach t : groups
   group_exes += { t: executable('conformance_' + t, t + '.c', dependencies: [ugly_dep, libm]) }

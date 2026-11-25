@@ -10,7 +10,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 - **`doc/contract.md`** is the spec. It was approved on 2026-11-24 (PR #1), and its "Decisions" and "Clarifications" sections record everything settled since. Every rule in it should be a test in `tests/`.
 - **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract (the plugin rules plus the core services). The plugin vtable is written by hand; nothing is generated.
-- **`src/`** is the core (`libugly` 2.3.0, plugin ABI 3):
+- **`src/`** is the core (`libugly` 2.4.0, plugin ABI 4):
   - `handles.c`: the handle table. A handle is a slot index plus a generation. It also holds borrow slots, the (home, identity) index and the per-runtime queues of deferred releases, all under one lock. Plugin code never runs under that lock.
   - `ctx.c`: one ctx per thread (`_Thread_local current`) and errors.
   - `rt.c`: runtimes and frames. `rt_enter`/`rt_leave` check the thread, enforce `UGLY_MAX_DEPTH`, drain deferred releases and revoke borrows. `after_call` normalizes plugin results.
@@ -61,7 +61,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
     - Every runtime, embedded or attached, preloads the same `ugly` module: `ugly.module(lang, name)` and `ugly.eval(lang, code)`, which use `ugly_rt_get`, plus `is_error`/`is_proxy` in Lua and `Error`/`Proxy`/`rethrow` in Python.
     - The Lua plugin keeps its runtime in the registry (`ugly.rt`), not `LUA_EXTRASPACE`, and converts on the `lua_State` it was given, so it works inside coroutines.
   - Rule 7 is complete: an error whose payload comes home is raised as the original object (`throw_ugly_error`, `raise_ugly`).
-- **`tests/`** is the conformance suite: 8 C programs plus `conformance.h` (TAP and fixture), and `pairwise.c`.
+- **`tests/`** is the conformance suite: 9 C programs (the 8 groups of contract §9, and `options`) plus `conformance.h` (TAP and fixture), and `pairwise.c`.
   - Meson registers each program once per plugin in `test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair of different plugins (suite `pairwise`, env `UGLY_TEST_PEER`).
   - Fixtures are each plugin's `conformance` module, in `tests/lua/` and `tests/python/` (the mock's are built in). The spec is in contract §9.
   - Expectations that depend on the language are "exact or refused". Tests that need a capability a plugin lacks report a SKIP; they never drop checks silently.
@@ -70,7 +70,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
   - Threads (contract §6): `UGLY_CAP_ANY_THREAD` (Python, Java) lets any thread enter; `rt_enter` counts itself in (`depth`, atomic) before checking `closing`, `rt_destroy` sets `closing` before checking `depth`. Releases to such runtimes are always queued. `ugly_rt_get` shares them (`shares`, `auto_created`, `destroyed` under the langs lock; `rt_unshare`). `ugly_ctx_thread` makes a ctx deleted at thread exit (pthread key); Python's `need_ctx` and Java's `native_ctx` use it. Python wraps calls out in `OUT()` (GIL released). Phase 2: `ugly_rt_set_host_serialized` makes one runtime any-thread on the host's promise (HAProxy's `lua-load`; Lua's `ugly.shared_by_threads()`, called when `core.thread == 0`); the Lua binding calls `ugly_rt_drain` at each entry; QuickJS resets its stack top on outermost entry.
-  - The plugin ABI is 3: `delete_member` and `splice` (2), `options` (3). The core range-checks `splice` with `length` before the plugin runs.
+  - The plugin ABI is 4: `delete_member` and `splice` (2), `options` (3), `call_opts`/`invoke_opts`/`new_opts` (4). Call options (contract §11) carry keyword arguments, a hint and a context in an `ugly_opts` (`UGLY_OPTS_INIT`; `size` first, so older callers' smaller structs work); the core borrows keyword values and refuses options for a plugin without `_opts` entries. Python takes keyword arguments; Perl and the mock take them as trailing pairs, and Perl a context; the others refuse. The core range-checks `splice` with `length` before the plugin runs.
   - `ugly_configure` (options, `lang.c`) is refused once a language is in the `langs` list, which a plugin without `term` never leaves. Plugins read options with `ugly_option` in `init` (Python, Java) or `rt_new` (Lua, Perl), or at module load (JS); `init` runs under `langs_lock`, so options have their own lock.
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
   - A plugin reports a non-exception failure with `ugly_fail` (chosen status), an exception with `ugly_raise_native` (`RAISED` plus a payload), and a rethrown foreign value with `ugly_raise_handle`.

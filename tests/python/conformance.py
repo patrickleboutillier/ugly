@@ -101,3 +101,16 @@ def rethrow(e):
 def finalized():
     gc.collect()
     return _finalized
+
+
+# Call options (contract §11): keyword arguments.
+def kw(a, b=0, c=0):
+    return f"{a} {b} {c}"
+
+
+class KwBox:
+    def __init__(self, value=0):
+        self.value = value
+
+    def add(self, n=1):
+        return self.value + n

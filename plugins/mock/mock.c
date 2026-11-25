@@ -21,7 +21,7 @@
 /* The mock language's native values                                */
 /* ---------------------------------------------------------------- */
 
-typedef enum { M_MODULE, M_FUNC, M_COUNTER, M_LIST, M_CLASS, M_POINT, M_EXC, M_PROXY } mkind ;
+typedef enum { M_MODULE, M_FUNC, M_COUNTER, M_LIST, M_CLASS, M_POINT, M_EXC, M_PROXY, M_KWBOX } mkind ;
 
 typedef struct mobj mobj ;
 typedef struct mock_rt mock_rt ;
@@ -384,7 +384,7 @@ static ugly_status f_echo(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *re
 
 
 static const char *kind_of(const mval *v){
-	static const char *objs[] = { "module", "function", "counter", "list", "class", "point", "exception", "proxy" } ;
+	static const char *objs[] = { "module", "function", "counter", "list", "class", "point", "exception", "proxy", "kwbox" } ;
 	switch (v->kind){
 		case UGLY_NULL: return "null" ;
 		case UGLY_BOOL: return "bool" ;
@@ -507,7 +507,53 @@ static ugly_status f_inits(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *r
 }
 
 
+/*
+ * Keyword arguments reach the mock as trailing name, value pairs (its call
+ * options, like Perl's). The value for 'key' among a[from..n), or dflt.
+ */
+static ugly_status pair_int(ugly_ctx *ctx, mock_rt *m, mval *a, size_t from, size_t n, const char *key,
+	int64_t dflt, int64_t *out){
+
+	*out = dflt ;
+	if ((n - from) % 2 != 0){
+		return raise(ctx, m, "ArgumentError", "odd number of name, value arguments") ;
+	}
+	size_t i ;
+	for (i = from ; i + 1 < n ; i += 2){
+		if ((a[i].kind == UGLY_STRING)&&(a[i].as.s.len == strlen(key))&&(memcmp(a[i].as.s.p, key, a[i].as.s.len) == 0)){
+			mval v ;
+			ugly_status st = coerce(ctx, m, &a[i + 1], UGLY_INT, &v) ;
+			if (st != UGLY_OK){
+				return st ;
+			}
+			*out = v.as.i ;
+		}
+	}
+	return UGLY_OK ;
+}
+
+
+/* kw(a, b => 0, c => 0): "a b c", the keyword fixture (§11). */
+static ugly_status f_kw(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	if (n < 1){
+		return raise(ctx, m, "ArgumentError", "kw takes a first argument") ;
+	}
+	mval first ;
+	int64_t b, c ;
+	ugly_status st = coerce(ctx, m, &a[0], UGLY_INT, &first) ;
+	if ((st != UGLY_OK)||((st = pair_int(ctx, m, a, 1, n, "b", 0, &b)) != UGLY_OK)
+		||((st = pair_int(ctx, m, a, 1, n, "c", 0, &c)) != UGLY_OK)){
+		return st ;
+	}
+	char buf[96] ;
+	int len = snprintf(buf, sizeof(buf), "%lld %lld %lld", (long long)first.as.i, (long long)b, (long long)c) ;
+	*ret = mstr(UGLY_STRING, buf, (size_t)len) ;
+	return UGLY_OK ;
+}
+
+
 static const struct { const char *name ; mock_fn fn ; } functions[] = {
+	{ "kw", f_kw },
 	{ "echo", f_echo },
 	{ "kind_of", f_kind_of },
 	{ "make_counter", f_make_counter },
@@ -534,6 +580,9 @@ static mobj *module_new(mock_rt *m){
 	}
 	mobj *cls = obj_new(m, M_CLASS) ;
 	cls->name = "Point" ;
+	list_push(mod, mobjval(cls)) ;
+	cls = obj_new(m, M_CLASS) ;
+	cls->name = "KwBox" ;
 	list_push(mod, mobjval(cls)) ;
 	return mod ;
 }
@@ -614,7 +663,8 @@ static ugly_status mock_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t
 		UGLY_TRAIT_INSTANTIABLE,     /* class */
 		UGLY_TRAIT_MEMBERS,          /* point */
 		UGLY_TRAIT_MEMBERS,          /* exception */
-		0                            /* proxy: never exported */
+		0,                           /* proxy: never exported */
+		UGLY_TRAIT_MEMBERS           /* kwbox */
 	} ;
 	*traits = t[o->kind] ;
 	mval v = mobjval(o) ;
@@ -642,6 +692,9 @@ static int member(mobj *o, const char *name, mval *out){
 		case M_POINT:
 			if (strcmp(name, "x") == 0){ *out = mdouble(o->x) ; return 1 ; }
 			if (strcmp(name, "y") == 0){ *out = mdouble(o->y) ; return 1 ; }
+			return 0 ;
+		case M_KWBOX:
+			if (strcmp(name, "value") == 0){ *out = mint(o->count) ; return 1 ; }
 			return 0 ;
 		case M_EXC:
 			if (strcmp(name, "type") == 0){ *out = mstr(UGLY_STRING, o->type, strlen(o->type)) ; return 1 ; }
@@ -714,6 +767,7 @@ static ugly_status mock_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly
 			}
 			break ;
 		case M_COUNTER: names[n++] = ugly_str("count", 5) ; names[n++] = ugly_str("items", 5) ; break ;
+		case M_KWBOX: names[n++] = ugly_str("value", 5) ; break ;
 		case M_POINT: names[n++] = ugly_str("x", 1) ; names[n++] = ugly_str("y", 1) ; break ;
 		case M_EXC: names[n++] = ugly_str("type", 4) ; names[n++] = ugly_str("message", 7) ; break ;
 		default:
@@ -874,6 +928,14 @@ static ugly_status call_method(ugly_ctx *ctx, mock_rt *m, mobj *self, mval *a, s
 		*ret = mint(self->count) ;
 		return UGLY_OK ;
 	}
+	if ((self->kind == M_KWBOX)&&(strcmp(method, "add") == 0)){
+		int64_t k ;
+		ugly_status st = pair_int(ctx, m, a, 0, n, "n", 1, &k) ;
+		if (st == UGLY_OK){
+			*ret = mint(self->count + k) ;
+		}
+		return st ;
+	}
 	if ((self->kind == M_POINT)&&(strcmp(method, "norm2") == 0)){
 		ARGS(0) ;
 		*ret = mdouble(self->x * self->x + self->y * self->y) ;
@@ -908,6 +970,21 @@ static ugly_status new_point(ugly_ctx *ctx, mock_rt *m, mobj *self, mval *a, siz
 }
 
 
+/* KwBox(value => 0): the keyword fixture's class; box.add(n => 1) is value + n. */
+static ugly_status new_kwbox(ugly_ctx *ctx, mock_rt *m, mobj *self, mval *a, size_t n, mval *ret){
+	(void)self ;
+	int64_t value ;
+	ugly_status st = pair_int(ctx, m, a, 0, n, "value", 0, &value) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	mobj *b = obj_new(m, M_KWBOX) ;
+	b->count = value ;
+	*ret = mobjval(b) ;
+	return UGLY_OK ;
+}
+
+
 static ugly_status mock_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 	ugly_handle *out){
 
@@ -916,9 +993,81 @@ static ugly_status mock_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, cons
 		return UGLY_ERR_NOT_CAPABLE ;
 	}
 	ugly_val v = ugly_null() ;
-	ugly_status st = run(ctx, M(rt), new_point, o, args, nargs, UGLY_HANDLE, &v) ;
+	ugly_status st = run(ctx, M(rt), (strcmp(o->name, "KwBox") == 0 ? new_kwbox : new_point), o, args, nargs,
+		UGLY_HANDLE, &v) ;
 	if (st == UGLY_OK){
 		*out = v.as.h ;
+	}
+	return st ;
+}
+
+
+/*
+ * Call options: keyword arguments become trailing name, value pairs (as in
+ * Perl); a hint or a context is refused (contract §11: exact or refused).
+ */
+static ugly_val *with_pairs(ugly_ctx *ctx, ugly_rt *rt, const ugly_val *args, size_t nargs, const ugly_opts *o,
+	size_t *total, ugly_status *st){
+
+	*st = UGLY_OK ;
+	if ((o->hint != NULL)||(o->context != NULL)){
+		*st = fail(ctx, M(rt), UGLY_ERR_NOT_SUPPORTED, "ArgumentError",
+			o->hint != NULL ? "the mock takes no call hint" : "the mock takes no call context") ;
+		return NULL ;
+	}
+	*total = nargs + 2 * o->nkwargs ;
+	ugly_val *all = calloc(*total + 1, sizeof(ugly_val)) ;
+	if (all == NULL){
+		*st = UGLY_ERR_NOMEM ;
+		return NULL ;
+	}
+	memcpy(all, args, nargs * sizeof(ugly_val)) ;
+	size_t i ;
+	for (i = 0 ; i < o->nkwargs ; i++){
+		all[nargs + 2 * i] = ugly_str(o->kwargs[i].name, strlen(o->kwargs[i].name)) ;
+		all[nargs + 2 * i + 1] = o->kwargs[i].value ;
+	}
+	return all ;
+}
+
+
+static ugly_status mock_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_kind want, ugly_val *out){
+
+	size_t n ;
+	ugly_status st ;
+	ugly_val *all = with_pairs(ctx, rt, args, nargs, o, &n, &st) ;
+	if (all != NULL){
+		st = mock_call_op(ctx, rt, ref, all, n, want, out) ;
+		free(all) ;
+	}
+	return st ;
+}
+
+
+static ugly_status mock_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
+
+	size_t n ;
+	ugly_status st ;
+	ugly_val *all = with_pairs(ctx, rt, args, nargs, o, &n, &st) ;
+	if (all != NULL){
+		st = mock_invoke(ctx, rt, ref, method, all, n, want, out) ;
+		free(all) ;
+	}
+	return st ;
+}
+
+
+static ugly_status mock_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *o, ugly_handle *out){
+
+	size_t n ;
+	ugly_status st ;
+	ugly_val *all = with_pairs(ctx, rt, args, nargs, o, &n, &st) ;
+	if (all != NULL){
+		st = mock_new_instance(ctx, rt, ref, all, n, out) ;
+		free(all) ;
 	}
 	return st ;
 }
@@ -947,6 +1096,9 @@ static const ugly_plugin plugin = {
 	.length = mock_length,
 	.get_index = mock_get_index,
 	.set_index = mock_set_index,
+	.call_opts = mock_call_opts,
+	.invoke_opts = mock_invoke_opts,
+	.new_opts = mock_new_opts,
 	.delete_member = mock_delete_member,
 	.splice = mock_splice,
 	.call = mock_call_op,

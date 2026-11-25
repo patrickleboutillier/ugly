@@ -64,17 +64,20 @@ working setup.
 
 All additive; none of it breaks existing plugins (contract, "Scope").
 
-- [ ] **Keyword arguments** for foreign calls. Python's `f(x, key=...)` on a
-  proxy is refused today, and so is `sorted(t, key=f)` passing through to
-  another language. This needs a call-options form of `ugly_call`/`ugly_invoke`.
+- [ ] **Call options** (contract §11, decided 2026-11-25): keyword
+  arguments, overload hints, call context.
+  - [x] The core (`ugly_call_opts` and friends, plugin ABI 4), keyword
+    arguments in Python, Perl and the mock, Perl's context, the `options`
+    conformance group.
+  - [ ] The bindings' syntax: Python proxies, `ugly.kw` (Lua, JS),
+    `Ugly::kw` (Perl), `Ugly.kw` (Java); README examples.
+  - [ ] Java's hint; `ugly.call(f, ugly.opts{...})` and its equivalents.
 - [ ] **Iterators and generators**: a protocol for "next" (Python
   iterators, Lua `pairs`/closures, JS iterators), beyond today's indexing.
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
   Python dicts keyed by tuples, JS `Map`.
-- [ ] **Overload hints** (v1's `hint`), for statically typed languages, as
-  part of the call options above. Java picks overloads by scoring how well
-  the arguments convert, which settles most calls; a hint would settle the
-  ties (`f(int)` against `f(long)`, `f(Object)` against `f(String)`).
+- [ ] **Overload hints** (v1's `hint`): the `hint` call option, for Java
+  (see call options above).
 - [x] **Resizing and deleting** (done 2026-11-25): `ugly_splice` and
   `ugly_delete_member`, plugin ABI 2. Perl's ties use them.
   - [ ] The other bindings' proxies could too: `del p[k]`, `p.append(x)`
