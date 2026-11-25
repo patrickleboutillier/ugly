@@ -85,6 +85,41 @@ int main(void){
 		is_status(ctx, st, UGLY_OK, "set_index one past the end appends") ;
 		ugly_length(ctx, items.as.h, &n) ;
 		is_int(n, 4, "  ... length is 4") ;
+
+		/* splice: items is 1, 2, 3, "four" */
+		ugly_val x[] = { ugly_str("x", 1) } ;
+		st = ugly_splice(ctx, items.as.h, 1, 2, x, 1) ;
+		if (is_status(ctx, st, UGLY_OK, "splice(items, 1, 2, \"x\") replaces two elements with one")){
+			ugly_length(ctx, items.as.h, &n) ;
+			is_int(n, 3, "  ... length is 3") ;
+			ugly_get_index(ctx, items.as.h, 1, UGLY_STRING, &v) ;
+			is_str(sval(&v), "x", "  ... items[1] is \"x\"") ;
+			ugly_val_release(ctx, &v) ;
+			ugly_get_index(ctx, items.as.h, 2, UGLY_STRING, &v) ;
+			is_str(sval(&v), "four", "  ... items[2] is \"four\"") ;
+			ugly_val_release(ctx, &v) ;
+		}
+		ugly_val more[] = { ugly_int(5), ugly_hval(f.mod) } ;
+		st = ugly_splice(ctx, items.as.h, 3, 0, more, 2) ;
+		is_status(ctx, st, UGLY_OK, "splice at the end appends") ;
+		ugly_length(ctx, items.as.h, &n) ;
+		is_int(n, 5, "  ... length is 5") ;
+		bool same = false ;
+		st = ugly_get_index(ctx, items.as.h, 4, UGLY_HANDLE, &v) ;
+		ok((st == UGLY_OK)&&(v.kind == UGLY_HANDLE)&&(ugly_same(ctx, v.as.h, f.mod, &same) == UGLY_OK)&&same,
+			"  ... an inserted handle reads back as the same value") ;
+		ugly_val_release(ctx, &v) ;
+		st = ugly_splice(ctx, items.as.h, 0, 1, NULL, 0) ;
+		is_status(ctx, st, UGLY_OK, "splice(items, 0, 1) removes the first element") ;
+		ugly_get_index(ctx, items.as.h, 0, UGLY_STRING, &v) ;
+		is_str(sval(&v), "x", "  ... items[0] is now \"x\"") ;
+		ugly_val_release(ctx, &v) ;
+		st = ugly_splice(ctx, items.as.h, 2, 3, NULL, 0) ;
+		is_status(ctx, st, UGLY_ERR_NOT_FOUND, "splice past the end: UGLY_ERR_NOT_FOUND") ;
+		st = ugly_splice(ctx, items.as.h, 0, 4, NULL, 0) ;
+		is_status(ctx, st, UGLY_OK, "splice(items, 0, length) clears") ;
+		ugly_length(ctx, items.as.h, &n) ;
+		is_int(n, 0, "  ... length is 0") ;
 		ugly_val_release(ctx, &items) ;
 	}
 
@@ -92,6 +127,21 @@ int main(void){
 	is_status(ctx, st, UGLY_OK, "set_member(counter, count, 10)") ;
 	ugly_get_member(ctx, c, "count", UGLY_INT, &v) ;
 	is_int(v.as.i, 10, "  ... reads back as 10") ;
+
+	/* delete_member: exact where objects take new members, refused where their members are fixed. */
+	st = ugly_set_member(ctx, c, "extra", ugly_int(1)) ;
+	if (st == UGLY_OK){
+		st = ugly_delete_member(ctx, c, "extra") ;
+		is_status(ctx, st, UGLY_OK, "delete_member(counter, extra)") ;
+		st = ugly_get_member(ctx, c, "extra", UGLY_ANY, &v) ;
+		is_status(ctx, st, UGLY_ERR_NOT_FOUND, "  ... it's gone") ;
+		st = ugly_delete_member(ctx, c, "extra") ;
+		is_status(ctx, st, UGLY_OK, "deleting a missing member is not an error") ;
+	}
+	else {
+		st = ugly_delete_member(ctx, c, "count") ;
+		is_status(ctx, st, UGLY_ERR_NOT_CAPABLE, "fixed members (no new member could be set): delete_member is UGLY_ERR_NOT_CAPABLE") ;
+	}
 
 	st = ugly_call(ctx, c, NULL, 0, UGLY_ANY, &v) ;
 	is_status(ctx, st, UGLY_ERR_NOT_CAPABLE, "call(counter): UGLY_ERR_NOT_CAPABLE") ;
@@ -125,6 +175,14 @@ int main(void){
 		ugly_get_index(ctx, l, 1, UGLY_STRING, &v) ;
 		is_str(sval(&v), "a", "get_index(core list, 1)") ;
 		ugly_val_release(ctx, &v) ;
+		ugly_val ins[] = { ugly_int(7), ugly_int(8) } ;
+		st = ugly_splice(ctx, l, 0, 1, ins, 2) ;
+		is_status(ctx, st, UGLY_OK, "splice(core list, 0, 1, 7, 8)") ;
+		int64_t n = 0 ;
+		ugly_length(ctx, l, &n) ;
+		ugly_get_index(ctx, l, 2, UGLY_STRING, &v) ;
+		ok((n == 3)&&(v.kind == UGLY_STRING)&&(strcmp(sval(&v), "a") == 0), "  ... gives 7, 8, \"a\"") ;
+		ugly_val_release(ctx, &v) ;
 		ugly_release(ctx, l) ;
 	}
 	ugly_handle m ;
@@ -133,6 +191,10 @@ int main(void){
 		ugly_set_member(ctx, m, "k", ugly_double(1.5)) ;
 		st = ugly_get_member(ctx, m, "k", UGLY_DOUBLE, &v) ;
 		ok((st == UGLY_OK)&&(v.as.d == 1.5), "set_member/get_member on a core map") ;
+		st = ugly_delete_member(ctx, m, "k") ;
+		is_status(ctx, st, UGLY_OK, "delete_member on a core map") ;
+		st = ugly_get_member(ctx, m, "k", UGLY_ANY, &v) ;
+		is_status(ctx, st, UGLY_ERR_NOT_FOUND, "  ... it's gone") ;
 		ugly_release(ctx, m) ;
 	}
 

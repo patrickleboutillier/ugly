@@ -694,6 +694,13 @@ static ugly_status mock_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 }
 
 
+/* Mock objects have fixed members. */
+static ugly_status mock_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	(void)ref ; (void)name ;
+	return fail(ctx, M(rt), UGLY_ERR_NOT_CAPABLE, "TypeError", "members can't be deleted") ;
+}
+
+
 static ugly_status mock_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	(void)rt ;
 	mobj *o = ref ;
@@ -761,6 +768,42 @@ static ugly_status mock_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t
 		mval_free(&o->vals[i]) ;
 		o->vals[i] = nv ;
 	}
+	return UGLY_OK ;
+}
+
+
+static ugly_status mock_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	mock_rt *m = M(rt) ;
+	mobj *o = ref ;
+	if (o->kind != M_LIST){
+		return UGLY_ERR_NOT_CAPABLE ;
+	}
+	size_t off = (size_t)offset, rm = (size_t)remove, i ;
+	mval *nv = calloc(n + 1, sizeof(mval)) ;
+	for (i = 0 ; i < n ; i++){
+		ugly_status st = to_native(ctx, m, insert[i], &nv[i]) ;
+		if (st != UGLY_OK){
+			while (i-- > 0){
+				mval_free(&nv[i]) ;
+			}
+			free(nv) ;
+			return st ;
+		}
+	}
+	for (i = 0 ; i < rm ; i++){
+		mval_free(&o->vals[off + i]) ;
+	}
+	size_t nn = o->n - rm + n ;
+	if (nn > o->cap){
+		o->cap = nn ;
+		o->vals = realloc(o->vals, o->cap * sizeof(mval)) ;
+	}
+	memmove(&o->vals[off + n], &o->vals[off + rm], (o->n - off - rm) * sizeof(mval)) ;
+	memcpy(&o->vals[off], nv, n * sizeof(mval)) ;
+	o->n = nn ;
+	free(nv) ;
 	return UGLY_OK ;
 }
 
@@ -904,6 +947,8 @@ static const ugly_plugin plugin = {
 	.length = mock_length,
 	.get_index = mock_get_index,
 	.set_index = mock_set_index,
+	.delete_member = mock_delete_member,
+	.splice = mock_splice,
 	.call = mock_call_op,
 	.invoke = mock_invoke,
 	.new_instance = mock_new_instance,

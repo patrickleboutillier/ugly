@@ -42,7 +42,7 @@ static struct {
 	jclass Bridge, Foreign, ForeignException, NotFound, NotCapable, TypeMismatch, Throwable, Class ;
 	jclass Boolean, Long, Integer, Short, Byte, Double, Float, Character, String, BigInteger, Number, ByteArray ;
 	jmethodID b_importClass, b_traits, b_typeName, b_getMember, b_setMember, b_memberNames, b_length,
-		b_getIndex, b_setIndex, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf ;
+		b_getIndex, b_setIndex, b_deleteMember, b_splice, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf ;
 	jmethodID f_of ;
 	jfieldID f_handle ;
 	jmethodID fe_new, fe_take, fe_payload ;
@@ -897,6 +897,20 @@ static ugly_status jv_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 }
 
 
+static ugly_status jv_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	JNIEnv *env = ENV(rt) ;
+	FRAME_IN(env) ;
+	ugly_status st = UGLY_OK ;
+	jstring n = new_string(env, name, strlen(name)) ;
+	(*env)->CallStaticVoidMethod(env, J.Bridge, J.b_deleteMember, (jobject)ref, n) ;
+	if ((*env)->ExceptionCheck(env)){
+		st = java_failure(env, ctx) ;
+	}
+	FRAME_OUT(env) ;
+	return st ;
+}
+
+
 static ugly_status jv_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	JNIEnv *env = ENV(rt) ;
 	FRAME_IN(env) ;
@@ -962,6 +976,27 @@ static ugly_status jv_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i
 	jobject jv = to_java(env, ctx, v, &st) ;
 	if (st == UGLY_OK){
 		(*env)->CallStaticVoidMethod(env, J.Bridge, J.b_setIndex, (jobject)ref, (jint)i, jv) ;
+		if ((*env)->ExceptionCheck(env)){
+			st = java_failure(env, ctx) ;
+		}
+	}
+	FRAME_OUT(env) ;
+	return st ;
+}
+
+
+static ugly_status jv_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	JNIEnv *env = ENV(rt) ;
+	if (offset + remove > 0x7FFFFFFF){
+		return fail(ctx, UGLY_ERR_NOT_FOUND, "IndexOutOfBoundsException", "index out of range") ;
+	}
+	FRAME_IN(env) ;
+	ugly_status st = UGLY_OK ;
+	jobjectArray a = to_java_array(env, ctx, insert, n, &st) ;
+	if (st == UGLY_OK){
+		(*env)->CallStaticVoidMethod(env, J.Bridge, J.b_splice, (jobject)ref, (jint)offset, (jint)remove, a) ;
 		if ((*env)->ExceptionCheck(env)){
 			st = java_failure(env, ctx) ;
 		}
@@ -1089,6 +1124,10 @@ static int lookup(JNIEnv *env){
 	J.b_getIndex = (*env)->GetStaticMethodID(env, J.Bridge, "getIndex", sig) ;
 	snprintf(sig, sizeof(sig), "(%sI%s)V", O, O) ;
 	J.b_setIndex = (*env)->GetStaticMethodID(env, J.Bridge, "setIndex", sig) ;
+	snprintf(sig, sizeof(sig), "(%sLjava/lang/String;)V", O) ;
+	J.b_deleteMember = (*env)->GetStaticMethodID(env, J.Bridge, "deleteMember", sig) ;
+	snprintf(sig, sizeof(sig), "(%sII[%s)V", O, O) ;
+	J.b_splice = (*env)->GetStaticMethodID(env, J.Bridge, "splice", sig) ;
 	snprintf(sig, sizeof(sig), "(%s[%s)%s", O, O, O) ;
 	J.b_call = (*env)->GetStaticMethodID(env, J.Bridge, "call", sig) ;
 	J.b_newInstance = (*env)->GetStaticMethodID(env, J.Bridge, "newInstance", sig) ;
@@ -1226,6 +1265,8 @@ static const ugly_plugin plugin = {
 	.length = jv_length,
 	.get_index = jv_get_index,
 	.set_index = jv_set_index,
+	.delete_member = jv_delete_member,
+	.splice = jv_splice,
 	.call = jv_call,
 	.invoke = jv_invoke,
 	.new_instance = jv_new_instance,

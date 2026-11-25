@@ -15,8 +15,16 @@ if perl_embed_ok
   perl_ldopts = run_command(perl_prog, '-MExtUtils::Embed', '-e', 'ldopts', check: true).stdout().strip().split()
   perl_dep = declare_dependency(compile_args: perl_ccopts, link_args: perl_ldopts)
 
+  # helper.pm, the Perl side of the plugin, as the C string helper_pm.
+  helper_pm_h = custom_target('helper_pm.h',
+    input: 'helper.pm',
+    output: 'helper_pm.h',
+    command: [perl_prog, files('embed.pl'), 'helper_pm', '@INPUT@'],
+    capture: true,
+  )
+
   ugly_perl5 = shared_module('ugly_perl5',
-    'perl5.c',
+    'perl5.c', helper_pm_h,
     name_prefix: '',
     dependencies: [ugly_dep, perl_dep],
     install: true,

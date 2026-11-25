@@ -1311,6 +1311,24 @@ static ugly_status js_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 }
 
 
+/* delete obj[name]: true for a missing property, an error for a non-configurable one. */
+static ugly_status js_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	jsrt *r = RT(rt) ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
+	if (! JS_IsObject(obj)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no members") ;
+	}
+	enter(r) ;
+	JSAtom a = JS_NewAtom(r->c, name) ;
+	ugly_status st = UGLY_OK ;
+	if ((a == JS_ATOM_NULL)||(JS_DeleteProperty(r->c, obj, a, JS_PROP_THROW) < 0)){
+		st = js_failure(ctx, r) ;
+	}
+	JS_FreeAtom(r->c, a) ;
+	return leave(r, st) ;
+}
+
+
 static ugly_status js_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	jsrt *r = RT(rt) ;
 	JSContext *c = r->c ;
@@ -1417,6 +1435,60 @@ static ugly_status js_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i
 			st = js_failure(ctx, r) ;
 		}
 	}
+	return leave(r, st) ;
+}
+
+
+/* Array.prototype.splice.call(obj, offset, remove, ...insert). */
+static ugly_status js_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	jsrt *r = RT(rt) ;
+	JSContext *c = r->c ;
+	JSValueConst obj = ((jsbox *)ref)->v ;
+	enter(r) ;
+	int64_t len = array_length(r, obj) ;
+	if (len == -2){
+		return leave(r, js_failure(ctx, r)) ;
+	}
+	if (len == -1){
+		return leave(r, fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements")) ;
+	}
+	JSValue *argv = calloc(n + 2, sizeof(JSValue)) ;
+	if (argv == NULL){
+		return leave(r, fail(ctx, r, UGLY_ERR_NOMEM, "Error", "out of memory")) ;
+	}
+	argv[0] = JS_NewInt64(c, offset) ;
+	argv[1] = JS_NewInt64(c, remove) ;
+	size_t i, made = 2 ;
+	ugly_status st = UGLY_OK ;
+	for (i = 0 ; i < n ; i++){
+		argv[made] = from_val(ctx, r, insert[i]) ;
+		if (JS_IsException(argv[made])){
+			st = js_failure(ctx, r) ;
+			break ;
+		}
+		made++ ;
+	}
+	if (st == UGLY_OK){
+		JSValue global = JS_GetGlobalObject(c) ;
+		JSValue array = JS_GetPropertyStr(c, global, "Array") ;
+		JSValue proto = JS_GetPropertyStr(c, array, "prototype") ;
+		JSValue splice = JS_GetPropertyStr(c, proto, "splice") ;
+		JSValue res = JS_Call(c, splice, obj, (int)made, argv) ;
+		if (JS_IsException(res)){
+			st = js_failure(ctx, r) ;
+		}
+		JS_FreeValue(c, res) ;
+		JS_FreeValue(c, splice) ;
+		JS_FreeValue(c, proto) ;
+		JS_FreeValue(c, array) ;
+		JS_FreeValue(c, global) ;
+	}
+	for (i = 0 ; i < made ; i++){
+		JS_FreeValue(c, argv[i]) ;
+	}
+	free(argv) ;
 	return leave(r, st) ;
 }
 
@@ -1635,6 +1707,8 @@ static const ugly_plugin plugin = {
 	.length = js_length,
 	.get_index = js_get_index,
 	.set_index = js_set_index,
+	.delete_member = js_delete_member,
+	.splice = js_splice,
 	.call = js_call,
 	.invoke = js_invoke,
 	.new_instance = js_new_instance,

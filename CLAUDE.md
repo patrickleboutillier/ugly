@@ -10,7 +10,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 - **`doc/contract.md`** is the spec. It was approved on 2026-11-24 (PR #1), and its "Decisions" and "Clarifications" sections record everything settled since. Every rule in it should be a test in `tests/`.
 - **`include/ugly.h`** is the public API, and **`include/ugly_plugin.h`** is the plugin contract (the plugin rules plus the core services). The plugin vtable is written by hand; nothing is generated.
-- **`src/`** is the core (`libugly` 2.0.0):
+- **`src/`** is the core (`libugly` 2.1.0, plugin ABI 2):
   - `handles.c`: the handle table. A handle is a slot index plus a generation. It also holds borrow slots, the (home, identity) index and the per-runtime queues of deferred releases, all under one lock. Plugin code never runs under that lock.
   - `ctx.c`: one ctx per thread (`_Thread_local current`) and errors.
   - `rt.c`: runtimes and frames. `rt_enter`/`rt_leave` check the thread, enforce `UGLY_MAX_DEPTH`, drain deferred releases and revoke borrows. `after_call` normalizes plugin results.
@@ -41,7 +41,8 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
     - Editing `subprojects/packagefiles/quickjs/` needs `rm -rf subprojects/quickjs-2026-06-04` (git-ignored) to take effect: Meson copies `packagefiles/` only at extraction.
   - **`perl5/`** is Perl 5 (5.34 here, MULTIPLICITY), written in C against the perl API with no XS generator.
     - `ENTER_PERL`/`LEAVE_PERL` set and restore `PERL_GET_CONTEXT` on every entry.
-    - Refs are SVs. Foreign values are `Ugly::Proxy`: a blessed scalar ref holding the handle, cached per handle. Its Perl side (overloads, `AUTOLOAD`, tied hash and array) is the `helper_pm` string, defined in every interpreter; the XS functions are registered with `newXS`.
+    - Refs are SVs. Foreign values are `Ugly::Proxy`: a blessed scalar ref holding the handle, cached per handle. Its Perl side (overloads, `AUTOLOAD`, complete tied hash and array, and `Ugly::import`) is `helper.pm`, turned into the C string `helper_pm` at build time by `embed.pl` and defined in every interpreter; the XS functions are registered with `newXS`.
+    - `use Ugly python => 'json'` binds a module to a package (`bind_module`): callable members become subs on first use (`AUTOLOAD`), classes nested packages with `new`. An `AUTOLOAD` closure sees `$Ugly::AUTOLOAD`, the package it was compiled in, not the target's.
     - Modules and classes are `Ugly::Package` objects (a scalar ref holding the package name). Their identity is the stash, members are subs and nested packages, and `new` instantiates.
     - Calls run in list context and collapse (`call_perl`). Never `PUSHMARK` before `eval_sv`: it pushes its own mark.
     - The binding (`binding/`: `lib/Ugly.pm`, `auto/Ugly/Ugly.so`, `boot_Ugly`) attaches to the running perl. `END { Ugly::_teardown() }` tears down. Its test sets `PERL_DESTRUCT_LEVEL=2`, so the host frees everything and valgrind measures only UGLY.
@@ -68,6 +69,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Binding tests** (suite `bindings`): `tests/python/test_binding.py` runs under the `python3` that Meson found, and `tests/lua/test_binding.lua` under `lua5.4`, and `tests/java/test_binding.java` under `java` (suites `bindings` and `jvm`). All are TAP, and the Lua one ends with `os.exit(code, true)`, so the state closes and the binding tears down.
 - Rules that are easy to get wrong:
   - Arguments are borrowed and revoked on return, so a plugin must `ugly_dup` what it keeps. Results are owned.
+  - The plugin ABI is 2: `delete_member` and `splice` (libugly 2.1). The core range-checks `splice` with `length` before the plugin runs.
   - `ugly_release`, `ugly_val_release` and `ugly_error_payload` don't clear the ctx's error; every call that returns a status does.
   - A plugin reports a non-exception failure with `ugly_fail` (chosen status), an exception with `ugly_raise_native` (`RAISED` plus a payload), and a rethrown foreign value with `ugly_raise_handle`.
   - A Lua or Python error must never `longjmp` across a core frame or skip one: catch it at the boundary.

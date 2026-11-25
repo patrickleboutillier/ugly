@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -164,6 +165,17 @@ public final class Bridge {
 		f.set(isStatic ? null : o, coerce(v, f.getType()));
 	}
 
+	/** A Map's entry; fields can't be removed. A missing key is not an error. */
+	public static void deleteMember(Object o, String name){
+		if (! (o instanceof Map)) throw new NotCapable("only a Map's members can be deleted");
+		try {
+			((Map<?, ?>)o).remove(name);
+		}
+		catch (UnsupportedOperationException e){
+			throw new NotCapable("the map is unmodifiable");
+		}
+	}
+
 	public static String[] memberNames(Object o){
 		Set<String> names = new LinkedHashSet<>();
 		if (o instanceof Map){
@@ -207,6 +219,21 @@ public final class Bridge {
 		}
 		if ((i < 0)||(i >= n)) throw new NotFound("index out of range");
 		Array.set(o, i, coerce(v, o.getClass().getComponentType()));
+	}
+
+	/** Replaces 'remove' elements at 'offset' (checked by the core) with 'insert'. Lists only: arrays have a fixed size. */
+	public static void splice(Object o, int offset, int remove, Object[] insert){
+		if (! (o instanceof List)){
+			throw new NotCapable(o.getClass().isArray() ? "a Java array has a fixed size" : "value has no elements");
+		}
+		@SuppressWarnings("unchecked") List<Object> l = (List<Object>)o;
+		try {
+			l.subList(offset, offset + remove).clear();
+			l.addAll(offset, Arrays.asList(insert));
+		}
+		catch (UnsupportedOperationException e){
+			throw new NotCapable("the list can't change size");
+		}
 	}
 
 	/* ---------------------------------------------------------------- */
