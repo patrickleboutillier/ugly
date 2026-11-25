@@ -61,6 +61,14 @@ ok(ugly.eval("lua", "return 6 * 7") == 42, "ugly.eval('lua', code)")
 string = ugly.module("lua", "string")
 ok(string.upper("abc") == "ABC", "Lua's string library: string.upper from Python")
 
+# README's example: Lua's standard library only.
+ok(sorted(["banana", "Apple", "cherry"], key=string.lower) == ["Apple", "banana", "cherry"],
+   "Python's sorted() calls Lua's string.lower as its key")
+t = ugly.module("lua", "os").date("!*t", 0)
+ok((t.year, t.month) == (1970, 1), "os.date('!*t', 0) gives a Lua table: t.year, t.month")
+squares = ugly.eval("lua", "local t = {} for i = 1, 4 do t[i] = i * i end return t")
+ok(list(squares) == [1, 4, 9, 16], "a Lua table as a Python sequence: list(squares)")
+
 # Lua code using Python through its own ugly module, reaching back into this very interpreter.
 ok(ugly.eval("lua", "return require('ugly').module('python', 'math').sqrt(16)") == 4.0,
    "embedded Lua uses require('ugly') to reach this process's Python")

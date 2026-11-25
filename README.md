@@ -59,7 +59,7 @@ in Python as the same object.
 ### From Python
 
 The other way round works the same, with `import ugly` in a plain `python3`
-program. These lines come from
+program. These lines are checked by
 [tests/python/test_binding.py](tests/python/test_binding.py):
 
 ```python
@@ -67,11 +67,13 @@ import ugly
 
 string = ugly.module("lua", "string")             # a Lua module
 string.upper("abc")                               # 'ABC'
+sorted(["banana", "Apple", "cherry"], key=string.lower)   # Python calls a Lua function
 
-lua = ugly.module("lua", "conformance")
-lua.apply(lambda x: x * 2, 21)                    # 42: Lua calls a Python lambda
-c = lua.make_counter()                            # a Lua object
-c.inc(); c.count                                  # 1
+t = ugly.module("lua", "os").date("!*t", 0)       # a Lua table
+t.year, t.month                                   # (1970, 1)
+
+squares = ugly.eval("lua", "local t = {} for i = 1, 4 do t[i] = i * i end return t")
+list(squares)                                     # [1, 4, 9, 16]
 ```
 
 Code reached this way can use `ugly` too, and it reaches back into the
@@ -83,8 +85,10 @@ A QuickJS program (`qjs`) works the same way, by importing the native module
 
 ```js
 const ugly = await import("/path/to/ugly.so");
-const py = ugly.module("python", "conformance");
-py.apply(x => x * 2, 21);                         // 42: Python calls a JS arrow function
+const functools = ugly.module("python", "functools");
+functools.reduce((a, b) => a * b, [1, 2, 3, 4, 5]);   // 120: Python calls a JS arrow function
+const date = ugly.module("python", "datetime").date(2026, 11, 25);   // a Python object
+date.isoformat(); date.year;                      // "2026-11-25", 2026
 ugly.module("lua", "string").upper("abc");        // "ABC"
 ```
 
@@ -108,16 +112,23 @@ and `libugly_jni.so` on `java.library.path`
 ([tests/java/test_binding.java](tests/java/test_binding.java)):
 
 ```java
+import java.util.List;
+import java.util.function.BinaryOperator;
 import ugly.Foreign;
 import ugly.Ugly;
 
 Foreign math = (Foreign)Ugly.module("python", "math");
 math.invoke("sqrt", 16.0);                        // 4.0
-Foreign lua = (Foreign)Ugly.module("lua", "conformance");
-Function<Object, Object> twice = x -> (Long)x * 2;
-lua.invoke("apply", twice, 21);                   // 42: Lua calls a Java lambda
-Foreign f = (Foreign)Ugly.eval("lua", "return function(l) l:replaceAll(function(x) return x * 10 end) end");
-f.call(list);                                     // a Lua function as Java's UnaryOperator
+
+Foreign functools = (Foreign)Ugly.module("python", "functools");
+BinaryOperator<Object> times = (a, b) -> (Long)a * (Long)b;
+functools.invoke("reduce", times, List.of(1L, 2L, 3L, 4L, 5L));   // 120: Python calls a Java lambda
+
+Foreign date = (Foreign)((Foreign)Ugly.module("python", "datetime")).invoke("date", 2026, 11, 25);
+date.invoke("isoformat");                         // "2026-11-25"
+
+Foreign string = (Foreign)Ugly.module("lua", "string");
+string.invoke("format", "%d items at %.2f", 3, 9.5);   // "3 items at 9.50"
 ```
 
 ```sh
