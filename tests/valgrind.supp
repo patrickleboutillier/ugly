@@ -25,3 +25,17 @@
    ...
    obj:*/bin/python3*
 }
+# Python 3.12 as the host (tests/python/test_binding.py under python3.12):
+# the interpreter finalizes, but 3.12's interned strings are immortal and
+# never freed (3.13 frees them again), so the strings it interned at startup,
+# at imports and for attribute names show up as "definitely lost". Every
+# such block is allocated directly by the python3.12 executable; UGLY's own
+# allocations start in libugly or a plugin and stay checked. Found by CI on
+# Ubuntu 24.04.
+{
+   cpython312-host-immortal-interned-strings
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   obj:*/bin/python3.12
+}
