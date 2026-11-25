@@ -155,6 +155,25 @@ ugly_ctx *ugly_current_ctx(void) ;
  */
 const char *ugly_option(const char *lang, const char *key, size_t i) ;
 
+/*
+ * For a binding whose host runs one interpreter state on several threads,
+ * one thread at a time (HAProxy's lua-load, behind its own lock): rt may
+ * then be entered from any thread, like a runtime of a UGLY_CAP_ANY_THREAD
+ * plugin, on the host's promise that no two threads are inside it at once.
+ * The core can't check that promise: the state's values mustn't be used by
+ * threads the host doesn't serialize (a Python thread calling a Lua
+ * function it kept).
+ */
+void ugly_rt_set_host_serialized(ugly_rt *rt) ;
+
+/*
+ * Runs the releases other threads queued for rt. They are otherwise run at
+ * the next call into rt, which a host's own interpreter (a binding's) may
+ * rarely get: call it at the binding's entry points, on a thread allowed in
+ * rt, while the runtime's code is running.
+ */
+void ugly_rt_drain(ugly_rt *rt) ;
+
 /* The plugin's per-runtime state, as returned by rt_new/rt_attach. */
 void *ugly_rt_native(const ugly_rt *rt) ;
 

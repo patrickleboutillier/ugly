@@ -290,8 +290,22 @@ and those threads all need the one Python of the process.
   a Lua of their own.
 - Other runtimes stay with their thread. Lua, Perl and QuickJS can't be
   entered by a second thread while one is inside, and a lock around them
-  would deadlock against callbacks; a host that serializes them itself
-  (HAProxy's shared `lua-load` state) is phase 2, in TODO.md.
+  would deadlock against callbacks.
+
+**Phase 2: a runtime the host serializes** (libugly 2.3, 2026-11-25).
+HAProxy's `lua-load` runs one Lua state on all its threads, one at a time,
+behind its own lock.
+- A binding marks such a runtime with `ugly_rt_set_host_serialized()`; the
+  core then lets any thread in, as for `UGLY_CAP_ANY_THREAD`, on the host's
+  promise that it lets one thread in at a time. The core can't check the
+  promise: the state's values mustn't reach threads the host doesn't
+  serialize (a Python thread calling a Lua function it kept).
+- In Lua, the script says so: `ugly.shared_by_threads()`, which HAProxy
+  scripts call when `core.thread` is 0 (the shared state). Each thread then
+  gets its own ctx (`ugly_ctx_thread`).
+- QuickJS records the stack top of the thread that created a runtime; the
+  plugin resets it on each outermost entry (`JS_UpdateStackTop`), so a
+  host-serialized JS runtime can move between threads too.
 
 ## 7. Lifecycle: languages and runtimes
 
@@ -512,7 +526,7 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 | identity | the same object exported twice gives the same handle; proxies unwrap when they return home, so there's no proxy of a proxy |
 | callbacks | C → L → C → L to depth 100; runaway recursion fails cleanly, every level unwinds, and the runtime survives; L1 → L2 → L1 across runtimes; the C host owns callable lifetimes |
 | errors | type and message are preserved; **the payload rethrown at home is the identical object**; an error crossing three runtimes |
-| threads | calls from another thread give `WRONG_THREAD`, or work with `UGLY_CAP_ANY_THREAD`; a release from another thread is deferred and drained; for `UGLY_CAP_ANY_THREAD`, 4 threads at once in the shared runtime (`ugly_rt_get`), and a runtime deleted while another thread holds a share |
+| threads | calls from another thread give `WRONG_THREAD`, or work with `UGLY_CAP_ANY_THREAD` or once the runtime is host-serialized (then `ugly_rt_drain` runs queued releases); a release from another thread is deferred and drained; for `UGLY_CAP_ANY_THREAD`, 4 threads at once in the shared runtime (`ugly_rt_get`), and a runtime deleted while another thread holds a share |
 | lifecycle | capabilities are honoured; runtime delete makes outstanding handles stale; unload is refused while runtimes are alive; restart is tested only with `RESTARTABLE` |
 | pairwise | values, identity, calls, caught and rethrown errors, and alternating recursion between two languages; deleting one language's runtime while the other holds its values |
 | memory | the whole suite under the valgrind setup: no errors and no leaks |
@@ -564,7 +578,10 @@ in every case):
 
    It's the same rule as Lua's, whose strings are also bytes.
 7. **Deferred releases are drained only on entry into the home runtime.**
-   There is no `ugly_rt_collect`.
+   There is no `ugly_rt_collect`. Refined on 2026-11-25: a binding's host
+   interpreter runs its own code without entering through the core, so a
+   binding calls `ugly_rt_drain()` at its entry points (the Lua binding does,
+   on every use of `ugly`), which counts as entry.
 8. **No hash protocol in v2.0.**
 
 Perl's open questions, decided on 2026-11-24 when the Perl plugin was

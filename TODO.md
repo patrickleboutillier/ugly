@@ -24,11 +24,11 @@ working setup.
   between threads; `ugly_ctx_thread` gives threads that Python or Java
   start a ctx of their own. That covers HAProxy's `lua-load-per-thread`:
   a Lua state per thread, one Python. Contract §6.
-- [ ] **Phase 2: a runtime the host serializes.** HAProxy's `lua-load`
-  shares one Lua state between threads behind its own lock. That needs a
-  way for an attaching binding to say "the host serializes this runtime",
-  so the core allows other threads in without the plugin locking (a lock
-  there would deadlock against callbacks). Only if `lua-load` matters.
+- [x] **Phase 2: a runtime the host serializes** (done 2026-11-25):
+  `ugly_rt_set_host_serialized`, and `ugly.shared_by_threads()` in Lua
+  (HAProxy scripts call it when `core.thread` is 0). The HAProxy POC runs
+  `lua-load` on four threads. `ugly_rt_drain` lets a binding run queued
+  releases at its own entry points.
 - [x] **Options for runtimes created on demand** (done 2026-11-25):
   `ugly_configure` and `configure` in every binding (paths, Lua's cpath,
   Java's class path and JVM options). Perl could also take modules to load

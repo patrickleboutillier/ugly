@@ -17,9 +17,10 @@ if binding_dirs.has_key('lua') and test_plugins.contains('python')
 endif
 
 # HAProxy asks Python for a decision on each request (examples/haproxy/), when
-# haproxy is installed and its Lua has a binding here. One thread with
-# lua-load, and four with lua-load-per-thread (a Lua state per worker thread,
-# one Python). Not under valgrind: the test wraps the runner, not haproxy.
+# haproxy is installed and its Lua has a binding here: lua-load on one and on
+# four threads (one state, the threads taking turns), and lua-load-per-thread
+# on four (a state per thread); one Python. Not under valgrind: the test wraps
+# the runner, not haproxy.
 haproxy = find_program('haproxy', '/usr/sbin/haproxy', required: false)
 if haproxy.found() and test_plugins.contains('python')
   haproxy_lua = run_command(haproxy, '-vv', check: false).stdout()
@@ -32,8 +33,8 @@ if haproxy.found() and test_plugins.contains('python')
   if haproxy_lua_version != '' and binding_dirs.has_key('lua' + haproxy_lua_version)
     env = environment(test_env_vars)
     env.set('LUA_CPATH', binding_dirs['lua' + haproxy_lua_version] / '?.so;;')
-    foreach mode : [['1', 'lua-load'], ['4', 'lua-load-per-thread']]
-      test('haproxy-poc-' + mode[1], pyinst, args: [files('haproxy' / 'run_poc.py'), haproxy.full_path(), mode[0], mode[1]],
+    foreach mode : [['1', 'lua-load'], ['4', 'lua-load-per-thread'], ['4', 'lua-load']]
+      test('haproxy-poc-' + mode[1] + '-' + mode[0], pyinst, args: [files('haproxy' / 'run_poc.py'), haproxy.full_path(), mode[0], mode[1]],
         protocol: 'tap', env: env, suite: ['examples', 'haproxy'], depends: plugins + bindings, is_parallel: false)
     endforeach
   endif

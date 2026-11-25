@@ -47,6 +47,7 @@ typedef struct lrt {
 	lua_State *L ;       /* the main state */
 	ugly_rt *urt ;
 	int owns ;           /* created by rt_new (closed on delete), not attached */
+	int shared ;         /* run by several threads, one at a time (ugly.shared_by_threads) */
 } lrt ;
 
 typedef struct { ugly_handle h ; } proxy ;
@@ -716,6 +717,7 @@ static op mkop(int code, ugly_ctx *ctx, ugly_rt *rt, void *ref){
 
 #ifdef UGLY_BINDING
 static void binding_attach(lua_State *L) ;
+static void binding_mark_shared(lua_State *L) ;
 #endif
 
 static ugly_ctx *need_ctx(lua_State *L){
@@ -723,11 +725,20 @@ static ugly_ctx *need_ctx(lua_State *L){
 	binding_attach(L) ;     /* the first use attaches, on this thread */
 #endif
 	ugly_ctx *ctx = ugly_current_ctx() ;
+	lrt *r = R(L) ;
+	if ((ctx == NULL)&&(r != NULL)&&r->shared){
+		ugly_ctx_thread(&ctx) ;     /* another of the threads that take turns in this state */
+	}
 	if (ctx == NULL){
 		/* Attached already, by another thread: one Lua state run by several threads. */
-		luaL_error(L, "ugly: this Lua state belongs to another thread; a state shared by threads "
-			"isn't supported (in HAProxy, use lua-load-per-thread, or nbthread 1)") ;
+		luaL_error(L, "ugly: this Lua state belongs to another thread. If the host runs it on several "
+			"threads one at a time (HAProxy's lua-load with nbthread > 1), call ugly.shared_by_threads()") ;
 	}
+#ifdef UGLY_BINDING
+	if (r != NULL){
+		ugly_rt_drain(r->urt) ;     /* releases other threads queued: the host's Lua is running here */
+	}
+#endif
 	return ctx ;
 }
 
@@ -1069,6 +1080,26 @@ static int api_configure(lua_State *L){
 }
 
 
+/*
+ * ugly.shared_by_threads(): this state is run by several threads, one at a
+ * time, the host serializing them (HAProxy's lua-load, where core.thread is
+ * 0). Any of them may then use ugly. The host's promise is the only
+ * guarantee: values of this state mustn't reach threads it doesn't
+ * serialize. Without it, a state belongs to the thread that first used ugly.
+ */
+static int api_shared_by_threads(lua_State *L){
+#ifdef UGLY_BINDING
+	binding_mark_shared(L) ;
+#endif
+	lrt *r = R(L) ;
+	if (r != NULL){
+		r->shared = 1 ;
+		ugly_rt_set_host_serialized(r->urt) ;
+	}
+	return 0 ;
+}
+
+
 /* ugly.is_error(e): whether e is an error from another language (with .type, .message, .language, .payload). */
 static int api_is_error(lua_State *L){
 	lua_pushboolean(L, luaL_testudata(L, 1, ERROR_MT) != NULL) ;
@@ -1084,7 +1115,8 @@ static int api_is_proxy(lua_State *L){
 
 
 static const luaL_Reg api[] = {
-	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
+	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure },
+	{ "shared_by_threads", api_shared_by_threads }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
 	{ NULL, NULL }
 } ;
 
@@ -1418,7 +1450,18 @@ const ugly_plugin *ugly_plugin_lua(void){
  * (ugly_ctx_thread). So does Python, if it's started there and not in a
  * master process before it forks.
  */
-typedef struct { ugly_ctx *ctx ; ugly_lang *lang ; ugly_rt *rt ; int owns_ctx ; } binding ;
+typedef struct { ugly_ctx *ctx ; ugly_lang *lang ; ugly_rt *rt ; int owns_ctx ; int shared ; } binding ;
+
+
+/* ugly.shared_by_threads() before the state is attached: applied when it is. */
+static void binding_mark_shared(lua_State *L){
+	lua_getfield(L, LUA_REGISTRYINDEX, "ugly.binding") ;
+	binding *b = lua_touserdata(L, -1) ;
+	lua_pop(L, 1) ;
+	if (b != NULL){
+		b->shared = 1 ;
+	}
+}
 
 static int binding_gc(lua_State *L){
 	binding *b = lua_touserdata(L, 1) ;
@@ -1465,6 +1508,10 @@ static void binding_attach(lua_State *L){
 	if (st != UGLY_OK){
 		const ugly_error *e = ugly_last_error(b->ctx) ;
 		luaL_error(L, "ugly: can't attach: %s", e ? ugly_error_message(e) : "?") ;
+	}
+	if (b->shared){
+		R(L)->shared = 1 ;
+		ugly_rt_set_host_serialized(b->rt) ;
 	}
 }
 
