@@ -301,7 +301,7 @@ value code. v2 makes this structural:
 So each language needs one adapter with two modes, not two adapters. The
 essay's "2N" becomes about N plus N thin API wrappers.
 
-**As built (Lua, Python and JS, 2026-11-24).**
+**As built (Lua, Python, JS and Perl, 2026-11-24).**
 
 - **One source file, compiled twice.** Each plugin's source is built as the
   plugin (`ugly_<lang>.so`, linked with the interpreter library) and as the
@@ -346,6 +346,11 @@ essay's "2N" becomes about N plus N thin API wrappers.
     exactly what it declared.
   - The binding must come from the same QuickJS release as the `qjs` it
     runs in. The tests build both from the same pinned wrap.
+- **Perl** (`perl`): `use Ugly` loads `Ugly.pm`, which `XSLoader`s
+  `auto/Ugly/Ugly.so`. That file is `perl5.c` again, linked without
+  libperl, since `perl` is statically linked and exports its API.
+  `boot_Ugly` registers the plugin and attaches to the running interpreter.
+  Teardown runs from `Ugly.pm`'s `END` block, before global destruction.
 
 ## 9. The conformance suite
 
@@ -402,16 +407,16 @@ proxy releases its handle reference.
 | | Lua 5.4 | CPython 3.10+ | QuickJS (`js`) | Perl 5 |
 |---|---|---|---|---|
 | null | `nil` | `None` | `null`, `undefined` (NULL goes in as `null`) | `undef` |
-| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IV / NV, using SV flags |
-| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag: on → STRING, off → STRING decoded as Latin-1, or BYTES if wanted |
-| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | hash keys; for methods, `can` |
+| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IOK → INT, NOK → DOUBLE, POK → STRING; booleans by `SvIsBOOL` (5.36+) or `PL_sv_yes`/`PL_sv_no`'s signature; an explicit `want` numifies only what `looks_like_number` |
+| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag on → STRING; off → STRING if valid UTF-8, else BYTES; `want = STRING` decodes unflagged strings as Latin-1 (see decision 6) |
+| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | a hash's keys, then an object's methods; a package's subs and nested packages. Modules and classes are packages (`Ugly::Package`); `new` instantiates |
 | elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays |
-| `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant |
+| `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant for an object; none for a package's function |
 | proxy finalizer | userdata `__gc` | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` |
 | foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | |
-| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT`, `G_EVAL` |
+| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT` on every entry; `G_EVAL`; calls run in list context and collapse (none → null, one → it, more → array) |
 | restartable | yes | no | yes | no |
-| multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY) |
+| multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY); `PERL_SYS_INIT3` once per process, never `PERL_SYS_TERM` |
 
 ## Decisions
 
@@ -427,11 +432,40 @@ in every case):
    (§1).
 5. **Integers that don't fit in int64 give `UGLY_ERR_TYPE`.** There is no
    silent fallback to DOUBLE or to a string.
-6. **Perl strings without the UTF-8 flag are decoded as Latin-1 into
-   STRING.** They become BYTES only when `want` asks for bytes.
+6. ~~**Perl strings without the UTF-8 flag are decoded as Latin-1 into
+   STRING.** They become BYTES only when `want` asks for bytes.~~
+   **Revised when the Perl plugin was written (2026-11-24):** an unflagged
+   string is STRING if it is valid UTF-8 (which includes all ASCII), and
+   otherwise BYTES. Latin-1 decoding applies when the caller asks for
+   `want = STRING`. Two reasons:
+   - Decoding as Latin-1 turned every BYTES value that passed through Perl
+     into a STRING, so bytes couldn't round-trip.
+   - Perl programs commonly carry *undecoded UTF-8* (text read from files),
+     which Latin-1 decoding would garble.
+
+   It's the same rule as Lua's, whose strings are also bytes.
 7. **Deferred releases are drained only on entry into the home runtime.**
    There is no `ugly_rt_collect`.
 8. **No hash protocol in v2.0.**
+
+Perl's open questions, decided on 2026-11-24 when the Perl plugin was
+written (the recommendations were taken):
+
+9. **Context.** Calls into Perl run in list context and collapse: no value
+   gives null, one gives that value, several give an array. `return @list`
+   works, and so does a sub returning one value. Perl code can ask for
+   scalar context itself with `scalar(...)`. A call option for context can
+   come with keyword arguments (TODO.md).
+10. **Numbers and dualvars.** With `want = ANY`, the flags decide: IOK gives
+    INT, NOK gives DOUBLE, POK gives STRING. An explicit `want` follows
+    Perl's own rule, but numifies only what `looks_like_number`; otherwise
+    it's `UGLY_ERR_TYPE`.
+11. **Booleans.** `SvIsBOOL` on perls that have it (5.36+). On older perls,
+    the signature of `PL_sv_yes`/`PL_sv_no` and their copies: all three
+    flags, with `"1"`/`""`.
+12. **`DESTROY`** runs when the last reference goes, as Perl's refcounting
+    does. Releasing a handle runs it immediately. Cycles leak, as Perl's own
+    do, and `perl_destruct` runs the rest when the runtime is deleted.
 
 ## Clarifications from the first implementation
 
@@ -493,6 +527,23 @@ All of them are in the headers and covered by the conformance suite.
   home plugin then applies its own receiver rule. Lua passes `self` only to
   methods found through the metatable, so a module's plain functions work
   from Python too.
+- **Perl** (2026-11-24) needed no change to the contract beyond its
+  decisions (9–12, and the revision of 6).
+  - It was written from the v1 lessons: `PERL_SET_CONTEXT` on every entry,
+    `PERL_SYS_INIT3` once, and never `PERL_SYS_TERM`.
+  - Foreign values are `Ugly::Proxy` objects: `&{}`, `@{}` and `%{}`
+    overloads, `AUTOLOAD` for methods, `==` for identity, and `DESTROY` to
+    release.
+  - Modules and classes are `Ugly::Package` objects; their identity is the
+    stash.
+  - Writing the binding found a bug: `pl_eval` pushed a mark before
+    `eval_sv`, which pushes its own. That corrupted the calling Perl
+    code's stack frame. The conformance suite couldn't see it, because
+    there the host is C; it showed up only with Perl code running
+    underneath.
+  - The binding test sets `PERL_DESTRUCT_LEVEL=2`, so the host `perl` frees
+    everything at exit, and valgrind measures only UGLY. That leaves zero
+    leaks.
 - **QuickJS** (2026-11-24) needed no change to the contract.
   - It's built from a pinned, checksummed release (`subprojects/quickjs.wrap`), because it isn't commonly packaged.
   - Its `FinalizationRegistry` callbacks are queued only when the GC runs, so its `ugly` module has `gc()` (collect, then run them), and the `finalized()` fixture uses it.
@@ -538,7 +589,13 @@ All of them are in the headers and covered by the conformance suite.
 6. ~~QuickJS~~ (`plugins/js/`, fixtures in `tests/js/`). Done 2026-11-24.
    It passes all 8 groups, and all 12 ordered pairs of mock, Lua, Python and
    JS pass, clean under valgrind and helgrind.
-7. Port Perl.
+7. ~~Port Perl~~ (`plugins/perl5/`, fixtures in `tests/perl5/`, binding in
+   `plugins/perl5/binding/`). Done 2026-11-24. It passes all 8 groups. All
+   20 ordered pairs of mock, Lua, Python, JS and Perl pass, and plain
+   `perl` programs use the other languages. Everything is clean under
+   valgrind and helgrind.
+
+The plan is complete. What comes next is in [TODO.md](../TODO.md).
 
 v1 (the 2013 contract, its Perl plugin and XS binding) was removed from the
 tree on 2026-11-24, once v2 had two real languages calling each other. It is

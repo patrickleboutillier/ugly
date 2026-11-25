@@ -19,6 +19,7 @@ test_env_vars = {
   'PYTHONMALLOC': 'malloc',
   'PYTHONDONTWRITEBYTECODE': '1',
   'UGLY_JS_PATH': meson.current_source_dir() / 'js',
+  'PERL5LIB': meson.current_source_dir() / 'perl5',
 }
 test_env_base = environment(test_env_vars)
 
@@ -64,6 +65,16 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
     env = environment(test_env_vars)
     env.set('UGLY_JS_BINDING', binding_dirs['js'] / 'ugly.so')
     test('binding-js', qjs_exe, args: files('js' / 'test_binding.js'), protocol: 'tap', env: env,
+      suite: 'bindings', depends: plugins + bindings)
+  endif
+
+  if binding_dirs.has_key('perl5')
+    env = environment(test_env_vars)
+    env.set('PERL5LIB', ':'.join([perl_binding_lib, binding_dirs['perl5'], meson.current_source_dir() / 'perl5']))
+    # A perl program skips freeing its memory at exit; level 2 makes it free everything, so
+    # the valgrind setup sees only what UGLY leaks (nothing, at the time of writing).
+    env.set('PERL_DESTRUCT_LEVEL', '2')
+    test('binding-perl5', perl_prog, args: files('perl5' / 'test_binding.pl'), protocol: 'tap', env: env,
       suite: 'bindings', depends: plugins + bindings)
   endif
 
