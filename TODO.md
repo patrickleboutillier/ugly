@@ -111,8 +111,6 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 - [ ] **Plugin helper directory.** `init(ctx, dir)` passes the plugin's
   directory, and no plugin uses it. Use it for language-side helper files,
   or drop it.
-- [ ] **GitHub setting**: "Automatically delete head branches" is off, so
-  merged branches are deleted by hand. The author's call.
 
 ## Docs
 
