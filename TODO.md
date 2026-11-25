@@ -75,6 +75,14 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   UGLY's own/borrow already follow WIT resources, so it would bridge the
   two worlds the essay compares. The first plugin where memory isn't
   shared, so values are copied.
+- [ ] **C# / .NET**: the CLR, through the official hosting API (`nethost`
+  and `hostfxr`, `load_assembly_and_get_function_pointer`), or Mono's
+  embedding API. In shape it's the JVM again: one runtime per process,
+  multi-threaded (`UGLY_CAP_ANY_THREAD`), a GC, reflection, overloads (the
+  `hint` call option applies), exceptions; so the Java plugin is the
+  template. The binding is easier than Java's: a .NET program calls
+  `libugly` directly through P/Invoke. It brings NuGet, and the many
+  enterprise codebases written in C#.
 - [ ] **Java through Panama FFM** for the helper side, once JDK 22+ is the
   baseline. Creating the JVM still needs the JNI invocation API.
 - [ ] **R** (`Rf_initEmbeddedR`): the data-science ecosystem. Everything is a
@@ -87,10 +95,17 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   doesn't state yet.
 - [ ] **Julia** (`jl_init`): numerical work, the same once-per-process shape
   as Python.
-- [ ] **Haskell**: possible, but awkward. GHC compiles, so a plugin would load
-  compiled libraries (`foreign export`, `StablePtr`); dynamic calls need
-  `Data.Dynamic` or the GHC API. It would test the essay's "types flow from
-  the static side", where `want` and hints carry real weight.
+- [ ] **Haskell**: possible, but awkward, and the language that would test
+  the contract's assumptions most. GHC compiles, so a plugin would load a
+  compiled bridge: the library's functions registered in a table, with
+  their types and argument conversions (`foreign export`, `StablePtr`,
+  `Data.Dynamic`), values as handles, `show` as a string. Values are
+  immutable, functions curried, type classes polymorphic: the essay's
+  "types flow from the static side", where `want` and hints carry real
+  weight. The test case is the author's own `music-diatonic` (Hackage
+  0.1.2: notes, intervals, chords, keys, scales, degrees, harmonies),
+  richer than its JS port; its sources wait in `stuff/haskell/` (local,
+  re-fetch from Hackage if missing).
 - [ ] **Bindings for compiled languages**, with no plugin: a safe Rust crate,
   a C++ header, Go and Zig wrappers over `ugly.h`. Cheap, and they bring
   every embedded language to programs in those languages.
