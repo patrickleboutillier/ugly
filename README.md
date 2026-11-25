@@ -290,6 +290,34 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
   have its own Lua and still reach the one Python in the process. Threads
   that Python or Java start get a context of their own automatically.
 
+## Tradeoffs
+
+Sharing one process is the point, and it has a price.
+
+- **No isolation.** Every runtime shares the address space, so a crash in
+  one (a segfault in an extension module, the JVM running out of memory)
+  takes the host down, and nothing stops one language's code from doing
+  anything the process can. UGLY is for code you trust. Signals belong to
+  whoever installed them first: Python is started without its handlers,
+  the JVM leaves the shutdown signals to the host (`-Xrs`), and a plugin
+  restores any handler its interpreter resets while starting.
+- **Calls are synchronous.** A call into another language is a plain C
+  call: the caller waits, and Lua can't yield across it. That suits quick
+  work (lookups, scoring, validation, reusing parsing or policy code). Code
+  that does I/O belongs behind the host's asynchronous mechanisms, or out
+  of process. With several threads, the GIL serializes the Python work, and
+  in HAProxy's `lua-load` mode every thread waits for the one Lua state.
+- **Cycles across runtimes leak.** A Perl object holding a Lua proxy whose
+  table holds that Perl object is invisible to both collectors (contract
+  §3). A single VM such as GraalVM collects it; UGLY doesn't.
+- **Builds are local.** The Python and Perl plugins are tied to the exact
+  interpreter they're built against (see [Releases](#releases)).
+
+If you need isolation, a sandbox or untrusted code, the Wasm Component
+Model or an out-of-process bridge (gRPC, HAProxy's SPOE) is the better
+fit; if you need cross-language inlining in hot loops, GraalVM is. The
+[design essay](doc/design-essay.md) compares them.
+
 ## Layout
 
 | Path | What |

@@ -20,12 +20,6 @@ already written in Python. HAProxy works, in both of its Lua modes
   starts it in each worker. One that uses it at load time starts it in
   HAProxy's master, and every worker inherits a forked interpreter. Detect
   it, and refuse or warn (or call `PyOS_AfterFork_Child`).
-- [ ] **Document the blocking model.** A call into another language is a
-  plain C call, so Lua can't yield across it. That's fine for quick work
-  (lookups, scoring, validation, reusing parsing or policy code); code that
-  does I/O belongs behind the host's asynchronous mechanisms, or out of
-  process (HAProxy's SPOE). With several threads, the GIL serializes the
-  Python work.
 
 ## The contract
 
@@ -75,6 +69,17 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   UGLY's own/borrow already follow WIT resources, so it would bridge the
   two worlds the essay compares. The first plugin where memory isn't
   shared, so values are copied.
+  - Components, not core modules: a core module exports only numbers and
+    a linear memory. WIT's strings, lists, records, options and results
+    map onto `ugly_val` and core lists and maps.
+  - A guest has no object model, so it sees foreign values through a WIT
+    package for UGLY itself: a `foreign` resource with get, set, call and
+    invoke, imported by the guest. Its callables, and its own resources,
+    are what the other languages see.
+  - The one runtime that is isolated: a trap fails the call, not the
+    process, and WASI capabilities are granted per runtime (`ugly_configure`).
+  - Check how much of wasmtime's component API its C API covers; if too
+    little, write the plugin in Rust against the C vtable.
 - [ ] **C# / .NET**: the CLR, through the official hosting API (`nethost`
   and `hostfxr`, `load_assembly_and_get_function_pointer`), or Mono's
   embedding API. In shape it's the JVM again: one runtime per process,
@@ -112,6 +117,11 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 
 ## Engineering
 
+- [ ] **Benchmarks.** No numbers yet: the README says calls are cheap but
+  can't say how cheap. Measure a call for each ordered pair (reusing
+  `pairwise.c`'s harness), against the same call made natively, and
+  handle-table contention with many threads (one lock covers it). Publish
+  the numbers in the README with the machine they came from.
 - [ ] **Packages**: `.deb` per Ubuntu LTS (binaries are valid per distro
   release), then a LuaRocks rock or a Python wheel per binding, if anyone
   wants them. Releases are source tarballs today.
@@ -151,3 +161,5 @@ contract and in the pull requests.
   real Lua functions, classes that construct when called.
 - **Engineering:** CI (two Ubuntu releases, valgrind, helgrind, a build
   without each language, Lua 5.3), source releases from a tag.
+- **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
+  local builds); Apache-2.0 after 2.4.0 (GPL v3 before).
