@@ -245,6 +245,16 @@ and a test suite. Neither is in the tree any more. Java came back in v2
 through JNI, which JDK 21 still needs; the Panama FFM API is final from
 JDK 22.
 
+## Releases
+
+Releases are source tarballs, on the
+[GitHub Releases](https://github.com/patrickleboutillier/ugly/releases)
+page with their checksums. Each one was built and tested by CI from the
+tarball itself (`meson dist`), and includes QuickJS, so it builds without a
+download. There are no binaries: the Python and Perl plugins are tied to the
+exact interpreter they're built against, so they're built where they're
+used.
+
 ## Building and testing
 
 You need a C toolchain, Meson (0.61 or later) and Ninja. Each language

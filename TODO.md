@@ -168,6 +168,11 @@ All additive; none of it breaks existing plugins (contract, "Scope").
 - [ ] **Install layout.** `meson install` warns that the Python extension's
   destination may not be on `sys.path` under `/usr/local`. Set
   `python.platlibdir` in the defaults, or document `-Dpython.install_env`.
+  The Lua bindings go to Lua's own C-module directory from pkg-config
+  (`/usr/lib/<triplet>/lua/<version>`), outside `--prefix`.
+- [x] **Source releases** (2026-11-25, `.github/workflows/release.yml`): a
+  `vX.Y.Z` tag publishes the `meson dist` tarball. `.deb` packages per
+  Ubuntu LTS can follow if anyone wants binaries.
 - [ ] **Plugin helper directory.** `init(ctx, dir)` passes the plugin's
   directory, but no plugin uses it yet. Use it for language-side helper
   files, or drop it.
