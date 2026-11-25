@@ -1,10 +1,14 @@
 package ugly;
 
 /**
- * Other languages from Java code running under UGLY:
+ * Other languages from Java: from code UGLY runs in its JVM, or from a plain
+ * java program (ugly.jar on the class path, libugly_jni.so on
+ * java.library.path or named by -Dugly.library). In a plain program, the
+ * thread that first uses UGLY owns it; other threads get
+ * IllegalStateException.
  *
- *   Object json = Ugly.module("python", "json");
- *   Object s = ((Foreign)json).invoke("dumps", java.util.List.of(1, 2, 3));
+ *   Foreign math = (Foreign)Ugly.module("python", "math");
+ *   Object r = math.invoke("sqrt", 16.0);     // 4.0
  *   Object n = Ugly.eval("lua", "return 6 * 7");
  *
  * Values from other languages are Foreign objects; when a method parameter

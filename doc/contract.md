@@ -301,7 +301,7 @@ value code. v2 makes this structural:
 So each language needs one adapter with two modes, not two adapters. The
 essay's "2N" becomes about N plus N thin API wrappers.
 
-**As built (Lua, Python, JS and Perl, 2026-11-24).**
+**As built (Lua, Python, JS and Perl, 2026-11-24; Java, 2026-11-25).**
 
 - **One source file, compiled twice.** Each plugin's source is built as the
   plugin (`ugly_<lang>.so`, linked with the interpreter library) and as the
@@ -351,6 +351,27 @@ essay's "2N" becomes about N plus N thin API wrappers.
   libperl, since `perl` is statically linked and exports its API.
   `boot_Ugly` registers the plugin and attaches to the running interpreter.
   Teardown runs from `Ugly.pm`'s `END` block, before global destruction.
+- **Java** (`java`, 2026-11-25): `ugly.Foreign`'s static initializer loads
+  `libugly_jni.so` (`System.loadLibrary("ugly_jni")`, or the path in
+  `-Dugly.library`). That file is `java.c` again, linked without libjvm.
+  Its `JNI_OnLoad` registers the plugin and attaches on the loading thread,
+  with that thread's `JNIEnv` as the existing interpreter. When UGLY created
+  the JVM, it registered the natives itself and sets `-Dugly.embedded=true`,
+  so nothing is loaded.
+  - The API is `ugly.Ugly`: `module(lang, name)`, `eval(lang, code)` and
+    `isForeign(x)`. Foreign values are `ugly.Foreign` (`call`, `invoke`,
+    `get`, `set`, `length`...), and errors are `ugly.ForeignException`.
+  - Teardown is at JVMTI's **VMDeath** event. The java launcher calls
+    `DestroyJavaVM` on the thread that ran `main`, and `System.exit` from
+    `main` stays on that thread too, so the ctx is still there and JNI still
+    works. Shutdown hooks can't do it, because they run on new threads,
+    which own no ctx. If the JVM ends from another thread, UGLY is left as
+    a process exit leaves it.
+  - `main`'s `JNIEnv` dies at `DetachCurrentThread`, before
+    `DestroyJavaVM` reattaches the thread, so teardown uses the one VMDeath
+    passes.
+  - Only the thread that loaded the binding can use it. Other Java threads
+    get `IllegalStateException` (TODO.md: any-thread runtimes).
 
 ## 9. The conformance suite
 
@@ -553,7 +574,8 @@ All of them are in the headers and covered by the conformance suite.
 - **Java** (2026-11-25) needed no change to the protocol, and added one
   rule about signals.
   - One JVM per process: the invocation API can't create a second, or a new
-    one after `DestroyJavaVM`. So the plugin has no capability flags.
+    one after `DestroyJavaVM`. So the plugin is neither MULTI_RUNTIME nor
+    RESTARTABLE; it is ATTACH, for the binding (§8).
   - Most of the protocol is Java (`ugly.Bridge`, reflection); C converts
     values, maps exceptions and implements `ugly.Foreign`'s natives.
     Identity is an id from an `IdentityHashMap`, because objects move.
@@ -624,7 +646,9 @@ All of them are in the headers and covered by the conformance suite.
 
 The plan is complete. What comes next is in [TODO.md](../TODO.md). Java
 came first (2026-11-25, `plugins/java/`, fixtures in `tests/java/`): it
-passes all 8 groups and all 30 ordered pairs of six plugins pass.
+passes all 8 groups and all 30 ordered pairs of six plugins pass. Its
+binding followed the same day: plain `java` programs use the other
+languages.
 
 v1 (the 2013 contract, its Perl plugin and XS binding) was removed from the
 tree on 2026-11-24, once v2 had two real languages calling each other. It is

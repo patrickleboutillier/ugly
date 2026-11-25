@@ -88,6 +88,27 @@ py.apply(x => x * 2, 21);                         // 42: Python calls a JS arrow
 ugly.module("lua", "string").upper("abc");        // "ABC"
 ```
 
+A plain `java` program uses `ugly.Ugly`, with `ugly.jar` on the class path
+and `libugly_jni.so` on `java.library.path`
+([tests/java/test_binding.java](tests/java/test_binding.java)):
+
+```java
+import ugly.Foreign;
+import ugly.Ugly;
+
+Foreign math = (Foreign)Ugly.module("python", "math");
+math.invoke("sqrt", 16.0);                        // 4.0
+Foreign lua = (Foreign)Ugly.module("lua", "conformance");
+Function<Object, Object> twice = x -> (Long)x * 2;
+lua.invoke("apply", twice, 21);                   // 42: Lua calls a Java lambda
+Foreign f = (Foreign)Ugly.eval("lua", "return function(l) l:replaceAll(function(x) return x * 10 end) end");
+f.call(list);                                     // a Lua function as Java's UnaryOperator
+```
+
+```sh
+java -cp ugly.jar:. -Djava.library.path=<libdir> Main
+```
+
 ### From C
 
 A C program can host any languages itself and pass values between them.
@@ -149,7 +170,7 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
 | `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. `binding/` builds the same source as the native module `ugly.so` for `qjs`. |
 | `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
-| `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Bridge`) are `ugly.jar`. |
+| `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Bridge`) are `ugly.jar`. `binding/` builds the same source as `libugly_jni.so`, which `ugly.Foreign` loads in a plain `java` program. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs (Lua using Python, and a C host), run as tests. |
 | `doc/` | The contract and the design essay. |
@@ -157,9 +178,9 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 ## Status
 
 Lua, CPython, JavaScript (QuickJS), Perl 5 and Java pass the whole
-conformance suite, and every pair of them works in one process. All but Java
-can also be the host: plain `lua`, `python3`, `qjs` and `perl` programs use
-the other languages. The plan in [doc/contract.md](doc/contract.md) is
+conformance suite, and every pair of them works in one process. Each one can
+also be the host: plain `lua`, `python3`, `qjs`, `perl` and `java` programs
+use the other languages. The plan in [doc/contract.md](doc/contract.md) is
 complete, and Java came after it.
 
 Other ideas and open work, including embedding in hosts like HAProxy that
@@ -193,7 +214,7 @@ meson test -C build        # the conformance suite, pairwise tests and examples
 The tests need no install step. `meson install -C build` installs the
 library, the two headers, a pkg-config file, the plugins and the bindings
 (the Lua module where Lua looks for C modules, the Python extension in
-site-packages). Plugins are looked up in `<libdir>/ugly/plugins/`, and
+site-packages, the Java one in libdir). Plugins are looked up in `<libdir>/ugly/plugins/`, and
 `UGLY_PLUGIN_PATH` (a colon-separated list of directories) overrides that at
 runtime.
 
@@ -209,7 +230,7 @@ Every test is a TAP stream. The full output is in
 - **Pairwise** (`tests/pairwise.c`): every ordered pair of different
   languages in one process, using each other's values, calls and errors.
 - **Bindings** (`tests/<lang>/test_binding.*`): plain `python3`, `lua5.4`,
-  `qjs` and `perl` programs using the other languages through `ugly`, in
+  `qjs`, `perl` and `java` programs using the other languages through `ugly`, in
   attach mode. The `qjs` is the one built from the QuickJS subproject.
 - **Examples** (`examples/`): run, and checked by exit status. They're the
   programs README quotes.
