@@ -493,7 +493,7 @@ releases its handle reference.
 | members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | a hash's keys, then an object's methods; a package's subs and nested packages. Modules and classes are packages (`Ugly::Package`); `new` instantiates | public fields and methods, then bean getters (`getX`, `isX`); a `Map`'s keys. Classes are imported by name; a class with a public constructor is INSTANTIABLE (`class`), else `module` |
 | elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays | arrays and `List`s |
 | `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant for an object; none for a package's function | the object for an instance method; none for a class's static method. Overloads are chosen by scoring how well the arguments convert |
-| proxy finalizer | userdata `__gc` | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` | a `Cleaner` on `ugly.Foreign`; a foreign value passed where an interface is expected becomes a dynamic proxy (the single abstract method calls it) |
+| proxy finalizer | userdata `__gc` (a foreign function is a C closure over that userdata, so Lua's C library takes it) | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` | a `Cleaner` on `ugly.Foreign`; a foreign value passed where an interface is expected becomes a dynamic proxy (the single abstract method calls it) |
 | foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | | `f.invoke("m", x)` on `ugly.Foreign`, or through the interface it was passed as |
 | re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT` on every entry; `G_EVAL`; calls run in list context and collapse (none → null, one → it, more → array) | a JNI local frame per operation; exceptions are checked after every JNI call; deep recursion ends in `StackOverflowError` (about 200 alternating levels here) |
 | restartable | yes | no | yes | no | no (`DestroyJavaVM` is one-way) |
@@ -657,6 +657,14 @@ All of them are in the headers and covered by the conformance suite.
     that caused it returns. The tests set it.
   - The JVM is excluded from the valgrind setup (suite `jvm`): its JIT and
     GC are beyond what memcheck can judge.
+- **Foreign functions are Lua functions** (2026-11-25, found writing
+  README examples). Lua's C library checks for real functions:
+  `string.gsub(s, p, pyfunc)` refused callable userdata. A foreign value
+  that is CALLABLE but not INSTANTIABLE is now pushed as a C closure over
+  its proxy, cached per handle like the proxy, and unwrapped by its
+  upvalue (rule 5). Classes stay userdata, and so does a class reached as
+  a member, which used to become a method closure and hide its members
+  (`datetime.date.today()`).
 - **Rule 7, completed** (found by the bindings). When an error returns to
   the language its payload came from, that language raises the original
   value or exception object, not a wrapper. A Python exception that crosses

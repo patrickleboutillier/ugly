@@ -51,5 +51,20 @@ ok(ugly.module("python", "ugly_configured").where == "configured",
 	"ugly.configure('python', { path = ... }): Python finds the module")
 ok(not pcall(ugly.configure, "python", { path = "/too/late" }), "  ... and configuring it again once started fails")
 
+-- Python functions are Lua functions, so Lua's C library takes them.
+local builtins = ugly.module("python", "builtins")
+local len = ugly.eval("python", "len")
+ok(type(len) == "function" and ugly.is_proxy(len) and len({ 1, 2 }) == 2, "a Python function is a Lua function (and a proxy)")
+ok(string.gsub("hello world", "%w+", builtins.str.capitalize) == "Hello World", "string.gsub with a Python method")
+local t = { 3, 1, 2 }
+table.sort(t, ugly.eval("python", "lambda a, b: a > b"))
+ok(table.concat(t, ",") == "3,2,1", "table.sort with a Python lambda")
+ok(type(builtins.dict) == "userdata", "a Python class stays userdata")
+ok(rawequal(py.echo(len), len), "a Python function round trip gives the same Lua function")
+local datetime = ugly.module("python", "datetime")
+ok(type(datetime.date) == "userdata" and datetime.date.today().year >= 2026,
+	"a class reached as a member keeps its members: datetime.date.today()")
+ok(datetime.date(2026, 11, 25):isoformat() == "2026-11-25", "  ... and calling it still instantiates")
+
 print("1.." .. count)
 os.exit(failures == 0 and 0 or 1, true)      -- true: close the state, so the binding tears down

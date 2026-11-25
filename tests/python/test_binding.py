@@ -80,6 +80,18 @@ ok(string.upper("abc") == "ABC", "Lua's string library: string.upper from Python
 # README's example: Lua's standard library only.
 ok(sorted(["banana", "Apple", "cherry"], key=string.lower) == ["Apple", "banana", "cherry"],
    "Python's sorted() calls Lua's string.lower as its key")
+ok(string.gsub("hello world", "%w+", str.capitalize) == "Hello World",
+   "Lua's string.gsub takes a Python function (a real Lua function in Lua)")
+
+# Foreign functions are Lua functions; classes stay userdata.
+nums = ugly.eval("lua", "return { 3, 1, 2 }")
+ugly.module("lua", "table").sort(nums, lambda a, b: a > b)
+ok(list(nums) == [3, 2, 1], "table.sort takes a Python comparison function")
+probe = ugly.eval("lua", "return function(x) return type(x) .. ' ' .. tostring(require('ugly').is_proxy(x)) end")
+ok(probe(len) == "function true", "a Python function is a Lua function, and ugly.is_proxy knows it")
+ok(probe(dict) == "userdata true", "a Python class stays userdata (its members stay reachable)")
+same = ugly.eval("lua", "return function(f) return f end")
+ok(same(len) is len, "a Python function round trip through Lua gives the original")
 t = ugly.module("lua", "os").date("!*t", 0)
 ok((t.year, t.month) == (1970, 1), "os.date('!*t', 0) gives a Lua table: t.year, t.month")
 squares = ugly.eval("lua", "local t = {} for i = 1, 4 do t[i] = i * i end return t")

@@ -43,6 +43,23 @@ typedef struct lrt {
 } lrt ;
 
 typedef struct { ugly_handle h ; } proxy ;
+
+static int proxy_fn(lua_State *L) ;
+
+/*
+ * Our proxy at idx, or NULL. A foreign function (callable, not a class) is
+ * a C closure, proxy_fn, holding its proxy userdata as upvalue 1, so that
+ * Lua's C library takes it wherever it wants a function (string.gsub,
+ * table.sort, coroutine.wrap...); everything else is the userdata itself.
+ */
+static proxy *to_proxy(lua_State *L, int idx){
+	proxy *p = luaL_testudata(L, idx, PROXY_MT) ;
+	if ((p == NULL)&&(lua_tocfunction(L, idx) == proxy_fn)&&(lua_getupvalue(L, idx, 1) != NULL)){
+		p = luaL_testudata(L, -1, PROXY_MT) ;     /* the closure keeps it alive */
+		lua_pop(L, 1) ;
+	}
+	return p ;
+}
 typedef struct { ugly_error *err ; } errbox ;
 
 
@@ -103,7 +120,7 @@ static ugly_status type_error(ugly_ctx *ctx, lrt *r, const char *what, int idx){
 
 /* Exports the Lua value at idx as an owned handle (unwrapping our proxies). */
 static ugly_status export(ugly_ctx *ctx, lrt *r, lua_State *L, int idx, ugly_handle *out){
-	proxy *p = luaL_testudata(L, idx, PROXY_MT) ;
+	proxy *p = to_proxy(L, idx) ;
 	if (p != NULL){
 		return ugly_dup(ctx, p->h, out) ;
 	}
@@ -201,7 +218,12 @@ static ugly_status to_val(ugly_ctx *ctx, lrt *r, lua_State *L, int idx, ugly_kin
 /* ugly_val -> Lua                                                  */
 /* ---------------------------------------------------------------- */
 
-/* Pushes a proxy for a foreign handle: one per value (cached), owning one reference. */
+/*
+ * Pushes a proxy for a foreign handle: one per value (cached), owning one
+ * reference. A function (callable, not a class) becomes a real Lua function
+ * (to_proxy); the cost is f.attr on it, since Lua functions share one
+ * metatable. Classes stay userdata, so date.today() still works.
+ */
 static ugly_status push_proxy(ugly_ctx *ctx, lrt *r, lua_State *L, ugly_handle borrowed){
 	ugly_handle h ;
 	ugly_status st = ugly_dup(ctx, borrowed, &h) ;     /* the owned handle: the same id for the same value */
@@ -216,9 +238,17 @@ static ugly_status push_proxy(ugly_ctx *ctx, lrt *r, lua_State *L, ugly_handle b
 		return UGLY_OK ;
 	}
 	lua_pop(L, 1) ;
+	uint32_t traits = 0 ;
+	ugly_val type_name = ugly_null() ;
+	if (ugly_describe(ctx, h, &traits, &type_name) == UGLY_OK){
+		ugly_val_release(ctx, &type_name) ;
+	}
 	proxy *p = lua_newuserdatauv(L, sizeof(proxy), 0) ;
 	p->h = h ;
 	luaL_setmetatable(L, PROXY_MT) ;
+	if ((traits & UGLY_TRAIT_CALLABLE)&&(! (traits & UGLY_TRAIT_INSTANTIABLE))){
+		lua_pushcclosure(L, proxy_fn, 1) ;
+	}
 	lua_pushvalue(L, -1) ;
 	lua_rawsetp(L, -3, (void *)(uintptr_t)h) ;
 	lua_remove(L, -2) ;
@@ -323,7 +353,7 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 	}
 
 	/* A rethrown proxy: the payload is the foreign value itself. */
-	proxy *p = luaL_testudata(L, -1, PROXY_MT) ;
+	proxy *p = to_proxy(L, -1) ;
 	if (p != NULL){
 		ugly_handle h ;
 		ugly_status st = ugly_dup(ctx, p->h, &h) ;
@@ -739,6 +769,23 @@ static int proxy_call(lua_State *L){
 }
 
 
+/* A foreign function called from Lua (the closure to_proxy describes). */
+static int proxy_fn(lua_State *L){
+	proxy *p = lua_touserdata(L, lua_upvalueindex(1)) ;
+	ugly_ctx *ctx = need_ctx(L) ;
+	int n = lua_gettop(L) ;
+	ugly_val *args = calloc((size_t)n + 1, sizeof(ugly_val)) ;
+	ugly_status st ;
+	int made = lua_args(L, ctx, 1, args, n, &st) ;
+	ugly_val out = ugly_null() ;
+	if (st == UGLY_OK){
+		st = ugly_call(ctx, p->h, args, (size_t)n, UGLY_ANY, &out) ;
+	}
+	free_args(ctx, args, made) ;
+	return finish(L, ctx, st, &out) ;
+}
+
+
 /* obj:method(...) on a proxy: invoke with the foreign language's receiver semantics. */
 static int proxy_method(lua_State *L){
 	proxy *p = lua_touserdata(L, lua_upvalueindex(1)) ;
@@ -778,10 +825,16 @@ static int proxy_index(lua_State *L){
 	st = ugly_get_member(ctx, p->h, name, UGLY_ANY, &out) ;
 	int method = ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)) ;
 	if ((st == UGLY_OK)&&(out.kind == UGLY_HANDLE)){
-		/* A callable member is a method: invoke it, with the foreign language's receiver rules. */
+		/*
+		 * A callable member is a method: invoke it, with the foreign
+		 * language's receiver rules. A class is the class itself, so its
+		 * own members stay reachable (datetime.date.today()); calling it
+		 * still works, through __call.
+		 */
 		uint32_t traits = 0 ;
 		ugly_val tn ;
-		if ((ugly_describe(ctx, out.as.h, &traits, &tn) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)){
+		if ((ugly_describe(ctx, out.as.h, &traits, &tn) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)
+			&&(! (traits & UGLY_TRAIT_INSTANTIABLE))){
 			method = 1 ;
 			ugly_val_release(ctx, &out) ;
 		}
@@ -1009,7 +1062,7 @@ static int api_is_error(lua_State *L){
 
 /* ugly.is_proxy(x): whether x is a value from another language. */
 static int api_is_proxy(lua_State *L){
-	lua_pushboolean(L, luaL_testudata(L, 1, PROXY_MT) != NULL) ;
+	lua_pushboolean(L, to_proxy(L, 1) != NULL) ;
 	return 1 ;
 }
 

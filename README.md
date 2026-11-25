@@ -70,6 +70,7 @@ import ugly
 string = ugly.module("lua", "string")             # a Lua module
 string.upper("abc")                               # 'ABC'
 sorted(["banana", "Apple", "cherry"], key=string.lower)   # Python calls a Lua function
+string.gsub("hello world", "%w+", str.capitalize) # 'Hello World': Lua calls a Python function
 
 t = ugly.module("lua", "os").date("!*t", 0)       # a Lua table
 t.year, t.month                                   # (1970, 1)

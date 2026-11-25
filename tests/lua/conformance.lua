@@ -15,10 +15,7 @@ local function tracked(t, name, index)
 	})
 end
 
-local function is_proxy(x)
-	local mt = getmetatable(x)
-	return type(x) == "userdata" and type(mt) == "table" and mt.__name == "ugly.proxy"
-end
+local is_proxy = require("ugly").is_proxy     -- userdata, or a function for a foreign function
 
 local function is_ugly_error(x)
 	local mt = getmetatable(x)
