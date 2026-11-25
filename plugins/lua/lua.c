@@ -714,10 +714,19 @@ static op mkop(int code, ugly_ctx *ctx, ugly_rt *rt, void *ref){
 /* Proxies: foreign values inside Lua                               */
 /* ---------------------------------------------------------------- */
 
+#ifdef UGLY_BINDING
+static void binding_attach(lua_State *L) ;
+#endif
+
 static ugly_ctx *need_ctx(lua_State *L){
+#ifdef UGLY_BINDING
+	binding_attach(L) ;     /* the first use attaches, on this thread */
+#endif
 	ugly_ctx *ctx = ugly_current_ctx() ;
 	if (ctx == NULL){
-		luaL_error(L, "ugly: no ctx on this thread") ;
+		/* Attached already, by another thread: one Lua state run by several threads. */
+		luaL_error(L, "ugly: this Lua state belongs to another thread; a state shared by threads "
+			"isn't supported (in HAProxy, use lua-load-per-thread, or nbthread 1)") ;
 	}
 	return ctx ;
 }
@@ -1113,11 +1122,13 @@ static void setup_state(lua_State *L, lrt *r){
 	lua_setmetatable(L, -2) ;
 	lua_setfield(L, LUA_REGISTRYINDEX, PROXY_CACHE) ;
 
-	/* require "ugly" finds the API already loaded. */
+	/* require "ugly" finds the API already loaded (the binding may have made it already). */
 	luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE) ;
-	luaL_newlib(L, api) ;
-	lua_setfield(L, -2, "ugly") ;
-	lua_pop(L, 1) ;
+	if (lua_getfield(L, -1, "ugly") != LUA_TTABLE){
+		luaL_newlib(L, api) ;
+		lua_setfield(L, -3, "ugly") ;
+	}
+	lua_pop(L, 2) ;
 }
 
 
@@ -1399,6 +1410,13 @@ const ugly_plugin *ugly_plugin_lua(void){
  * host's state, and returns the same ugly module embedded runtimes get.
  * Everything it created is torn down by a __gc sentinel when the host closes
  * its state.
+ *
+ * It attaches on the first use of ugly, not at require: a host may load a
+ * state on one thread and run it on another. HAProxy loads every Lua state
+ * on its main thread, then runs each lua-load-per-thread state on its own
+ * worker; the runtime belongs to that worker, with that thread's ctx
+ * (ugly_ctx_thread). So does Python, if it's started there and not in a
+ * master process before it forks.
  */
 typedef struct { ugly_ctx *ctx ; ugly_lang *lang ; ugly_rt *rt ; int owns_ctx ; } binding ;
 
@@ -1416,33 +1434,61 @@ static int binding_gc(lua_State *L){
 }
 
 
-int luaopen_ugly(lua_State *L){
+/* Attaches this state (its main thread, not a coroutine) on this thread, unless it's attached already. */
+static void binding_attach(lua_State *L){
 	lua_getfield(L, LUA_REGISTRYINDEX, RT_KEY) ;
 	int attached = ! lua_isnil(L, -1) ;
 	lua_pop(L, 1) ;
-	if (! attached){
+	if (attached){
+		return ;
+	}
+	lua_getfield(L, LUA_REGISTRYINDEX, "ugly.binding") ;
+	binding *b = lua_touserdata(L, -1) ;
+	lua_pop(L, 1) ;
+	if (b == NULL){
+		return ;
+	}
+	b->ctx = ugly_current_ctx() ;
+	if (b->ctx == NULL){
+		if (ugly_ctx_thread(&b->ctx) != UGLY_OK){
+			luaL_error(L, "ugly: can't create a context") ;
+		}
+		b->owns_ctx = 1 ;
+	}
+	lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD) ;
+	lua_State *main = lua_tothread(L, -1) ;
+	lua_pop(L, 1) ;
+	ugly_status st = ugly_lang_register(b->ctx, &plugin, &b->lang) ;
+	if (st == UGLY_OK){
+		st = ugly_rt_attach(b->ctx, b->lang, main, &b->rt) ;
+	}
+	if (st != UGLY_OK){
+		const ugly_error *e = ugly_last_error(b->ctx) ;
+		luaL_error(L, "ugly: can't attach: %s", e ? ugly_error_message(e) : "?") ;
+	}
+}
+
+
+int luaopen_ugly(lua_State *L){
+	lua_getfield(L, LUA_REGISTRYINDEX, "ugly.binding") ;
+	int loaded = ! lua_isnil(L, -1) ;
+	lua_pop(L, 1) ;
+	lua_getfield(L, LUA_REGISTRYINDEX, RT_KEY) ;
+	int embedded = ! lua_isnil(L, -1) ;     /* a runtime UGLY created: attached already */
+	lua_pop(L, 1) ;
+	if ((! loaded)&&(! embedded)){
 		binding *b = lua_newuserdatauv(L, sizeof(binding), 0) ;
 		memset(b, 0, sizeof(*b)) ;
-		b->ctx = ugly_current_ctx() ;
-		if (b->ctx == NULL){
-			if (ugly_ctx_new(&b->ctx) != UGLY_OK){
-				return luaL_error(L, "ugly: can't create a context") ;
-			}
-			b->owns_ctx = 1 ;
-		}
-		ugly_status st = ugly_lang_register(b->ctx, &plugin, &b->lang) ;
-		if (st == UGLY_OK){
-			st = ugly_rt_attach(b->ctx, b->lang, L, &b->rt) ;
-		}
-		if (st != UGLY_OK){
-			const ugly_error *e = ugly_last_error(b->ctx) ;
-			return luaL_error(L, "ugly: can't attach: %s", e ? ugly_error_message(e) : "?") ;
-		}
 		lua_newtable(L) ;
 		lua_pushcfunction(L, binding_gc) ;
 		lua_setfield(L, -2, "__gc") ;
 		lua_setmetatable(L, -2) ;
 		lua_setfield(L, LUA_REGISTRYINDEX, "ugly.binding") ;
+		/* The API now; the runtime on first use (binding_attach). */
+		luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE) ;
+		luaL_newlib(L, api) ;
+		lua_setfield(L, -2, "ugly") ;
+		lua_pop(L, 1) ;
 	}
 	luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE) ;
 	lua_getfield(L, -1, "ugly") ;

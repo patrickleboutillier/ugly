@@ -17,3 +17,4 @@
 /subprojects/*/
 !/subprojects/packagefiles/
 /subprojects/packagecache/
+__pycache__/

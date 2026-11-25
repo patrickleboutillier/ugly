@@ -33,7 +33,11 @@ working setup.
   `ugly_configure` and `configure` in every binding (paths, Lua's cpath,
   Java's class path and JVM options). Perl could also take modules to load
   first; nothing else is planned.
-- [ ] **Lazy Python initialization**, for hosts that fork. In HAProxy's
+- [ ] **Lazy Python initialization**, for hosts that fork. Mostly solved by
+  practice: Python starts on its first use, so a script that uses `ugly`
+  only inside actions (as `examples/haproxy/` does) starts it in the
+  worker. What's left: refusing, or warning, when Python was started before
+  a fork. In HAProxy's
   master-worker mode, a `lua-load` script may run in the master before the
   workers fork, and each worker would inherit a forked interpreter (that
   would need `PyOS_AfterFork_Child`). Initializing on first use, inside the
@@ -43,8 +47,12 @@ working setup.
 - [ ] **Lua 5.1 / LuaJIT support**: OpenResty, Neovim, many games. It's a
   bigger API gap (no integers, `lua_pcall` and registry differences,
   `luaL_setfuncs`), but it reaches the most embedded Luas.
-- [ ] **HAProxy proof of concept**, as a test when `haproxy` is installed: a
-  small config whose Lua action calls into a Python module.
+- [x] **HAProxy proof of concept** (done 2026-11-25, `examples/haproxy/`):
+  a Lua action asks a Python module whether to let each request through.
+  Tested with `lua-load` on one thread, and `lua-load-per-thread` on four
+  (four workers' Lua states, one Python). It found that HAProxy loads Lua
+  on its main thread and runs it on workers, so the Lua binding now
+  attaches on first use.
 - [ ] **Document the blocking model.** A call into another language is a
   plain C call, so Lua can't yield across it. That's fine for quick work
   (lookups, scoring, validation, reusing parsing or policy code), but code
