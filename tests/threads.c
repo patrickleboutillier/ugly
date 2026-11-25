@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include "conformance.h"
+#include "ugly_plugin.h"     /* ugly_rt_set_host_serialized, ugly_rt_drain */
 
 
 typedef struct {
@@ -117,6 +118,27 @@ static void *holder(void *p){
 }
 
 
+/* A runtime the host serializes: this thread takes its turn in it. */
+typedef struct {
+	ugly_handle counter ;
+	ugly_status call_st ;
+	int64_t count ;
+} turn_job ;
+
+
+static void *take_turn(void *p){
+	turn_job *t = p ;
+	ugly_ctx *ctx ;
+	if ((t->call_st = ugly_ctx_new(&ctx)) == UGLY_OK){
+		ugly_val v ;
+		t->call_st = ugly_invoke(ctx, t->counter, "inc", NULL, 0, UGLY_INT, &v) ;
+		t->count = v.as.i ;
+		ugly_ctx_delete(ctx) ;
+	}
+	return NULL ;
+}
+
+
 static int freed ;
 static void on_free(void *p){
 	(void)p ;
@@ -215,6 +237,25 @@ int main(void){
 	else {
 		skip("plugin lacks UGLY_CAP_ANY_THREAD: concurrent threads") ;
 		skip("plugin lacks UGLY_CAP_ANY_THREAD: deleting a shared runtime") ;
+
+		/*
+		 * A runtime the host serializes (HAProxy's lua-load): once the
+		 * binding says so, other threads may enter it, one at a time. Here
+		 * the turns are a join.
+		 */
+		turn_job t ;
+		memset(&t, 0, sizeof(t)) ;
+		t.counter = make_counter(&f, f.mod) ;
+		ugly_rt_set_host_serialized(f.rt) ;
+		pthread_t t3 ;
+		pthread_create(&t3, NULL, take_turn, &t) ;
+		pthread_join(t3, NULL) ;
+		is_status(ctx, t.call_st, UGLY_OK, "a host-serialized runtime: another thread takes its turn in it") ;
+		is_int(t.count, 1, "  ... and its call ran") ;
+		int64_t fin = finalized(&f, f.mod) ;
+		ugly_release(ctx, t.counter) ;     /* queued: the runtime is any-thread now */
+		ugly_rt_drain(f.rt) ;              /* what a binding does at its entry points */
+		is_int(finalized(&f, f.mod), fin + 2, "  ... and ugly_rt_drain runs the releases queued for it") ;
 	}
 
 	fx_teardown(&f) ;

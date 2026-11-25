@@ -74,6 +74,10 @@ installed):
 local ugly = require "ugly"
 local policy
 
+if core.thread == 0 then             -- lua-load: one state, run by every thread in turn
+    ugly.shared_by_threads()
+end
+
 core.register_action("decide", { "http-req" }, function(txn)
     local ok, verdict = pcall(function()
         policy = policy or ugly.module("python", "policy")    -- Python starts on the first request
@@ -83,13 +87,14 @@ core.register_action("decide", { "http-req" }, function(txn)
 end)
 ```
 
-`policy.py` is plain Python. With `lua-load-per-thread`, each HAProxy worker
-thread has its own Lua state, and they all share the one Python. Use `ugly`
-inside actions, not when the file loads: HAProxy loads Lua on its main
-thread, and in its master process before forking. A single Lua state shared
-by several threads (`lua-load` with `nbthread` above 1) isn't supported yet.
-The Python call runs synchronously in the action, so it suits quick
-decisions, not I/O.
+`policy.py` is plain Python. Both of HAProxy's Lua modes work with several
+threads, all sharing the one Python: `lua-load-per-thread`, where each worker
+thread has its own Lua state, and `lua-load`, where every thread takes its
+turn in one state (HAProxy serializes it; the script declares it with
+`ugly.shared_by_threads()`). Use `ugly` inside actions, not when the file
+loads: HAProxy loads Lua on its main thread, and in its master process
+before forking. The Python call runs synchronously in the action, so it
+suits quick decisions, not I/O.
 
 ### From Python
 

@@ -168,7 +168,15 @@ static void run_jobs(jsrt *r){
 
 
 static void enter(jsrt *r){
-	r->depth++ ;
+	/*
+	 * QuickJS checks for stack overflow against the stack top it recorded
+	 * for this runtime. A host may run it on another thread, one at a time
+	 * (ugly_rt_set_host_serialized): the outermost entry records this
+	 * thread's.
+	 */
+	if (r->depth++ == 0){
+		JS_UpdateStackTop(JS_GetRuntime(r->c)) ;
+	}
 }
 
 

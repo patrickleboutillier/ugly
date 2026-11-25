@@ -25,7 +25,23 @@ static const char *kind_name(ugly_kind k){
 /* ---------------------------------------------------------------- */
 
 int rt_any_thread(const ugly_rt *rt){
-	return (rt->lang->plugin->caps & UGLY_CAP_ANY_THREAD) != 0 ;
+	return ((rt->lang->plugin->caps & UGLY_CAP_ANY_THREAD) != 0)
+		||__atomic_load_n(&rt->host_serialized, __ATOMIC_SEQ_CST) ;
+}
+
+
+void ugly_rt_set_host_serialized(ugly_rt *rt){
+	if (rt != NULL){
+		__atomic_store_n(&((ugly_rt *)rt)->host_serialized, 1, __ATOMIC_SEQ_CST) ;
+	}
+}
+
+
+void ugly_rt_drain(ugly_rt *rt){
+	if ((rt != NULL)&&(rt_any_thread(rt)||on_thread(rt->thread))
+		&&(! __atomic_load_n(&rt->dying, __ATOMIC_SEQ_CST))){
+		h_drain(rt) ;
+	}
 }
 
 

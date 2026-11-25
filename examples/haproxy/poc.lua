@@ -9,6 +9,12 @@
 local ugly = require "ugly"
 local policy
 
+-- With lua-load, HAProxy runs this one state on all its threads, one at a
+-- time (core.thread is 0); with lua-load-per-thread, each thread has its own.
+if core.thread == 0 then
+    ugly.shared_by_threads()
+end
+
 core.register_action("decide", { "http-req" }, function(txn)
     local ok, verdict = pcall(function()
         policy = policy or ugly.module("python", "policy")

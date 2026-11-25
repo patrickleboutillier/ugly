@@ -57,6 +57,7 @@ struct ugly_rt {
 	int depth ;                  /* calls into this runtime in progress, on all threads (atomic) */
 	int dying ;                  /* being torn down: no entry at all (atomic) */
 	int closing ;                /* deletion started: only 'closer' may still enter (atomic) */
+	int host_serialized ;        /* any thread may enter: the host lets one in at a time (atomic) */
 	pthread_t closer ;
 
 	/*
