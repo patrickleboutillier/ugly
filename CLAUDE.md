@@ -21,7 +21,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - **`mock/`** is a small language in C (lenient, Perl-like conversions) that implements every plugin rule and every fixture.
   - **`lua/`** is Lua 5.4.
     - Every operation runs under `lua_pcall` (`op_body`), except `call`, which pcalls the target directly so a call costs one of Lua's roughly 200 nested C calls.
-    - Proxies are `ugly.proxy` userdata, cached per owned handle in a weak table. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape.
+    - Proxies are `ugly.proxy` userdata, cached per owned handle in a weak table. A foreign function (CALLABLE, not INSTANTIABLE) is a C closure (`proxy_fn`) over that userdata instead, so Lua's C library takes it; `to_proxy()` recognizes both. A callable member that isn't a class becomes a method closure (`proxy_method`); a class member stays the class. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape.
     - Elements are 0-based in the protocol and 1-based in Lua.
     - `invoke` passes `self` only to methods found through the metatable, not to raw fields.
   - **`python/`** is CPython 3.10+.
