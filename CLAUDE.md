@@ -75,6 +75,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
   - A plugin reports a non-exception failure with `ugly_fail` (chosen status), an exception with `ugly_raise_native` (`RAISED` plus a payload), and a rethrown foreign value with `ugly_raise_handle`.
   - A Lua or Python error must never `longjmp` across a core frame or skip one: catch it at the boundary.
   - Signals belong to whoever installed them first: a plugin restores any handler its interpreter resets while starting (perl ignores SIGFPE, which the JVM needs).
+- **CI** (`.github/workflows/ci.yml`): all languages on Ubuntu 22.04 and 24.04 (`-Dwerror=true`, test, valgrind, helgrind on `threads-*`), one job per disabled language, and a core-plus-mock job. JDK 21 is the runner's Temurin (`JAVA_HOME_21_X64`). Binding tests get the built plugins in `UGLY_TEST_LANGS` and SKIP checks whose language isn't built.
 - **Build:** Meson (≥ 0.61) and Ninja, out-of-tree, with `-Wall` and no warnings. `meson test -C build --setup valgrind` fails on memory errors and on definite, indirect or possible leaks. `tests/valgrind.supp` suppresses only CPython's "possibly lost" live objects. Tests set `PYTHONMALLOC=malloc` and `PYTHONDONTWRITEBYTECODE=1`.
 - **Tags:** `v0.01` is the original 2013–2014 code, including Java and JNA. `v0.02` is the v1 reference: the original contract with a Perl 5 plugin and XS binding, a Meson build and a TAP suite. v1 was removed from the tree on 2026-11-24 at the author's request.
 
