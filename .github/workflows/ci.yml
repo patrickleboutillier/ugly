@@ -2,13 +2,18 @@
 # tests, valgrind (memcheck) over everything but the JVM, and helgrind on the
 # threads group. Then builds with each optional language left out, and with
 # none at all (the core and the mock plugin).
+#
+# Changes that touch only documentation skip it: nothing built or tested
+# reads those files (README's examples are tested from their own copies).
 
 name: CI
 
 on:
   push:
     branches: [master]
+    paths-ignore: ['**.md', 'doc/**', 'COPYING', '.gitignore']
   pull_request:
+    paths-ignore: ['**.md', 'doc/**', 'COPYING', '.gitignore']
   workflow_dispatch:
 
 permissions:
