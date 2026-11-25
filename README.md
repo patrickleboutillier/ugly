@@ -176,6 +176,34 @@ string.invoke("format", "%d items at %.2f", 3, 9.5);   // "3 items at 9.50"
 java -cp ugly.jar:. -Djava.library.path=<libdir> Main
 ```
 
+### Keyword arguments
+
+Calls take keyword arguments where the callee's language has them: Python
+gets them as keyword arguments, and Perl as trailing `name => value` pairs.
+Python passes them natively; the other bindings mark them with `kw`, passed
+last (all checked by the binding tests):
+
+```python
+perl.kw(1, c=3, b=2)                              # Python, into Perl: kw(1, 'c', 3, 'b', 2)
+```
+```lua
+builtins.int("ff", ugly.kw{ base = 16 })          -- Lua: 255
+```
+```js
+builtins.int("ff", ugly.kw({ base: 16 }));        // JS: 255
+```
+```perl
+json::dumps($data, Ugly::kw(separators => $pair));   # Perl
+```
+```java
+builtins.invoke("int", "ff", Ugly.kw("base", 16));   // Java: 255
+```
+
+Lua, JS and Java have no keyword arguments, so calls into them refuse them
+with an error rather than drop them. Calling a class that can only be
+instantiated (a Perl package, a Java class) constructs it, so
+`perl.KwBox(value=5)` works from Python as it would for a Python class.
+
 ### Configuring languages
 
 Languages start on first use, so their settings are given beforehand, with

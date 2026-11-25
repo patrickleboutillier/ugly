@@ -645,6 +645,54 @@ static SV *xs_result(pTHX_ ugly_ctx *ctx, plrt *r, ugly_status st, ugly_val *out
 
 
 /* Ugly::Proxy::_call($proxy, @args) */
+/*
+ * Keyword arguments (contract §11): Ugly::kw(name => value, ...) as the last
+ * argument, an Ugly::Kw object holding the pairs in order. If it's there,
+ * *n shrinks by one and k holds them (names point into the object, which
+ * is on the stack; values are owned: free_kw).
+ */
+typedef struct { ugly_opts o ; ugly_kwarg *kw ; } perl_kw ;
+
+static void free_kw(ugly_ctx *ctx, perl_kw *k) ;
+
+static void take_kw(pTHX_ ugly_ctx *ctx, plrt *r, SV **args, int *n, perl_kw *k){
+	k->o = (ugly_opts)UGLY_OPTS_INIT ;
+	k->kw = NULL ;
+	if ((*n == 0)||(! sv_isobject(args[*n - 1]))||(! sv_derived_from(args[*n - 1], "Ugly::Kw"))){
+		return ;
+	}
+	AV *av = (AV *)SvRV(args[--(*n)]) ;
+	SSize_t len = av_len(av) + 1, i ;
+	if (len % 2 != 0){
+		croak("Ugly::kw takes name => value pairs") ;
+	}
+	k->kw = calloc((size_t)len / 2 + 1, sizeof(ugly_kwarg)) ;
+	for (i = 0 ; i < len ; i += 2){
+		SV **name = av_fetch(av, i, 0), **value = av_fetch(av, i + 1, 0) ;
+		ugly_kwarg *kw = &k->kw[k->o.nkwargs] ;
+		kw->name = (name != NULL ? SvPVutf8_nolen(*name) : "") ;
+		ugly_status st = (value != NULL ? to_val(aTHX_ ctx, r, *value, UGLY_ANY, &kw->value) : UGLY_OK) ;
+		if (st != UGLY_OK){
+			free_kw(ctx, k) ;
+			croak_ugly(aTHX_ ctx, r, st) ;
+		}
+		k->o.nkwargs++ ;
+	}
+	k->o.kwargs = k->kw ;
+}
+
+
+static void free_kw(ugly_ctx *ctx, perl_kw *k){
+	size_t i ;
+	for (i = 0 ; i < k->o.nkwargs ; i++){
+		ugly_val_release(ctx, &k->kw[i].value) ;
+	}
+	free(k->kw) ;
+	k->kw = NULL ;
+	k->o.nkwargs = 0 ;
+}
+
+
 XS(xs_proxy_call){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -653,10 +701,14 @@ XS(xs_proxy_call){
 		croak("ugly: not a proxy") ;
 	}
 	ugly_handle h = PROXY_HANDLE(ST(0)) ;
-	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(1), items - 1) ;
+	int n = items - 1 ;
+	perl_kw k ;
+	take_kw(aTHX_ ctx, r, &ST(1), &n, &k) ;
+	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(1), n) ;
 	ugly_val out = ugly_null() ;
-	ugly_status st = ugly_call(ctx, h, a, (size_t)(items - 1), UGLY_ANY, &out) ;
-	free_args(ctx, a, items - 1) ;
+	ugly_status st = ugly_call_opts(ctx, h, a, (size_t)n, &k.o, UGLY_ANY, &out) ;
+	free_args(ctx, a, n) ;
+	free_kw(ctx, &k) ;
 	ST(0) = xs_result(aTHX_ ctx, r, st, &out) ;
 	XSRETURN(1) ;
 }
@@ -672,10 +724,14 @@ XS(xs_proxy_invoke){
 	}
 	ugly_handle h = PROXY_HANDLE(ST(0)) ;
 	const char *method = SvPV_nolen(ST(1)) ;
-	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(2), items - 2) ;
+	int n = items - 2 ;
+	perl_kw k ;
+	take_kw(aTHX_ ctx, r, &ST(2), &n, &k) ;
+	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(2), n) ;
 	ugly_val out = ugly_null() ;
-	ugly_status st = ugly_invoke(ctx, h, method, a, (size_t)(items - 2), UGLY_ANY, &out) ;
-	free_args(ctx, a, items - 2) ;
+	ugly_status st = ugly_invoke_opts(ctx, h, method, a, (size_t)n, &k.o, UGLY_ANY, &out) ;
+	free_args(ctx, a, n) ;
+	free_kw(ctx, &k) ;
 	ST(0) = xs_result(aTHX_ ctx, r, st, &out) ;
 	XSRETURN(1) ;
 }
@@ -793,10 +849,14 @@ XS(xs_proxy_new){
 	if ((items < 1)||(! IS_PROXY(ST(0)))){
 		croak("ugly: not a proxy") ;
 	}
-	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(1), items - 1) ;
+	int n = items - 1 ;
+	perl_kw k ;
+	take_kw(aTHX_ ctx, r, &ST(1), &n, &k) ;
+	ugly_val *a = xs_args(aTHX_ ctx, r, &ST(1), n) ;
 	ugly_handle h = UGLY_NO_HANDLE ;
-	ugly_status st = ugly_new(ctx, PROXY_HANDLE(ST(0)), a, (size_t)(items - 1), &h) ;
-	free_args(ctx, a, items - 1) ;
+	ugly_status st = ugly_new_opts(ctx, PROXY_HANDLE(ST(0)), a, (size_t)n, &k.o, &h) ;
+	free_args(ctx, a, n) ;
+	free_kw(ctx, &k) ;
 	ugly_val out = ugly_hval(h) ;
 	ST(0) = xs_result(aTHX_ ctx, r, st, &out) ;
 	XSRETURN(1) ;

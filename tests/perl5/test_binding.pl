@@ -115,5 +115,12 @@ ok(Ugly::module("python", "ugly_configured")->{where} eq "configured", "Ugly::co
 eval { Ugly::configure(python => { path => '/too/late' }) } ;
 ok(Ugly::is_error($@) && $@->message =~ /already started/, "  ... and configuring it again once started dies") ;
 
+# Keyword arguments (contract §11): Ugly::kw(...) last.
+ok($py->kw(1, Ugly::kw(c => 3, b => 2)) eq "1 2 3", "keyword arguments reach Python: kw(1, Ugly::kw(c => 3, b => 2))") ;
+ok(conformance::KwBox->new(Ugly::kw(value => 5))->add(Ugly::kw(n => 10)) == 15, "  ... and a class, through use Ugly: KwBox->new(Ugly::kw(value => 5))") ;
+ok(json::dumps(json::loads('[3, 1]'), Ugly::kw(separators => Ugly::eval("python", "(',', ':')"))) eq "[3,1]", "json::dumps with separators") ;
+eval { LuaString::upper("x", Ugly::kw(a => 1)) } ;
+ok(Ugly::is_error($@) && $@->message =~ /takes no call options/, "keyword arguments to Lua are refused") ;
+
 print "1..$count\n" ;
 exit($failures ? 1 : 0) ;

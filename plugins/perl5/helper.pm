@@ -125,6 +125,13 @@ sub configure {
 	}
 }
 
+# Ugly::kw(indent => 2, ...): keyword arguments, for the last argument of a
+# call into another language (contract §11): json::dumps($data, Ugly::kw(indent => 2)).
+sub kw {
+	Carp::croak('Ugly::kw(name => value, ...): expected pairs') if @_ % 2 ;
+	bless [ @_ ], 'Ugly::Kw'
+}
+
 sub is_error { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Error') }
 sub is_proxy { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Proxy') }
 

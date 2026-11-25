@@ -36,6 +36,7 @@
 
 #define PROXY_MT "ugly.proxy"
 #define ERROR_MT "ugly.error"
+#define KW_MT "ugly.kw"
 #define PROXY_CACHE "ugly.proxies"
 
 #define REF(p) ((int)(intptr_t)(p))
@@ -780,18 +781,123 @@ static int finish(lua_State *L, ugly_ctx *ctx, ugly_status st, ugly_val *out){
 }
 
 
+/*
+ * Keyword arguments (contract §11): ugly.kw{ name = value } as the last
+ * argument of a call. Its string keys, sorted (a table has no order), point
+ * into the table, which stays on the stack for the call; values are owned.
+ */
+typedef struct { ugly_opts o ; ugly_kwarg *kw ; } lua_kw ;
+
+static int is_kw(lua_State *L, int idx){
+	if ((lua_type(L, idx) != LUA_TTABLE)||(! lua_getmetatable(L, idx))){
+		return 0 ;
+	}
+	luaL_getmetatable(L, KW_MT) ;
+	int yes = lua_rawequal(L, -1, -2) ;
+	lua_pop(L, 2) ;
+	return yes ;
+}
+
+static int kw_order(const void *a, const void *b){
+	return strcmp(((const ugly_kwarg *)a)->name, ((const ugly_kwarg *)b)->name) ;
+}
+
+/* If the last of n arguments from 'first' is ugly.kw{...}, takes it out (*n shrinks) into k. */
+static ugly_status take_kw(lua_State *L, ugly_ctx *ctx, int first, int *n, lua_kw *k){
+	k->o = (ugly_opts)UGLY_OPTS_INIT ;
+	k->kw = NULL ;
+	int idx = first + *n - 1 ;
+	if ((*n == 0)||(! is_kw(L, idx))){
+		return UGLY_OK ;
+	}
+	(*n)-- ;
+	size_t cap = 8, count = 0 ;
+	k->kw = calloc(cap, sizeof(ugly_kwarg)) ;
+	ugly_status st = UGLY_OK ;
+	lua_pushnil(L) ;
+	while ((st == UGLY_OK)&&(lua_next(L, idx) != 0)){
+		if (lua_type(L, -2) != LUA_TSTRING){
+			st = ugly_fail(ctx, R(L)->urt, UGLY_ERR_USAGE, "TypeError", "ugly.kw takes names") ;
+			lua_pop(L, 2) ;
+			break ;
+		}
+		if (count == cap){
+			cap *= 2 ;
+			k->kw = realloc(k->kw, cap * sizeof(ugly_kwarg)) ;
+		}
+		k->kw[count].name = lua_tostring(L, -2) ;
+		if ((st = to_val(ctx, R(L), L, -1, UGLY_ANY, &k->kw[count].value)) == UGLY_OK){
+			count++ ;
+		}
+		lua_pop(L, 1) ;
+	}
+	if (st != UGLY_OK){
+		while (count-- > 0){
+			ugly_val_release(ctx, &k->kw[count].value) ;
+		}
+		free(k->kw) ;
+		k->kw = NULL ;
+		return st ;
+	}
+	qsort(k->kw, count, sizeof(ugly_kwarg), kw_order) ;
+	k->o.kwargs = k->kw ;
+	k->o.nkwargs = count ;
+	return UGLY_OK ;
+}
+
+static void free_kw(ugly_ctx *ctx, lua_kw *k){
+	size_t i ;
+	for (i = 0 ; i < k->o.nkwargs ; i++){
+		ugly_val_release(ctx, &k->kw[i].value) ;
+	}
+	free(k->kw) ;
+}
+
+
+/* ugly.kw{ name = value, ... }: keyword arguments, for the last argument of a call. */
+static int api_kw(lua_State *L){
+	luaL_checktype(L, 1, LUA_TTABLE) ;
+	lua_settop(L, 1) ;
+	luaL_newmetatable(L, KW_MT) ;     /* the binding may not have attached yet */
+	lua_setmetatable(L, 1) ;
+	return 1 ;
+}
+
+
+/*
+ * Calling a proxy (a callable object or a class). A class that can't be
+ * called but can be instantiated (a Perl package, a Java class) is
+ * constructed, as calling a class is in Python: Point(3, 4).
+ */
 static int proxy_call(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
 	int n = lua_gettop(L) - 1 ;
+	lua_kw k ;
+	ugly_status st = take_kw(L, ctx, 2, &n, &k) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
 	ugly_val *args = calloc((size_t)n + 1, sizeof(ugly_val)) ;
-	ugly_status st ;
 	int made = lua_args(L, ctx, 2, args, n, &st) ;
 	ugly_val out = ugly_null() ;
 	if (st == UGLY_OK){
-		st = ugly_call(ctx, p->h, args, (size_t)n, UGLY_ANY, &out) ;
+		uint32_t traits = 0 ;
+		ugly_val tn = ugly_null() ;
+		if (ugly_describe(ctx, p->h, &traits, &tn) == UGLY_OK){
+			ugly_val_release(ctx, &tn) ;
+		}
+		if ((traits & UGLY_TRAIT_INSTANTIABLE)&&(! (traits & UGLY_TRAIT_CALLABLE))){
+			ugly_handle h = UGLY_NO_HANDLE ;
+			st = ugly_new_opts(ctx, p->h, args, (size_t)n, &k.o, &h) ;
+			out = ugly_hval(h) ;
+		}
+		else {
+			st = ugly_call_opts(ctx, p->h, args, (size_t)n, &k.o, UGLY_ANY, &out) ;
+		}
 	}
 	free_args(ctx, args, made) ;
+	free_kw(ctx, &k) ;
 	return finish(L, ctx, st, &out) ;
 }
 
@@ -801,14 +907,19 @@ static int proxy_fn(lua_State *L){
 	proxy *p = lua_touserdata(L, lua_upvalueindex(1)) ;
 	ugly_ctx *ctx = need_ctx(L) ;
 	int n = lua_gettop(L) ;
+	lua_kw k ;
+	ugly_status st = take_kw(L, ctx, 1, &n, &k) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
 	ugly_val *args = calloc((size_t)n + 1, sizeof(ugly_val)) ;
-	ugly_status st ;
 	int made = lua_args(L, ctx, 1, args, n, &st) ;
 	ugly_val out = ugly_null() ;
 	if (st == UGLY_OK){
-		st = ugly_call(ctx, p->h, args, (size_t)n, UGLY_ANY, &out) ;
+		st = ugly_call_opts(ctx, p->h, args, (size_t)n, &k.o, UGLY_ANY, &out) ;
 	}
 	free_args(ctx, args, made) ;
+	free_kw(ctx, &k) ;
 	return finish(L, ctx, st, &out) ;
 }
 
@@ -823,14 +934,19 @@ static int proxy_method(lua_State *L){
 		first = 2 ;     /* called with ':': the receiver isn't an argument */
 	}
 	int n = lua_gettop(L) - first + 1 ;
+	lua_kw k ;
+	ugly_status st = take_kw(L, ctx, first, &n, &k) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
 	ugly_val *args = calloc((size_t)n + 1, sizeof(ugly_val)) ;
-	ugly_status st ;
 	int made = lua_args(L, ctx, first, args, n, &st) ;
 	ugly_val out = ugly_null() ;
 	if (st == UGLY_OK){
-		st = ugly_invoke(ctx, p->h, method, args, (size_t)n, UGLY_ANY, &out) ;
+		st = ugly_invoke_opts(ctx, p->h, method, args, (size_t)n, &k.o, UGLY_ANY, &out) ;
 	}
 	free_args(ctx, args, made) ;
+	free_kw(ctx, &k) ;
 	return finish(L, ctx, st, &out) ;
 }
 
@@ -1116,7 +1232,7 @@ static int api_is_proxy(lua_State *L){
 
 static const luaL_Reg api[] = {
 	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure },
-	{ "shared_by_threads", api_shared_by_threads }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
+	{ "shared_by_threads", api_shared_by_threads }, { "kw", api_kw }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
 	{ NULL, NULL }
 } ;
 
@@ -1144,6 +1260,9 @@ static void setup_state(lua_State *L, lrt *r){
 	} ;
 	luaL_newmetatable(L, ERROR_MT) ;
 	luaL_setfuncs(L, error_mt, 0) ;
+	lua_pop(L, 1) ;
+
+	luaL_newmetatable(L, KW_MT) ;     /* marks ugly.kw{...} tables */
 	lua_pop(L, 1) ;
 
 	/* Proxy cache: handle -> proxy, with weak values. */

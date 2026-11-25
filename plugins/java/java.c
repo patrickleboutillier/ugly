@@ -587,6 +587,90 @@ static jobject JNICALL n_invoke(JNIEnv *env, jclass cls, jlong h, jstring method
 }
 
 
+/* Keyword arguments from Kw's arrays (Foreign.callKw, invokeKw): names malloc'd, values owned. */
+static int native_kw(JNIEnv *env, ugly_ctx *ctx, jobjectArray names, jobjectArray values, ugly_opts *o, ugly_kwarg **kw){
+	*o = (ugly_opts)UGLY_OPTS_INIT ;
+	size_t n ;
+	ugly_val *v = native_args(env, ctx, values, &n) ;
+	if (v == NULL){
+		*kw = NULL ;
+		return -1 ;
+	}
+	*kw = calloc(n + 1, sizeof(ugly_kwarg)) ;
+	size_t i ;
+	for (i = 0 ; i < n ; i++){
+		jstring s = (*env)->GetObjectArrayElement(env, names, (jsize)i) ;
+		(*kw)[i].name = c_string(env, s) ;
+		(*env)->DeleteLocalRef(env, s) ;
+		(*kw)[i].value = v[i] ;
+	}
+	free(v) ;
+	o->kwargs = *kw ;
+	o->nkwargs = n ;
+	return 0 ;
+}
+
+
+static void free_native_kw(ugly_ctx *ctx, ugly_opts *o, ugly_kwarg *kw){
+	size_t i ;
+	for (i = 0 ; i < o->nkwargs ; i++){
+		free((char *)kw[i].name) ;
+		ugly_val_release(ctx, &kw[i].value) ;
+	}
+	free(kw) ;
+}
+
+
+static jobject JNICALL n_call_kw(JNIEnv *env, jclass cls, jlong h, jobjectArray args, jobjectArray names,
+	jobjectArray values){
+
+	(void)cls ;
+	ugly_ctx *ctx = native_ctx(env) ;
+	size_t n ;
+	ugly_val *a = (ctx != NULL ? native_args(env, ctx, args, &n) : NULL) ;
+	if (a == NULL){
+		return NULL ;
+	}
+	ugly_opts o ;
+	ugly_kwarg *kw ;
+	if (native_kw(env, ctx, names, values, &o, &kw) != 0){
+		free_args(ctx, a, n) ;
+		return NULL ;
+	}
+	ugly_val out = ugly_null() ;
+	ugly_status st = ugly_call_opts(ctx, (ugly_handle)h, a, n, &o, UGLY_ANY, &out) ;
+	free_args(ctx, a, n) ;
+	free_native_kw(ctx, &o, kw) ;
+	return native_result(env, ctx, st, &out) ;
+}
+
+
+static jobject JNICALL n_invoke_kw(JNIEnv *env, jclass cls, jlong h, jstring method, jobjectArray args,
+	jobjectArray names, jobjectArray values){
+
+	(void)cls ;
+	ugly_ctx *ctx = native_ctx(env) ;
+	size_t n ;
+	ugly_val *a = (ctx != NULL ? native_args(env, ctx, args, &n) : NULL) ;
+	if (a == NULL){
+		return NULL ;
+	}
+	ugly_opts o ;
+	ugly_kwarg *kw ;
+	if (native_kw(env, ctx, names, values, &o, &kw) != 0){
+		free_args(ctx, a, n) ;
+		return NULL ;
+	}
+	char *m = c_string(env, method) ;
+	ugly_val out = ugly_null() ;
+	ugly_status st = ugly_invoke_opts(ctx, (ugly_handle)h, m, a, n, &o, UGLY_ANY, &out) ;
+	free(m) ;
+	free_args(ctx, a, n) ;
+	free_native_kw(ctx, &o, kw) ;
+	return native_result(env, ctx, st, &out) ;
+}
+
+
 static jobject JNICALL n_get(JNIEnv *env, jclass cls, jlong h, jstring member){
 	(void)cls ;
 	ugly_ctx *ctx = native_ctx(env) ;
@@ -798,6 +882,9 @@ static void JNICALL n_configure(JNIEnv *env, jclass cls, jstring lang, jstring k
 static JNINativeMethod natives[] = {
 	{ "call", "(J[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_call },
 	{ "invoke", "(JLjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_invoke },
+	{ "callKw", "(J[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_call_kw },
+	{ "invokeKw", "(JLjava/lang/String;[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;",
+		(void *)n_invoke_kw },
 	{ "get", "(JLjava/lang/String;)Ljava/lang/Object;", (void *)n_get },
 	{ "set", "(JLjava/lang/String;Ljava/lang/Object;)V", (void *)n_set },
 	{ "getIndex", "(JI)Ljava/lang/Object;", (void *)n_get_index },

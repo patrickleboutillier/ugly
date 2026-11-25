@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 27;
+	static final int PLAN = 30;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -128,6 +128,21 @@ public class test_binding {
 		check("configure", () -> {
 			Foreign m = (Foreign)Ugly.module("python", "ugly_configured");
 			ok("configured".equals(m.get("where")), "Ugly.configure(\"python\", \"path\", ...): Python finds the module");
+		});
+
+		check("keyword arguments", () -> {
+			Foreign py = (Foreign)Ugly.module("python", "conformance");
+			ok("1 2 3".equals(py.invoke("kw", 1, Ugly.kw("c", 3, "b", 2))), "keyword arguments reach Python: Ugly.kw(\"c\", 3, \"b\", 2)");
+			java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+			m.put("base", 16);
+			ok(Long.valueOf(255).equals(((Foreign)Ugly.module("python", "builtins")).invoke("int", "ff", Ugly.kw(m))), "  ... and from a Map: int(\"ff\", base=16)");
+			try {
+				((Foreign)Ugly.module("lua", "string")).invoke("upper", "x", Ugly.kw("a", 1));
+				ok(false, "keyword arguments to Lua are refused");
+			}
+			catch (ForeignException e){
+				ok(e.getMessage().contains("takes no call options"), "keyword arguments to Lua are refused");
+			}
 		});
 
 		check("js", () -> {

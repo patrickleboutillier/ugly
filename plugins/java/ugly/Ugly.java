@@ -38,6 +38,19 @@ public final class Ugly {
 		for (String v : values) Foreign.configure(lang, key, v);
 	}
 
+	/**
+	 * Keyword arguments, for the last argument of a foreign call:
+	 * {@code json.invoke("dumps", data, Ugly.kw("indent", 2, "sort_keys", true))}.
+	 */
+	public static Kw kw(Object... pairs){
+		return Kw.of(pairs);
+	}
+
+	/** Keyword arguments from a map, in its order. */
+	public static Kw kw(java.util.Map<String, ?> map){
+		return Kw.of(map);
+	}
+
 	/** Whether x is a value from another language (or a Java interface wrapping one). */
 	public static boolean isForeign(Object x){
 		return (x instanceof Foreign)||(Bridge.foreignOf(x) != null);

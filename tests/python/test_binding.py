@@ -107,6 +107,20 @@ ok(seen.get("lua") == "ABC", f"a Python thread gets its own ctx and Lua runtime:
 ok(isinstance(seen.get("other"), ugly.Error) and "another thread" in seen["other"].message,
    f"  ... and the main thread's Lua values stay the main thread's: {seen.get('other')!r}")
 
+# Keyword arguments (contract §11): native on proxies; Lua has none and refuses.
+try:
+    string.upper("x", key=1)
+    ok(False, "keyword arguments to Lua are refused")
+except ugly.Error as e:
+    ok("takes no call options" in e.message, "keyword arguments to Lua are refused (ugly.Error)")
+if "perl5" in built:
+    pl = ugly.module("perl5", "conformance")
+    ok(pl.kw(1, c=3, b=2) == "1 2 3", "keyword arguments reach Perl as trailing pairs: kw(1, c=3, b=2)")
+    ok(pl.KwBox(value=5).add(n=10) == 15, "calling a Perl class constructs it, with keyword arguments: KwBox(value=5).add(n=10)")
+else:
+    skip("keyword arguments into Perl", "perl5")
+    skip("calling a Perl class", "perl5")
+
 # Foreign functions are Lua functions; classes stay userdata.
 nums = ugly.eval("lua", "return { 3, 1, 2 }")
 ugly.module("lua", "table").sort(nums, lambda a, b: a > b)
