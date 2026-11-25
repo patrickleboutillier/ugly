@@ -7,7 +7,7 @@ this list is everything else, plus the reasons behind each item.
 ## Now
 
 - [x] **QuickJS plugin** (done 2026-11-24: `plugins/js/`).
-- [ ] **Perl**, ported from tag `v0.02` (see "Languages").
+- [x] **Perl** (done 2026-11-24: `plugins/perl5/`, with a binding).
 
 ## Embedding in real hosts: HAProxy and friends
 
@@ -73,13 +73,12 @@ All additive; none of it breaks existing plugins (contract, "Scope").
 ## Languages
 
 - [x] **QuickJS** (done).
-- [ ] **Perl**, ported from tag `v0.02`. The lessons learned are in
-  CLAUDE.md ("Notes for the Perl port"). It's worth it for codebases that
-  are stuck in Perl and need to be called from elsewhere.
-  - `/usr/bin/perl` is statically linked, so its binding registers the
-    plugin, like Lua and Python.
-  - Open questions: list vs scalar context (likely a call option beside
-    `want`), dualvars, byte vs character strings, `DESTROY` timing.
+- [x] **Perl** (done; decisions 9–12 in the contract).
+  - [ ] **Scalar context as a call option**, once call options exist
+    (keyword arguments, above). Until then, calls run in list context and
+    collapse.
+  - [ ] **Booleans** use a heuristic before perl 5.36 (no `SvIsBOOL`).
+    Revisit when 5.36+ is the norm.
 - [x] **A JS binding** for `qjs` (done 2026-11-24): `plugins/js/binding/`.
 - [ ] **Node.js**, for the npm ecosystem, which QuickJS can't run because
   it has no Node APIs (`fs`, `http`, CommonJS packages).

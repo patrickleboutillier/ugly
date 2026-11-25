@@ -39,7 +39,13 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
     - Runtimes are found through a registry (`runtimes`), not the context opaque, because an attached context belongs to `qjs`. Refs are `jsbox` entries linked per runtime.
     - The binding (`binding/`, `js_init_module`, loaded by `qjs` as `import "…/ugly.so"`) tears down from a global sentinel object, whose `gc_mark` declares every box to QuickJS's GC. Otherwise the external references would keep `qjs`'s context alive past its `JS_FreeRuntime` assertion. The subproject also builds `qjs` (`qjsc`, `repl.c`, `-rdynamic`) for the binding test.
     - Editing `subprojects/packagefiles/quickjs/` needs `rm -rf subprojects/quickjs-2026-06-04` (git-ignored) to take effect: Meson copies `packagefiles/` only at extraction.
-  - Proxies in all three languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
+  - **`perl5/`** is Perl 5 (5.34 here, MULTIPLICITY), written in C against the perl API with no XS generator.
+    - `ENTER_PERL`/`LEAVE_PERL` set and restore `PERL_GET_CONTEXT` on every entry.
+    - Refs are SVs. Foreign values are `Ugly::Proxy`: a blessed scalar ref holding the handle, cached per handle. Its Perl side (overloads, `AUTOLOAD`, tied hash and array) is the `helper_pm` string, defined in every interpreter; the XS functions are registered with `newXS`.
+    - Modules and classes are `Ugly::Package` objects (a scalar ref holding the package name). Their identity is the stash, members are subs and nested packages, and `new` instantiates.
+    - Calls run in list context and collapse (`call_perl`). Never `PUSHMARK` before `eval_sv`: it pushes its own mark.
+    - The binding (`binding/`: `lib/Ugly.pm`, `auto/Ugly/Ugly.so`, `boot_Ugly`) attaches to the running perl. `END { Ugly::_teardown() }` tears down. Its test sets `PERL_DESTRUCT_LEVEL=2`, so the host frees everything and valgrind measures only UGLY.
+  - Proxies in all four languages turn a callable member into `ugly_invoke`, so `obj.m(x)` uses the foreign language's receiver rules.
   - **Bindings** (`plugins/<lang>/binding/`) compile the plugin's own source again with `-DUGLY_BINDING`, as the native module `ugly`: `luaopen_ugly`, and `PyInit_ugly` via `pyinst.extension_module`. They link **no interpreter library**, because Debian's `python3` and `lua5.4` are statically linked and a second interpreter in the process would be fatal.
     - On import, a binding calls `ugly_lang_register` (no dlopen) and `ugly_rt_attach` on the host interpreter. Teardown is a `__gc` sentinel in Lua and `atexit` in Python.
     - Every runtime, embedded or attached, preloads the same `ugly` module: `ugly.module(lang, name)` and `ugly.eval(lang, code)`, which use `ugly_rt_get`, plus `is_error`/`is_proxy` in Lua and `Error`/`Proxy`/`rethrow` in Python.
@@ -59,21 +65,20 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Build:** Meson (≥ 0.61) and Ninja, out-of-tree, with `-Wall` and no warnings. `meson test -C build --setup valgrind` fails on memory errors and on definite, indirect or possible leaks. `tests/valgrind.supp` suppresses only CPython's "possibly lost" live objects. Tests set `PYTHONMALLOC=malloc` and `PYTHONDONTWRITEBYTECODE=1`.
 - **Tags:** `v0.01` is the original 2013–2014 code, including Java and JNA. `v0.02` is the v1 reference: the original contract with a Perl 5 plugin and XS binding, a Meson build and a TAP suite. v1 was removed from the tree on 2026-11-24 at the author's request.
 
-## Notes for the Perl port (learned on v1, tag `v0.02`)
+## Embedding perl: what v1 taught, as applied in `plugins/perl5/`
 
-- Every entry into an embedded perl must save and restore `PERL_GET_CONTEXT` (v1's `UGLY_PERL5_ENTER`/`LEAVE` in `lang/perl5/ugly_perl5_priv.h`).
-- Call `PERL_SYS_INIT3` once per process, and only if `PL_curinterp` is NULL; a host perl already owns that state. **Never** call `PERL_SYS_TERM`: after it, perl can't start again in the same process (`perl_alloc` exits with EBADF). So Perl isn't RESTARTABLE.
-- Delete a runtime with `perl_destruct`/`perl_free` under the interpreter's context. A MULTIPLICITY perl defaults to destruct level 1, so `PERL_DESTRUCT_LEVEL` isn't needed.
-- `call_sv` with mortalized arguments: anything that must outlive the call needs `SvREFCNT_inc`. A wrapper must own exactly one reference to its RV; v1's `wrap` took two, so objects were never DESTROYed.
-- In XS typemaps, set the C variable to NULL in the `else` branch for undef, or functions without a NULL PREINIT read garbage.
-- The Perl helper (`helper.pm`) `use`d the binding to share value code. In v2 terms, the plugin and the binding are one adapter.
+- Every entry into an embedded perl must save and restore `PERL_GET_CONTEXT`.
+- Call `PERL_SYS_INIT3` once per process, only if `PL_curinterp` is NULL. **Never** call `PERL_SYS_TERM`: after it, perl can't start again in the same process (`perl_alloc` exits with EBADF).
+- Delete a runtime with `perl_destruct`/`perl_free` under its context.
+- `call_sv` mortalizes its arguments. Whatever wraps an RV must own exactly one reference (v1's `wrap` took two, so objects were never DESTROYed).
 
 ## State (2026-11-24)
 
-- **`master`**: the v2 core, plugins for the mock, Lua, CPython and JS (QuickJS), bindings for Lua, Python and JS (qjs), the conformance suite (32 runs: 8 groups × 4 plugins), pairwise (12 ordered pairs), the binding tests (3) and two examples. 49 tests pass, clean under valgrind, and helgrind finds no races.
+- **`master`**: the v2 core, plugins for the mock, Lua, CPython, JS (QuickJS) and Perl 5, bindings for Lua, Python, JS (qjs) and Perl, the conformance suite (40 runs: 8 groups × 5 plugins), pairwise (20 ordered pairs), the binding tests (4) and two examples. 66 tests pass, clean under valgrind, and helgrind finds no races.
 - Process: work on a branch, open a PR, rebase-merge it, delete the branch. The author lets Claude push and merge at will. GitHub's "auto-delete head branches" setting is off, so delete branches explicitly.
 - **The bindings milestone is reached (2026-11-24):** a plain `python3` program uses Lua modules, and a plain `lua5.4` program uses Python modules.
-- **QuickJS is done** (2026-11-24). **Next: the Perl port** (see the notes above, and the open questions in TODO.md). See contract.md "Order of work".
+- **The plan in contract.md is complete** (2026-11-24): QuickJS, the JS binding, and Perl with its binding are done. Perl's open questions were decided with Claude's recommendations (contract decisions 9–12). Decision 6, Latin-1 decoding, was **revised** so that bytes round-trip; it's flagged to the author in the contract.
+- **Next:** whatever the author picks from `TODO.md`. The HAProxy and embedded-Lua items are the motivating ones: any-thread runtimes, lazy Python init, and Lua 5.3/LuaJIT. CI and Node.js (N-API) are also there.
 - **`TODO.md`** collects everything else: the HAProxy/embedded-Lua items (any-thread runtimes, lazy Python init for forking hosts, Lua 5.3 and 5.1/LuaJIT, blocking), what v2.0 left out (keyword arguments, iterators, hashes...), CI, and docs. Keep it current.
 
 ## Landscape (2026)

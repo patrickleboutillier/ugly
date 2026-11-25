@@ -41,6 +41,7 @@ subdir('plugins/mock')
 subdir('plugins/lua')
 subdir('plugins/python')
 subdir('plugins/js')
+subdir('plugins/perl5')
 subdir('tests')
 subdir('examples')
 
