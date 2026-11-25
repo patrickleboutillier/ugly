@@ -1,0 +1,120 @@
+# Builds UGLY and runs its tests: the conformance suite, pairwise and binding
+# tests, valgrind (memcheck) over everything but the JVM, and helgrind on the
+# threads group. Then builds with each optional language left out, and with
+# none at all (the core and the mock plugin).
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEPS: >-
+    meson ninja-build gcc pkg-config
+    liblua5.4-dev lua5.4 python3-dev libperl-dev valgrind
+
+jobs:
+  full:
+    name: all languages (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.04: Python 3.10, Perl 5.34. 24.04: Python 3.12, Perl 5.38 (SvIsBOOL).
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+
+      # The runners ship Temurin JDKs; JAVA_HOME points at an older one by default.
+      - name: Use JDK 21
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+
+      - name: Cache the QuickJS download
+        uses: actions/cache@v4
+        with:
+          path: subprojects/packagecache
+          key: quickjs-${{ hashFiles('subprojects/quickjs.wrap') }}
+
+      - name: Configure
+        run: >-
+          meson setup build -Dwerror=true
+          -Dlua=enabled -Dpython=enabled -Djs=enabled -Dperl5=enabled -Djava=enabled
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs
+
+      - name: Valgrind (memcheck, all but the JVM)
+        run: meson test -C build --setup valgrind --print-errorlogs
+
+      - name: Helgrind (threads group)
+        run: |
+          tests=$(meson test -C build --list 2>/dev/null | grep -o 'threads-[a-z0-9_]*' | grep -v '^threads-java$' | sort -u)
+          meson test -C build --setup helgrind --print-errorlogs $tests
+
+      - name: Keep the test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlogs-${{ matrix.os }}
+          path: build/meson-logs/
+
+  without:
+    name: without ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [lua, python, js, perl5, java]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+      - name: Use JDK 21
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: subprojects/packagecache
+          key: quickjs-${{ hashFiles('subprojects/quickjs.wrap') }}
+      - run: meson setup build -Dwerror=true -D${{ matrix.language }}=disabled
+      - run: meson compile -C build
+      - run: meson test -C build --print-errorlogs
+
+  minimal:
+    name: core and mock only
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build gcc pkg-config valgrind
+      - run: >-
+          meson setup build -Dwerror=true
+          -Dlua=disabled -Dpython=disabled -Djs=disabled -Dperl5=disabled -Djava=disabled
+      - run: meson compile -C build
+      - run: meson test -C build --print-errorlogs
+      - run: meson test -C build --setup valgrind --print-errorlogs

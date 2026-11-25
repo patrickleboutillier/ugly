@@ -31,6 +31,8 @@ test_env_vars = {
   'UGLY_JAVA_CLASSPATH': java_fixture_cp,
   # Modules found only through ugly_configure (binding tests).
   'UGLY_TEST_CONFIGURED': meson.current_source_dir() / 'configured',
+  # The plugins built: binding tests skip what needs one that isn't.
+  'UGLY_TEST_LANGS': ','.join(test_plugins),
   # -Xcheck:jni: the JVM checks the plugin's JNI use (its warnings break the TAP stream, failing the test).
   'UGLY_JAVA_CHECK': '1',
 }

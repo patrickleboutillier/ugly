@@ -76,4 +76,10 @@ if valgrind.found()
     exclude_suites: ['jvm'],
     timeout_multiplier: 10,
   )
+  # Data races, on the threads group: meson test --setup helgrind threads-mock threads-lua ...
+  add_test_setup('helgrind',
+    exe_wrapper: [valgrind, '--tool=helgrind', '--error-exitcode=99', '--num-callers=30'],
+    exclude_suites: ['jvm'],
+    timeout_multiplier: 10,
+  )
 endif
