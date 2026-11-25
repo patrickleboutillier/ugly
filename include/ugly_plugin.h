@@ -64,13 +64,20 @@ extern "C" {
 typedef struct ugly_plugin {
 	uint32_t abi ;           /* UGLY_PLUGIN_ABI */
 	uint32_t caps ;          /* UGLY_CAP_* */
-	const char *name ;       /* "lua", "python", "quickjs", "perl5" */
+	const char *name ;       /* "lua", "python", "js", "perl5", "java" */
 
 	/*
 	 * Process-wide setup, once per process (or again after 'term'). 'dir' is
-	 * the directory the plugin's .so was loaded from; helper files live there. 'term' is called on unload only if UGLY_CAP_RESTARTABLE; a
-	 * plugin whose process-wide state is one-way (perl, CPython) leaves it
-	 * NULL and stays mapped.
+	 * the directory the plugin's .so was loaded from; helper files live
+	 * there. 'term' is called on unload only if UGLY_CAP_RESTARTABLE; a
+	 * plugin whose process-wide state is one-way (perl, CPython, the JVM)
+	 * leaves it NULL and stays mapped.
+	 *
+	 * Signals: 'init' and 'rt_new' must leave alone any handler another
+	 * runtime installed before them (the JVM's SIGSEGV, SIGFPE... carry its
+	 * implicit null and divide checks). If the interpreter resets one while
+	 * starting, the plugin restores it (perl ignores SIGFPE). An interpreter's
+	 * own diagnostics go to stderr, never stdout, which belongs to the host.
 	 */
 	ugly_status (*init)(ugly_ctx *ctx, const char *dir) ;
 	void (*term)(void) ;

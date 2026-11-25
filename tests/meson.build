@@ -12,6 +12,14 @@
 # What every test needs to find the plugins and the fixtures, from the build
 # and source trees. Python: plain malloc so valgrind sees every allocation,
 # and no __pycache__ in the source tree.
+# Java fixtures: a jar on UGLY_JAVA_CLASSPATH (they use the ugly package).
+java_fixture_cp = ''
+if test_plugins.contains('java')
+  conformance_jar = jar('conformance', 'java' / 'conformance.java', link_with: ugly_jar)
+  java_fixture_cp = conformance_jar.full_path()
+  plugins += conformance_jar
+endif
+
 test_env_vars = {
   'UGLY_PLUGIN_PATH': ':'.join(plugin_dirs),
   'LUA_PATH': meson.current_source_dir() / 'lua' / '?.lua;;',
@@ -20,6 +28,9 @@ test_env_vars = {
   'PYTHONDONTWRITEBYTECODE': '1',
   'UGLY_JS_PATH': meson.current_source_dir() / 'js',
   'PERL5LIB': meson.current_source_dir() / 'perl5',
+  'UGLY_JAVA_CLASSPATH': java_fixture_cp,
+  # -Xcheck:jni: the JVM checks the plugin's JNI use (its warnings break the TAP stream, failing the test).
+  'UGLY_JAVA_CHECK': '1',
 }
 test_env_base = environment(test_env_vars)
 
@@ -33,8 +44,9 @@ foreach plugin : test_plugins
   env = environment(test_env_vars)
   env.set('UGLY_TEST_PLUGIN', plugin)
   foreach t : groups
+    # The JVM can't run under valgrind (it raises SIGSEGV on purpose): suite 'jvm' is left out there.
     test(t + '-' + plugin, group_exes[t], protocol: 'tap', env: env,
-      suite: ['conformance', 'conformance-' + plugin], depends: plugins)
+      suite: ['conformance', 'conformance-' + plugin] + (plugin == 'java' ? ['jvm'] : []), depends: plugins)
   endforeach
 endforeach
 
@@ -48,7 +60,7 @@ foreach a : test_plugins
       env.set('UGLY_TEST_PLUGIN', a)
       env.set('UGLY_TEST_PEER', b)
       test('pairwise-' + a + '-' + b, pairwise, protocol: 'tap', env: env,
-        suite: ['conformance', 'pairwise'], depends: plugins)
+        suite: ['conformance', 'pairwise'] + (a == 'java' or b == 'java' ? ['jvm'] : []), depends: plugins)
     endif
   endforeach
 endforeach

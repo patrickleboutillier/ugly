@@ -1,9 +1,8 @@
 # UGLY: Ultimate Glue LaYer
 
 UGLY is a C library for calling between programming languages **inside one
-process**. It embeds the real interpreters (Lua, CPython, QuickJS and
-Perl 5) and
-routes every cross-language call through a small, language-neutral C core.
+process**. It embeds the real interpreters (Lua, CPython, QuickJS,
+Perl 5 and the JVM) and routes every cross-language call through a small, language-neutral C core.
 
 The goal is to replace pairwise bridges with a hub. N languages need
 N(N-1)/2 direct bridges. A hub needs one adapter per language, and any two
@@ -150,16 +149,18 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 | `plugins/python/` | CPython 3.10+. One runtime per process; Python is never finalized. `binding/` builds the same source as the Python extension `ugly`. |
 | `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. `binding/` builds the same source as the native module `ugly.so` for `qjs`. |
 | `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
+| `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Bridge`) are `ugly.jar`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs (Lua using Python, and a C host), run as tests. |
 | `doc/` | The contract and the design essay. |
 
 ## Status
 
-Lua, CPython, JavaScript (QuickJS) and Perl 5 pass the whole conformance
-suite, and every pair of them works in one process. Each one can also be the
-host: plain `lua`, `python3`, `qjs` and `perl` programs use the other
-languages. The plan in [doc/contract.md](doc/contract.md) is complete.
+Lua, CPython, JavaScript (QuickJS), Perl 5 and Java pass the whole
+conformance suite, and every pair of them works in one process. All but Java
+can also be the host: plain `lua`, `python3`, `qjs` and `perl` programs use
+the other languages. The plan in [doc/contract.md](doc/contract.md) is
+complete, and Java came after it.
 
 Other ideas and open work, including embedding in hosts like HAProxy that
 have Lua built in, are in [TODO.md](TODO.md).
@@ -167,17 +168,20 @@ have Lua built in, are in [TODO.md](TODO.md).
 History is in the tags. `v0.01` is the original 2013–2014 code, including an
 early Java plugin and a JNA binding. `v0.02` is that first design brought
 up to date: a Perl 5 plugin and an XS binding, with an autotools-free build
-and a test suite. Neither is in the tree any more. If Java comes back, it
-will use the Panama FFM API.
+and a test suite. Neither is in the tree any more. Java came back in v2
+through JNI, which JDK 21 still needs; the Panama FFM API is final from
+JDK 22.
 
 ## Building and testing
 
 You need a C toolchain, Meson (0.61 or later) and Ninja. Each language
 plugin, and its binding, is built only if its language is found: Lua 5.4
-(`liblua5.4-dev`), CPython 3.10+ (`python3-dev`) and Perl 5 (`libperl-dev`).
+(`liblua5.4-dev`), CPython 3.10+ (`python3-dev`), Perl 5 (`libperl-dev`)
+and a JDK, 21 or later (`openjdk-21-jdk-headless`, found through `javac`).
 QuickJS is built from source: Meson downloads its pinned release at setup,
 and checks the checksum. `-Dlua=disabled`, `-Dpython=disabled`,
-`-Djs=disabled` and `-Dperl5=disabled` skip a language; `--wrap-mode=nodownload` forbids the download. The Lua binding
+`-Djs=disabled`, `-Dperl5=disabled` and `-Djava=disabled` skip a language;
+`--wrap-mode=nodownload` forbids the download. The Lua binding
 test also needs the `lua5.4` interpreter. Valgrind is optional.
 
 ```sh
@@ -222,7 +226,9 @@ Memory that is still reachable at exit is allowed, because a plugin may keep
 process-wide state for the life of the process. `tests/valgrind.supp`
 suppresses one thing: CPython's live objects reported as "possibly lost"
 (from `libpython`, or from a statically linked `python3` host), because
-Python is never finalized.
+Python is never finalized. Tests with a JVM in them (suite `jvm`) don't run
+under valgrind: its JIT and GC are beyond what memcheck can judge. They run
+with `-Xcheck:jni` instead (`UGLY_JAVA_CHECK`), where a JNI warning aborts.
 
 ## License
 

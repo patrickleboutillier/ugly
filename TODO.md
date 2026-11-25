@@ -8,6 +8,7 @@ this list is everything else, plus the reasons behind each item.
 
 - [x] **QuickJS plugin** (done 2026-11-24: `plugins/js/`).
 - [x] **Perl** (done 2026-11-24: `plugins/perl5/`, with a binding).
+- [x] **Java** (done 2026-11-25: `plugins/java/`; no binding yet).
 
 ## Embedding in real hosts: HAProxy and friends
 
@@ -61,7 +62,9 @@ All additive; none of it breaks existing plugins (contract, "Scope").
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
   Python dicts keyed by tuples, JS `Map`.
 - [ ] **Overload hints** (v1's `hint`), for statically typed languages, as
-  part of the call options above. It's needed if Java comes back.
+  part of the call options above. Java picks overloads by scoring how well
+  the arguments convert, which settles most calls; a hint would settle the
+  ties (`f(int)` against `f(long)`, `f(Object)` against `f(String)`).
 - [ ] **Async/coroutines across runtimes.** It's hard, and probably needs
   each plugin to expose its scheduler.
 - [ ] **Python subinterpreters** (per-interpreter GIL, 3.12+), which would
@@ -90,8 +93,43 @@ All additive; none of it breaks existing plugins (contract, "Scope").
   - Embedding Node as a plugin is the harder half: libnode's C++ API, the
     event loop owned by Node, and one instance per process. Do it later, if
     ever.
-- [ ] **Java** through Panama FFM, only if there's a reason. Creating the
-  JVM still needs the JNI invocation API.
+- [x] **Java (the JVM)**, done 2026-11-25 through JNI (`plugins/java/`).
+  What's left:
+  - [ ] **A Java binding**: `System.loadLibrary("ugly")` with `JNI_OnLoad`
+    attaching to the running JVM, so a plain `java` program uses the other
+    languages. The plugin already uses a running JVM if there is one.
+  - [ ] **Java threads.** A runtime is the JVM seen from one thread; other
+    Java threads calling foreign values get `WRONG_THREAD`. "Calling a
+    runtime from any thread" (above) would lift that.
+  - [ ] **Panama FFM** for the helper side once JDK 22+ is the baseline.
+    Creating the JVM still needs the JNI invocation API.
+- [ ] **Ruby (CRuby)**: closest in shape to Python (`ruby_init` once per
+  process, the GVL, objects, exceptions, blocks), so the Python plugin is
+  the template. Big ecosystem, low cost.
+- [ ] **WebAssembly** (wasmtime's C API, Component Model). One plugin brings
+  every language that compiles to Wasm (Rust, Go, C, Zig, AssemblyScript).
+  UGLY's own/borrow already follow WIT resources, so it would bridge the
+  two worlds the essay compares. It's also the first plugin where memory
+  isn't shared, so values are copied.
+- [ ] **R** (`Rf_initEmbeddedR`): the data-science ecosystem. Everything is a
+  vector (the elements protocol), and `NA` isn't null.
+- [ ] **Tcl**: the HAProxy pattern again. Chip-design tools (Vivado, Quartus)
+  have Tcl built in, and teams want Python from it. Everything is a string,
+  a stress test for "exact or refused".
+- [ ] **Guile Scheme**: built for embedding. Continuations that jump across
+  foreign call frames must be detected and refused, a re-entry rule the
+  contract doesn't state yet.
+- [ ] **Julia** (`jl_init`): numerical work, the same once-per-process shape
+  as Python.
+- [ ] **Haskell**: possible, but awkward. GHC compiles, so a plugin would load
+  compiled libraries (`foreign export`, `StablePtr`), not interpret.
+  Dynamic calls need `Data.Dynamic` or the GHC API. What it would test: the
+  essay's "types flow from the static side", where `want` and hints carry
+  real weight.
+- [ ] **Bindings for compiled languages**, with no plugin: a safe Rust crate,
+  a C++ header, and Go and Zig wrappers over `ugly.h`. They're cheap, and
+  bring every embedded language to programs in those languages. (Go and
+  Erlang can't sensibly be embedded as plugins.)
 
 ## Engineering
 
