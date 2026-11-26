@@ -45,7 +45,8 @@ if haskell_ok
   )
 
   # Interfaces are .dyn_hi, which is what ghc -dynamic looks for in a package.
-  hs_sources = files('Ugly/Export.hs', 'Ugly/Native.hs', 'Ugly/Plugin.hs', 'Ugly/Value.hs')
+  hs_sources = files('Ugly.hs', 'Ugly/Export.hs', 'Ugly/Marshal.hs', 'Ugly/Native.hs', 'Ugly/Plugin.hs',
+    'Ugly/Types.hs', 'Ugly/Value.hs')
   ugly_hs = custom_target('libugly_hs.so',
     input: ['glue.c', hs_sources],
     output: 'libugly_hs.so',
@@ -88,11 +89,11 @@ if haskell_ok
 
   # Not in the conformance suite yet: the RTS and runtimes, and module
   # libraries found on the path (smoke), values and boxes (values) and calls
-  # (calls), from the test module Smoke, and uglyModule's export tables
-  # (exports), from Example. Suite 'ghc' is anything that starts the RTS
-  # (see the valgrind setups).
+  # (calls), from the test module Smoke, uglyModule's export tables
+  # (exports), from Example, and foreign values in Haskell (foreign). Suite
+  # 'ghc' is anything that starts the RTS (see the valgrind setups).
   subdir('test')
-  foreach t : ['smoke', 'values', 'calls', 'exports']
+  foreach t : ['smoke', 'values', 'calls', 'exports', 'foreign']
     test('haskell-' + t,
       executable('haskell_' + t, t + '.c', dependencies: [ugly_dep, dependency('threads'), cc.find_library('dl')]),
       env: {'UGLY_PLUGIN_PATH': meson.current_build_dir(), 'UGLY_HASKELL_PATH': haskell_test_modules},

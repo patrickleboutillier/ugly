@@ -11,4 +11,4 @@ import Ugly.Export
 uglyModule "Example"
   [ ''Shape, ''Pt
   , 'Circle, 'Square, 'Pt, 'origin
-  , 'area, 'scale, 'unit, 'largest, 'firstOf, 'label ]
+  , 'area, 'scale, 'unit, 'largest, 'firstOf, 'label, 'mapPt ]

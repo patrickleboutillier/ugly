@@ -15,8 +15,8 @@ import subprocess
 import sys
 
 DEPENDS = ['base', 'bytestring', 'containers', 'deepseq', 'template-haskell', 'text']
-EXPOSED = ['Ugly.Export', 'Ugly.Value']
-HIDDEN = ['Ugly.Native', 'Ugly.Plugin']
+EXPOSED = ['Ugly', 'Ugly.Export', 'Ugly.Types', 'Ugly.Value']
+HIDDEN = ['Ugly.Marshal', 'Ugly.Native', 'Ugly.Plugin']
 
 
 def main():

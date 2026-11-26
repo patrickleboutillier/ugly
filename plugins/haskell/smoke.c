@@ -90,9 +90,9 @@ int main(void){
 	ok(ugly_rt_new(ctx, lang, &rt) == UGLY_OK, "runtime") ;
 	ok(ugly_rt_new(ctx, lang, &rt2) == UGLY_OK, "a second runtime, at the same time") ;
 	ok(not_found(ctx, rt, "Data.List", "Could not find module \"Data.List\""), "import Data.List: not found (no library has it)") ;
-	ok(found(ctx, rt, "Smoke", 36), "import Smoke: Smoke.so, on the path option") ;
-	ok(found(ctx, rt2, "Smoke", 36), "and in another runtime") ;
-	ok(found(ctx, rt, "Example", 10), "import Example: Example.so") ;
+	ok(found(ctx, rt, "Smoke", 49), "import Smoke: Smoke.so, on the path option") ;
+	ok(found(ctx, rt2, "Smoke", 49), "and in another runtime") ;
+	ok(found(ctx, rt, "Example", 11), "import Example: Example.so") ;
 	ok(found(ctx, rt, "Example.Points", 2), "import Example.Points: Example.so too (the longest prefix)") ;
 	ok(not_found(ctx, rt, "Example.Nope", "Could not find"), "import Example.Nope: Example.so doesn't have it") ;
 	ok(not_found(ctx, rt, "Broken", "Could not load module \"Broken\""), "import Broken: Broken.so isn't a library") ;

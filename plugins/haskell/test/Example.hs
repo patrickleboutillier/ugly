@@ -5,7 +5,7 @@
 -- dependency), and polymorphic functions, as music-diatonic has them.
 module Example
   ( Shape (..), Pt (..), HasArea (..), Scalable (..), Unit (..)
-  , origin, largest, firstOf, label
+  , origin, largest, firstOf, label, mapPt
   ) where
 
 data Shape = Circle Double | Square Double
@@ -56,3 +56,7 @@ firstOf [] = error "firstOf: an empty list"
 
 label :: Show a => String -> a -> String
 label l x = l ++ ": " ++ show x
+
+-- | A callback: a Haskell function, or a foreign one.
+mapPt :: (Int -> Int) -> Pt -> Pt
+mapPt f (Pt x y) = Pt (f x) (f y)

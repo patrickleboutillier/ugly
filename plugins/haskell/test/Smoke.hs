@@ -1,17 +1,21 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | A module for the plugin's tests (values.c, calls.c), written by hand
+-- | A module for the plugin's tests (values.c, calls.c, foreign.c), written by hand
 -- with Ugly.Value: one value of each kind the protocol maps, and functions
 -- to call. Module "Smoke" in the library Smoke.so (uglyModuleFrom).
 module Smoke (smoke) where
 
+import Control.Concurrent (threadDelay)
+import Control.Exception
 import qualified Data.ByteString as B
 import Data.Int
 import Data.IORef
 import qualified Data.Map as M
 import Data.Word
 import System.IO.Unsafe (unsafePerformIO)
+import System.Mem (performMajorGC)
 
+import qualified Ugly
 import Ugly.Export (uglyModuleFrom)
 import Ugly.Value
 
@@ -29,6 +33,24 @@ next c = if c == maxBound then minBound else succ c
 
 mix :: Color -> Color -> String
 mix a b = show a ++ "+" ++ show b
+
+-- Foreign values (foreign.c).
+
+-- | What a foreign failure looks like from Haskell, caught: a ForeignError,
+-- or a Haskell exception that came home as itself.
+caught :: IO a -> IO String
+caught act = do
+  r <- try (act >> return ())
+  return $ case r of
+    Right () -> "no exception"
+    Left e | Just fe <- fromException e -> "ForeignError " ++ show (fe :: Ugly.ForeignError)
+           | Just (ErrorCall m) <- fromException e -> "ErrorCall " ++ m
+           | otherwise -> "other " ++ show e
+
+-- | Lets Haskell drop what it no longer holds: a major GC, then time for
+-- the finalizer thread.
+settle :: IO ()
+settle = performMajorGC >> threadDelay 20000 >> performMajorGC >> threadDelay 20000
 
 counter :: IORef Int
 counter = unsafePerformIO (newIORef 0)
@@ -74,6 +96,20 @@ entries =
   , ("tickBy", toUgly (\k -> atomicModifyIORef' counter (\n -> (n + k, n + k)) :: IO Int))
   , ("next", toUgly next)
   , ("mix", toUgly mix)
+    -- foreign values
+  , ("twice", toUgly ((\f -> f . f) :: (Int -> Int) -> Int -> Int))
+  , ("both", toUgly ((\f -> f 3 4) :: (Int -> Int -> Int) -> Int))
+  , ("applyIO", toUgly ((\f x -> f x) :: (Int -> IO Int) -> Int -> IO Int))
+  , ("mapped", toUgly ((\f -> map f [1, 2, 3]) :: (Int -> Int) -> [Int]))
+  , ("count", toUgly (length :: [Value] -> Int))
+  , ("fieldOf", toUgly (Ugly.get :: Foreign -> String -> IO Value))
+  , ("sizeOf", toUgly Ugly.size)
+  , ("typeOf", toUgly Ugly.typeOf)
+  , ("membersOf", toUgly Ugly.members)
+  , ("callWith", toUgly (\f n -> Ugly.call f [Ugly.toValue (n :: Int)] >>= Ugly.fromValue :: IO Int))
+  , ("caughtIO", toUgly (\f -> caught (f (0 :: Int) :: IO Int)))
+  , ("caughtPure", toUgly (\f -> caught (evaluate (f (0 :: Int) :: Int))))
+  , ("settle", toUgly settle)
     -- overloaded: one instantiation per type, chosen by the arguments
   , ("size", overloaded "size :: Sized a => a -> Int"
       [ toUgly (length :: [Int] -> Int)

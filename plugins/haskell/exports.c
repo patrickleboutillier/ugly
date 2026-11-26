@@ -27,6 +27,12 @@ static int text_is(ugly_handle h, const char *s){
 	return good ;
 }
 
+static ugly_status inc_fn(ugly_ctx *c, void *data, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out){
+	(void)c ; (void)data ; (void)nargs ; (void)want ;
+	*out = ugly_int(args[0].as.i + 1) ;
+	return UGLY_OK ;
+}
+
 int main(void){
 	ugly_rt *rt = start("Example", &mod) ;
 	ugly_val v, w ;
@@ -34,8 +40,8 @@ int main(void){
 	int64_t len ;
 	ugly_rt_import(ctx, rt, "Smoke", &smoke) ;
 
-	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 10),
-		"uglyModule: the 10 values listed (types aren't members)") ;
+	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 11),
+		"uglyModule: the 11 values listed (types aren't members)") ;
 	ugly_release(ctx, h) ;
 
 	/* Listed types get instances: a box, its show, its methods. */
@@ -78,6 +84,12 @@ int main(void){
 		&&text_is(v.as.h, "Pt 2 2"), "pt.scale(0.5): scale 0.5 pt, Pt 2 2 (rounded)") ;
 	ugly_val_release(ctx, &v) ;
 	ok((ugly_invoke(ctx, circle, "area", NULL, 0, UGLY_ANY, &v) == UGLY_OK)&&(v.as.d > 12.56), "circle.area()") ;
+	ugly_handle inc ;
+	ugly_callable_new(ctx, inc_fn, NULL, NULL, &inc) ;
+	ok((ugly_invoke(ctx, pt, "mapPt", (ugly_val[]){ ugly_hval(inc) }, 1, UGLY_ANY, &v) == UGLY_OK)
+		&&text_is(v.as.h, "Pt 4 5"), "pt.mapPt(inc): a callback, a C callable as an Int -> Int, Pt 4 5") ;
+	ugly_val_release(ctx, &v) ;
+	ugly_release(ctx, inc) ;
 	ok((ugly_invoke(ctx, circle, "label", (ugly_val[]){ ugly_str("c", 1) }, 1, UGLY_ANY, &v) == UGLY_OK)
 		&&is_string(v, "c: Circle 2.0"), "circle.label(\"c\"): label \"c\" circle") ;
 	ugly_val_release(ctx, &v) ;

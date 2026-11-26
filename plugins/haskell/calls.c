@@ -86,8 +86,10 @@ int main(void){
 	ugly_release(ctx, h) ;
 	ugly_handle list ;
 	ugly_list_new(ctx, NULL, 0, &list) ;
-	ok(error_is(call("identity", (ugly_val[]){ ugly_hval(list) }, 1, UGLY_ANY, &v), UGLY_ERR_TYPE, "TypeError",
-		"foreign values"), "identity of a foreign value: TYPE, not yet") ;
+	same = false ;
+	ok((call("identity", (ugly_val[]){ ugly_hval(list) }, 1, UGLY_ANY, &v) == UGLY_OK)&&(v.kind == UGLY_HANDLE)
+		&&(ugly_same(ctx, v.as.h, list, &same) == UGLY_OK)&&same, "identity of a foreign value: itself (haskell-foreign has more)") ;
+	ugly_val_release(ctx, &v) ;
 	ugly_release(ctx, list) ;
 
 	/* Exceptions raise from the call. */
