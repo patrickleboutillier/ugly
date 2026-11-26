@@ -1,0 +1,6 @@
+[wrap-file]
+directory = music-diatonic-0.1.2
+source_url = https://hackage.haskell.org/package/music-diatonic-0.1.2/music-diatonic-0.1.2.tar.gz
+source_filename = music-diatonic-0.1.2.tar.gz
+source_hash = 64183c5980878264d2f847d6eeceb91bb887ada3d30912b2b96e5bb061519064
+patch_directory = music-diatonic

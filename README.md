@@ -124,6 +124,29 @@ Code reached this way can use `ugly` too, and it reaches back into the
 host's own interpreter. For example, Lua called from that Python program
 can `require "ugly"` and use the program's own globals.
 
+### A Haskell library
+
+Haskell is compiled, so a module is a library built for UGLY: an export
+module lists what to export, and Template Haskell generates the rest,
+expanding polymorphic functions into one instantiation per instance.
+[examples/haskell/](examples/haskell/) does it for
+[music-diatonic](https://hackage.haskell.org/package/music-diatonic), and
+uses it from Python ([music.py](examples/haskell/music.py)) and from Lua
+([music.lua](examples/haskell/music.lua)):
+
+```python
+md = ugly.module("haskell", "Music.Diatonic")
+show = md.show                                    # Haskell's show
+[show(n) for n in md.notes(md.majorScale(md.D))]  # ['D', 'E', 'F#', 'G', 'A', 'B', 'C#']
+show(md.tonic(md.minorScale(md.A)))               # 'A': chosen by the argument's type
+show(md.majorChord(md.C).transpose(md.Min3rd, md.above))   # 'Eb': the receiver goes last
+md.noteMap(lambda n: md.above(md.Perf5th, n), md.majorScale(md.D))   # a Python function as a Note -> Note
+show(md.read("Am7", ugly.opts(hint="Chord")))     # 'Am7': a hint is a type application
+```
+
+The plan, and how Haskell maps onto the contract, is
+[doc/haskell-bridge.md](doc/haskell-bridge.md).
+
 A QuickJS program (`qjs`) works the same way, by importing the native module
 ([tests/js/test_binding.js](tests/js/test_binding.js)):
 
@@ -298,6 +321,7 @@ others, and its pitfalls.
 | Perl 5 | [doc/languages/perl5.md](doc/languages/perl5.md) | yes: `perl` |
 | Java (JDK 21+) | [doc/languages/java.md](doc/languages/java.md) | yes: `java` |
 | C# / .NET 10 | [doc/languages/dotnet.md](doc/languages/dotnet.md) | yes: any .NET program |
+| Haskell (GHC 8.8+) | [doc/haskell-bridge.md](doc/haskell-bridge.md) (the plan, until its guide) | not yet |
 
 ## Concepts
 
@@ -364,8 +388,8 @@ fit; if you need cross-language inlining in hot loops, GraalVM is. The
 laptop (i7-1365U):
 
 - A call from C into Lua, Python or JS costs 60 to 120 ns; into Perl or
-  .NET 120 to 160 ns; into Java about 440 ns. Between two languages, 100 to
-  500 ns, and up to 900 ns into Java.
+  .NET 120 to 160 ns; into Java or Haskell about 400 ns. Between two
+  languages, 100 to 500 ns, and up to 900 ns into Java or Haskell.
 - Calls into separate runtimes scale with threads: 63 million calls per
   second on 6 threads into C callbacks, 35 million into a Lua runtime per
   thread.
@@ -387,14 +411,15 @@ laptop (i7-1365U):
 | `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Kw`, `ugly.Opts`, `ugly.Bridge`) are `ugly.jar`. `binding/` builds the same source as `libugly_jni.so`, which `ugly.Foreign` loads in a plain `java` program. |
 | `plugins/dotnet/` | C# and .NET, on the CLR through its hosting API (`hostfxr`). One CLR per process; types are imported by full name from loaded assemblies or the module path, overloads are chosen as in Java, and keyword arguments bind to parameters by name. Most of it is C# (`Ugly.dll`), which calls the core through P/Invoke; `Ugly.Foreign` is a `DynamicObject`. `Ugly.dll` is also the binding: a .NET program that references it uses the other languages through `Ugly.Interop`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
-| `examples/` | Example programs, run as tests: Lua using Python, a C host, and HAProxy asking Python for a decision on each request (`haproxy/`). |
+| `examples/` | Example programs, run as tests: Lua using Python, a C host, HAProxy asking Python for a decision on each request (`haproxy/`), and a Haskell library used from Python and Lua (`haskell/`). |
 | `doc/` | The contract, the design essay, a guide per language (`doc/languages/`), the benchmarks, and a guide to writing a plugin (`plugin-guide.md`). |
 
 ## Status
 
-Lua (5.4 or 5.3), CPython, JavaScript (QuickJS), Perl 5, Java and C# pass
-the whole conformance suite, and every pair of them works in one process.
-Each one can also be the host: plain `lua`, `python3`, `qjs`, `perl`, `java`
+Lua (5.4 or 5.3), CPython, JavaScript (QuickJS), Perl 5, Java, C# and
+Haskell pass the whole conformance suite, and every pair of them works in
+one process. Each one but Haskell (whose binding is next) can also be the
+host: plain `lua`, `python3`, `qjs`, `perl`, `java`
 and .NET programs use the other languages, and so does HAProxy's built-in Lua, on
 several threads. Everything [doc/contract.md](doc/contract.md) specifies is
 built, and the current release is on the Releases page.
@@ -424,12 +449,14 @@ used.
 You need a C toolchain, Meson (0.61 or later) and Ninja. Each language
 plugin, and its binding, is built only if its language is found: Lua 5.4 or
 5.3 (`liblua5.4-dev`, `liblua5.3-dev`), CPython 3.10+ (`python3-dev`), Perl 5 (`libperl-dev`)
-a JDK, 21 or later (`openjdk-21-jdk-headless`, found through `javac`), and
-a .NET 10 SDK (`dotnet-sdk-10.0`, found through `dotnet`).
+a JDK, 21 or later (`openjdk-21-jdk-headless`, found through `javac`),
+a .NET 10 SDK (`dotnet-sdk-10.0`, found through `dotnet`), and GHC 8.8 or
+later with shared libraries (`ghc`). The Haskell example downloads
+music-diatonic from Hackage at setup, checksummed like QuickJS.
 QuickJS is built from source: Meson downloads its pinned release at setup,
 and checks the checksum. `-Dlua=disabled`, `-Dpython=disabled`,
-`-Djs=disabled`, `-Dperl5=disabled`, `-Djava=disabled` and
-`-Ddotnet=disabled` skip a language;
+`-Djs=disabled`, `-Dperl5=disabled`, `-Djava=disabled`, `-Ddotnet=disabled`
+and `-Dhaskell=disabled` skip a language;
 `--wrap-mode=nodownload` forbids the download. The plugin uses Lua 5.4 if
 it's there, else 5.3 (`-Dlua_version=5.3` chooses), and the Lua binding is
 built for each; its tests need the matching interpreters (`lua5.4`,
@@ -444,7 +471,9 @@ meson test -C build        # the conformance suite, pairwise tests and examples
 The tests need no install step. `meson install -C build` installs the
 library, the two headers, a pkg-config file, the plugins and the bindings
 (the Lua module where each Lua version looks for C modules, the Python
-extension in site-packages, the Java one in libdir). Plugins are looked up in `<libdir>/ugly/plugins/`, and
+extension in site-packages, the Java one in libdir), and the Haskell
+package to build module libraries against (`ghc -package-db
+<libdir>/ugly/haskell/package.db -package ugly`). Plugins are looked up in `<libdir>/ugly/plugins/`, and
 `UGLY_PLUGIN_PATH` (a colon-separated list of directories) overrides that at
 runtime.
 

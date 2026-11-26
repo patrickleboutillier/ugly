@@ -2,8 +2,9 @@
 
 Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
 export tables and calls, module libraries, foreign values in Haskell,
-hint and want for overloads, and the conformance suite are done: Haskell
-passes all 9 groups and pairwise with every other language). Once it works,
+hint and want for overloads, the conformance suite (all 9 groups, and
+pairwise with every other language), and music-diatonic as an example are
+done). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -163,9 +164,14 @@ ghc -dynamic -shared -fPIC -package-db <build>/plugins/haskell/package.db -packa
   `.dyn_hi`, which `ghc -dynamic` looks for in a package. Meson builds
   module libraries with `ghc_module` (the command) and
   `ghc_module_depends`; the plugin's own tests build theirs in
-  `plugins/haskell/test/`. Not installed yet: a database for an installed
-  plugin, with the interfaces beside it, comes with the first module
-  library built outside the tree (music-diatonic).
+  `plugins/haskell/test/`. **Installed** (`meson install`, an install
+  script: `package.py install`), it's `<libdir>/ugly/haskell/package.db`,
+  with the interfaces in `<libdir>/ugly/haskell/import` and
+  `libugly_hs.so` beside the plugin; the database is written and
+  `recache`d rather than `register`ed, since under `DESTDIR` the final
+  paths don't exist yet. Checked by building music-diatonic's library
+  against an installed UGLY, outside any build tree, and using it from the
+  installed Python binding.
 - **`import "A.B.C"`** looks for the module's root symbol in the process
   first (a host program that links its export modules), then in
   `<dir>/A.B.C.so`, `<dir>/A.B.so`, `<dir>/A.so`, the longest prefix first,
@@ -359,6 +365,7 @@ type is expected converts the way a literal of that kind would (built,
 | bytes, bool | `ByteString`, `Bool` | | | | `Value` |
 | null | `()`, `Nothing` | | | | `Value` |
 | a Haskell value | its own type | | | | `Value`; `[Value]` for any sequence |
+| a foreign sequence | | | | `[a]`, each element by `FromUgly a` when the call runs (a `TypeError` if one doesn't convert) | `[Value]`, read lazily |
 
 - An int that doesn't fit is refused (decision 2), so `widen(300)` with a
   `Word8` parameter is `UGLY_ERR_TYPE`, and an overload on `Int8` or
@@ -523,7 +530,18 @@ program's RTS wasn't started with `keep_cafs`, so attaching must call
    GC found dead (deterministic: the finalizers themselves run later, on a
    thread of their own). Haskell is in `test_plugins`: all 9 groups, and
    pairwise with every language, the JVM and the CLR included.
-6. **music-diatonic** as an example, from Python and Lua.
+6. **music-diatonic** as an example, from Python and Lua (done:
+   `examples/haskell/`). Its sources come from Hackage
+   (`subprojects/music-diatonic.wrap`, sha256-checked); the export module
+   (`Music/Diatonic/Ugly.hs`, written by hand) and the library are one
+   module library, `Music.Diatonic.so`, with a unit of its own
+   (`-this-unit-id music-diatonic-ugly`) and `-w` (the 2015 sources warn).
+   Tests `music_from_python` and `music_from_lua` run `music.py` and
+   `music.lua` through the bindings. What it showed: `str()` of a proxy
+   isn't Haskell's `show` (the module exports `show` itself); a library's
+   own export list can hide what its docs describe (`findChord` is
+   commented out); a foreign list as a `[Note]` needed `FromUgly [a]` for
+   foreign sequences.
 7. **The binding**, then the docs.
 
 ## Decided (2026-11-26)
