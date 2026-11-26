@@ -246,8 +246,19 @@ the same value read twice is the same handle.
   `uglyFromException`, GHC's exception hierarchy) crosses as a box of its
   own `ToUgly` instance, still the same `SomeException`: the fixture's
   `ConformanceError` has a `message` member, and comes home as itself.
-- **Lists are lazy.** `length` forces the spine (and doesn't return for an
-  infinite list); `get_index` walks to the element and forces only it, so
+- **Lists are lazy.** `length` forces the spine, and for an infinite list
+  never returns: the box holds the list's head, so every cell forced stays
+  alive, and memory grows until the RTS reports `out of memory` and exits
+  the process (checked from Python: `len(naturals)`). GHC's `-M` heap
+  limit doesn't save it when embedded: heap overflow is delivered to the
+  program's main Haskell thread, which an embedded RTS doesn't have, and
+  the RTS stops with an internal error (`getTopHandlerThread`, GHC 8.8).
+  Element access and iteration are fine: Python's `xs[1000]`,
+  `islice(xs, 5)` and `for x in xs` read one element at a time (the proxy
+  has no `__iter__`, so iteration goes by index and never asks the
+  length); `list(xs)` and `len(xs)` don't. A cap on `length` (an option,
+  refusing past it) would make it fail cleanly; to decide.
+  Otherwise: `get_index` walks to the element and forces only it, so
   `[0..]` has a 1000th element, and `[1, error "x", 3]` raises at index 1
   only. Index i costs i steps: iterating is quadratic. Memoizing an array
   per box would fix that but force the whole spine; revisit with a real
@@ -412,6 +423,10 @@ code), and tested by `haskell-foreign` with values whose home is the C host
 - A lazy structure fails where it's forced: `get_index` on `[1, undefined]`
   at 1 is `UGLY_ERR_RAISED` with an `ErrorCall`. `length` of an infinite
   list doesn't return, as in Haskell.
+- **An exception's identity** is the exception inside its `SomeException`,
+  not the wrapper: since GHC 9.10, `throwIO` wraps it again, with its
+  context, every time it's thrown, so a payload rethrown at home would
+  otherwise be a new object (the errors group caught this on CI's GHC).
 - **Haskell exceptions out**: type is the exception's type name
   (`ErrorCall`, `ArithException`), message is `displayException`, and the
   payload is the boxed `SomeException`. Coming home, it's rethrown with
