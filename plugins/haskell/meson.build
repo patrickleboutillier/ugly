@@ -29,13 +29,13 @@ if haskell_ok
   # The Haskell modules are a package of their own ('ugly'), so that modules
   # built later against it share these symbols. Its .hi files stay in the
   # private dir for now.
-  hs_sources = files('Ugly/Plugin.hs')
+  hs_sources = files('Ugly/Native.hs', 'Ugly/Plugin.hs', 'Ugly/Smoke.hs', 'Ugly/Value.hs')
   ugly_hs = custom_target('libugly_hs.so',
-    input: ['rts.c', hs_sources],
+    input: ['rts.c', 'glue.c', hs_sources],
     output: 'libugly_hs.so',
     command: [ghc, '-v0', '-O', '-Wall'] + ghc_werror + [
       '-dynamic', '-shared', '-fPIC', '-threaded', '-no-hs-main', '-this-unit-id', 'ugly',
-      '-i' + meson.current_source_dir(),
+      '-i' + meson.current_source_dir(), '-I' + (meson.project_source_root() / 'include'),
       '-odir', '@PRIVATE_DIR@', '-hidir', '@PRIVATE_DIR@', '-stubdir', '@PRIVATE_DIR@',
       '-optc-Wall', '-optl-Wl,-soname,libugly_hs.so',
       '-o', '@OUTPUT@', '@INPUT@'] + ghc_rts,
@@ -55,13 +55,16 @@ if haskell_ok
   plugins += [ugly_haskell, ugly_hs]
   plugin_dirs += meson.current_build_dir()
 
-  # Not in the conformance suite yet: a smoke test of the skeleton. Suite
+  # Not in the conformance suite yet: the RTS and runtimes (smoke), and
+  # values and boxes, from the built-in module Ugly.Smoke (values). Suite
   # 'ghc' is anything that starts the RTS (see the valgrind setups).
-  test('haskell-smoke',
-    executable('haskell_smoke', 'smoke.c', dependencies: [ugly_dep, dependency('threads')]),
-    env: {'UGLY_PLUGIN_PATH': meson.current_build_dir()},
-    depends: [ugly_haskell, ugly_hs],
-    protocol: 'tap',
-    suite: ['haskell', 'ghc'],
-  )
+  foreach t : ['smoke', 'values']
+    test('haskell-' + t,
+      executable('haskell_' + t, t + '.c', dependencies: [ugly_dep, dependency('threads'), cc.find_library('dl')]),
+      env: {'UGLY_PLUGIN_PATH': meson.current_build_dir()},
+      depends: [ugly_haskell, ugly_hs],
+      protocol: 'tap',
+      suite: ['haskell', 'ghc'],
+    )
+  endforeach
 endif

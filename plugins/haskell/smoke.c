@@ -1,8 +1,8 @@
 /*
  * The Haskell plugin's skeleton, until it joins the conformance suite: the
  * RTS starts with an option, leaves every signal handler alone, runtimes
- * come and go (two at once, and one deleted by another thread), and
- * operations are refused cleanly.
+ * come and go (two at once, and one deleted by another thread). Values are
+ * values.c's.
  */
 #include <pthread.h>
 #include <signal.h>
@@ -58,7 +58,7 @@ int main(void){
 
 	ok(ugly_rt_new(ctx, lang, &rt) == UGLY_OK, "runtime") ;
 	ok(ugly_rt_new(ctx, lang, &rt2) == UGLY_OK, "a second runtime, at the same time") ;
-	ok(ugly_rt_import(ctx, rt, "Data.List", &h) == UGLY_ERR_NOT_IMPLEMENTED, "import refused, for now") ;
+	ok(ugly_rt_import(ctx, rt, "Data.List", &h) == UGLY_ERR_NOT_FOUND, "import Data.List: not found (only built-in modules, for now)") ;
 	printf("# %s\n", ugly_error_message(ugly_last_error(ctx))) ;
 	ok(ugly_rt_delete(ctx, rt2) == UGLY_OK, "second runtime deleted") ;
 

@@ -1,6 +1,7 @@
 # The Haskell bridge: a plan
 
-Status: proposal, with a skeleton plugin (`plugins/haskell/`). Once it works,
+Status: proposal, being built in `plugins/haskell/` (the skeleton, then
+values and boxes, are done). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -123,41 +124,73 @@ uglyModule "Music.Diatonic"
 
 ### Values
 
-Primitives cross by value, by type:
+Built (`Ugly.Value`, `Ugly.Plugin`), and tested by `haskell-values`
+against the built-in module `Ugly.Smoke`. A `ToUgly` instance says how each
+type crosses. Primitives cross by value:
 
 | Haskell | ugly |
 |---|---|
 | `()` | null |
 | `Bool` | bool |
-| `Int`, `Int64`, `Word`..., `Integer` in range | int |
+| `Int`, `Int8`..`Int64`, `Word8`..`Word32` | int |
+| `Word`, `Word64`, `Integer`, `Natural` | int if it fits; otherwise a box whose text is its digits (never wrapped) |
 | `Double`, `Float` | double |
-| `String`, `Text` | string |
+| `String`, `Text`, `Char` | string; a `String` holding a lone surrogate (valid `Char`, not Unicode) is a box with no text |
 | `ByteString` | bytes |
-| `Maybe a` | null for `Nothing`, the value for `Just x` (to discuss) |
+| `Maybe a` | null for `Nothing`, `x` for `Just x`; a box, one element long, when `x` is itself null (`Just Nothing`, `Just ()`) |
 
-Everything else is a **box**: a `StablePtr` to the value, its `TypeRep`, and
-the dictionary of its protocol operations, captured where its type was
-static (an export table entry, a function's result). Its identity is its
-`StableName`'s index, kept alive in the box so it stays unique.
+Everything else is a **box** (`Box`): the value, and closures over it for
+what the protocol can ask: its type name (from `Typeable`), its text, its
+members, its elements. They are made where the value's type is static (an
+instance, an export table entry), so no class dictionary or reflection is
+needed at run time. A ref is a `StablePtr` to the box. Its identity is the
+index of the value's `StableName`, plus one, taken after forcing the value
+to weak head normal form and kept alive with the ref, so it stays unique:
+the same value read twice is the same handle.
 
 | Haskell value | Traits |
 |---|---|
-| a function, or an `IO` action | `CALLABLE` |
-| a list | `ELEMENTS` (read only) |
-| a record | `MEMBERS`: its fields (read only) |
+| a list, a tuple | `ELEMENTS` (read only) |
 | a `Map String v` | `MEMBERS` (read only) |
-| a module | `MEMBERS`: its export table |
+| a module | `MEMBERS`: its exports, in order |
+| a type with `Show` (`boxShow`), or none (`boxOpaque`) | none: a type name, and a text if it has `Show` |
+| a function, or an `IO` action | `CALLABLE` (not yet) |
+| a record | `MEMBERS`: its fields (not yet) |
 
+- **`want`, by Haskell's rules: strict.** An int widens to a double (the
+  suite requires it); nothing else converts implicitly. A number asked for
+  as a string is `UGLY_ERR_TYPE`, as in Python: Haskell's `show` is never
+  implicit. A box asked for as a string gives its text, since a box has no
+  other primitive form: `"Green"`, `"[2,3,5,7,11]"`, `"(1,\"one\")"`. A
+  list's or tuple's text is built from its elements' (`textOf`), so it
+  needs no `Show` instance of its own.
 - **Nothing is mutable.** `set_member`, `set_index`, `splice` and
   `delete_member` are refused with `UGLY_ERR_NOT_CAPABLE`. An `IORef` or
   `MVar` could be a one-member box later.
-- **Calls are curried.** Fewer arguments than the arity give a partial
-  application, itself a callable. More are applied to the result, if it's a
-  function. A pure function's result is evaluated; an `IO` result is run.
-- **`want` = string on a box gives `show`**, when the type has `Show`. So
-  `str(note)` in Python is `"C#"`.
-- **`describe`** gives the type's name (`Note`, `[Note]`, `Interval -> Note
-  -> Note`).
+- **Lists are lazy.** `length` forces the spine (and doesn't return for an
+  infinite list); `get_index` walks to the element and forces only it, so
+  `[0..]` has a 1000th element, and `[1, error "x", 3]` raises at index 1
+  only. Index i costs i steps: iterating is quadratic. Memoizing an array
+  per box would fix that but force the whole spine; revisit with a real
+  use.
+- **Failures** that aren't exceptions use Haskell's names where it has
+  them: `TypeError` (Control.Exception's, for deferred type errors) for a
+  refused conversion or trait, `ArrayException` for an index out of range,
+  `NotInScope` for a missing member, `ModuleNotFound` for a missing module.
+- **Exceptions** raise where a value is forced, inside the entry point's
+  catch: type is the exception's type name (`ErrorCall`,
+  `ArithException`), message is `displayException`, payload a box of the
+  `SomeException`.
+- **Calls are curried** (not yet). Fewer arguments than the arity give a
+  partial application, itself a callable. More are applied to the result,
+  if it's a function. A pure function's result is evaluated; an `IO`
+  result is run.
+- **`describe`** gives the type's name as `Typeable` shows it: `Color`,
+  `[Int]`, `Maybe (Maybe Int)`, `Map [Char] Int` (a `String` is `[Char]`
+  to `Typeable`).
+- **Leaks**: the refs live in the RTS's stable pointer table, which
+  valgrind can't see, so the Haskell side counts them (`ugly_hs_live_refs`)
+  and the test checks that none is left once the runtime is deleted.
 
 ### Polymorphism: overloads chosen at the call
 
@@ -278,11 +311,13 @@ then boxes in that runtime, so Python can call back into the program.
 
 1. **The skeleton** (done): the build, the RTS's start, runtimes, a smoke
    test (`haskell-smoke`, suites `haskell` and `ghc`), CI.
-2. **Values and boxes**: `Ugly.Value`, the primitive conversions, boxes and
-   their identity, `release`, `describe`, and `show` for `want` = string.
-3. **Export tables**: `uglyModule`, with instantiation; building a module
+2. **Values and boxes** (done): `Ugly.Value`, the primitive conversions,
+   boxes and their identity, `release`, `describe`, and the text for `want`
+   = string, from a built-in module (`Ugly.Smoke`) until modules load.
+3. **Export tables and calls**: `uglyModule`, with instantiation; arguments
+   in (`FromUgly`, the literal rules); calls and currying; building a module
    library against the `ugly` package (a package database in the build
-   tree); `import`.
+   tree); `import` from the module path, replacing `Ugly.Smoke`.
 4. **The fixture** (`tests/haskell/Conformance.hs`), then the protocol until
    the suite and pairwise pass.
 5. **music-diatonic** as an example, from Python and Lua.
@@ -298,9 +333,14 @@ These are questions about idiom and feel, for the author:
    exports whose last parameter takes a `Chord`. The other choice is
    first, as Perl does.
 2. **Range checks**: refuse an int that doesn't fit (`UGLY_ERR_TYPE`), or
-   wrap as `fromInteger` does? The plan refuses.
+   wrap as `fromInteger` does? Refusing also lets overload resolution rule
+   out an instantiation whose integer type is too small, as Java's scoring
+   does. Built that way for results (an `Integer` beyond int64 is a box of
+   its digits); arguments come with calls.
 3. **`Maybe`**: `Nothing` as null and `Just x` as `x` is idiomatic in every
-   other language, but `Just Nothing` and `Nothing` then look the same.
-   The other choice is a box with `isJust`/`fromJust`.
+   other language, but `Just Nothing` and `Nothing` would look the same.
+   Built: flattened, except that `Just x` stays a box (one element long)
+   when `x` is itself null, so nothing is lost. The other choice is always
+   a box, a sequence of 0 or 1.
 4. **The export list**: written by hand (`uglyModule` with names), or read
    from the module's interface file by a build helper?

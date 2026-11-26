@@ -5,10 +5,13 @@
  * threaded RTS; this file is the vtable, reaching it through its foreign
  * exports.
  *
- * Skeleton: init starts the RTS and checks that the two sides agree;
- * runtimes come and go, from any thread; every operation is refused. The RTS
- * is one-way (it can't be started again once stopped), so there's no 'term'
- * and no UGLY_CAP_RESTARTABLE. doc/haskell-bridge.md is the plan.
+ * init starts the RTS and checks that the two sides agree; runtimes come and
+ * go, from any thread. The reading operations are Haskell's (Ugly.Plugin),
+ * on boxes: import (built-in modules only, for now), describe, members and
+ * elements. Haskell values are immutable, so writing is refused; calls
+ * aren't implemented yet. The RTS is one-way (it can't be started again once
+ * stopped), so there's no 'term' and no UGLY_CAP_RESTARTABLE.
+ * doc/haskell-bridge.md is the plan.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,13 +19,23 @@
 
 #include "ugly_plugin.h"
 
-#define BRIDGE_ABI 1     /* Ugly.Plugin.bridgeAbi */
+#define BRIDGE_ABI 2     /* Ugly.Plugin.bridgeAbi */
 
 /* libugly_hs.so: rts.c, and Ugly.Plugin's foreign exports. */
 extern int ugly_hs_start(const char *opts) ;
 extern int ugly_hs_abi(void) ;
 extern void *ugly_hs_rt_new(void) ;              /* StablePtr Runtime */
 extern void ugly_hs_rt_delete(void *rt) ;
+/* Ugly.Plugin's entry points, with the vtable's signatures. */
+extern ugly_status ugly_hs_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_val *out) ;
+extern ugly_status ugly_hs_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name) ;
+extern ugly_status ugly_hs_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_kind want,
+	ugly_val *out) ;
+extern ugly_status ugly_hs_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out) ;
+extern ugly_status ugly_hs_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out) ;
+extern ugly_status ugly_hs_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want,
+	ugly_val *out) ;
+extern void ugly_hs_release(ugly_rt *rt, void *ref) ;
 
 
 /*
@@ -83,36 +96,20 @@ static ugly_status hs_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 }
 
 
-/* Not yet: every operation is refused. */
+/* Haskell values are immutable. */
+#define IMMUTABLE() return ugly_fail(ctx, rt, UGLY_ERR_NOT_CAPABLE, "TypeError", "Haskell values are immutable")
+
+/* Not yet. */
 #define TODO(op) return ugly_fail(ctx, rt, UGLY_ERR_NOT_IMPLEMENTED, "", "haskell: " op " isn't implemented yet")
 
-static ugly_status hs_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_val *out){
-	TODO("import") ;
-}
 static ugly_status hs_globals(ugly_ctx *ctx, ugly_rt *rt, ugly_val *out){
 	TODO("globals") ;
 }
-static ugly_status hs_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
-	TODO("describe") ;
-}
-static ugly_status hs_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_kind want,
-	ugly_val *out){
-	TODO("get_member") ;
-}
 static ugly_status hs_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_val v){
-	TODO("set_member") ;
-}
-static ugly_status hs_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
-	TODO("member_names") ;
-}
-static ugly_status hs_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
-	TODO("length") ;
-}
-static ugly_status hs_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want, ugly_val *out){
-	TODO("get_index") ;
+	IMMUTABLE() ;
 }
 static ugly_status hs_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_val v){
-	TODO("set_index") ;
+	IMMUTABLE() ;
 }
 static ugly_status hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 	ugly_kind want, ugly_val *out){
@@ -127,18 +124,11 @@ static ugly_status hs_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 	TODO("new_instance") ;
 }
 static ugly_status hs_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
-	TODO("delete_member") ;
+	IMMUTABLE() ;
 }
 static ugly_status hs_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
 	const ugly_val *insert, size_t n){
-	TODO("splice") ;
-}
-
-
-/* No refs are handed out yet. */
-static void hs_release(ugly_rt *rt, void *ref){
-	(void)rt ;
-	(void)ref ;
+	IMMUTABLE() ;
 }
 
 
@@ -149,21 +139,21 @@ static const ugly_plugin plugin = {
 	.init = hs_init,
 	.rt_new = hs_rt_new,
 	.rt_delete = hs_rt_delete,
-	.import = hs_import,
+	.import = ugly_hs_import,
 	.globals = hs_globals,
-	.describe = hs_describe,
-	.get_member = hs_get_member,
+	.describe = ugly_hs_describe,
+	.get_member = ugly_hs_get_member,
 	.set_member = hs_set_member,
-	.member_names = hs_member_names,
-	.length = hs_length,
-	.get_index = hs_get_index,
+	.member_names = ugly_hs_member_names,
+	.length = ugly_hs_length,
+	.get_index = ugly_hs_get_index,
 	.set_index = hs_set_index,
 	.call = hs_call,
 	.invoke = hs_invoke,
 	.new_instance = hs_new_instance,
 	.delete_member = hs_delete_member,
 	.splice = hs_splice,
-	.release = hs_release,
+	.release = ugly_hs_release,
 	.options = (const char *const []){ "rts", NULL },
 } ;
 
