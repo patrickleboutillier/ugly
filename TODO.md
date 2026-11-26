@@ -106,8 +106,10 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   export tables and calls, module libraries loaded from a path, and
   foreign values in Haskell, `hint` and `want` for overloads, and the
   conformance suite (all 9 groups, pairwise with every language), and
-  music-diatonic as an example (from Python and Lua) are done; next are
-  the binding (a Haskell program as host) and the docs. The test case is the author's
+  music-diatonic as an example (from Python and Lua), and the binding (a
+  Haskell program as host: `Ugly.withUgly`) are done; next is the
+  language guide (`doc/languages/haskell.md`) and Haskell's column in
+  contract §10. The test case is the author's
   own `music-diatonic` (Hackage 0.1.2), whose sources wait in
   `stuff/haskell/` with the spikes (local, re-fetch from Hackage if
   missing).

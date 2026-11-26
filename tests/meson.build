@@ -162,3 +162,11 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
     endif
   endforeach
 endif
+
+# The Haskell binding: a Haskell program as the host (tests/haskell/TestBinding.hs),
+# using the languages built (UGLY_TEST_LANGS; the others are skipped).
+if test_plugins.contains('haskell')
+  # Meson 0.61's test() takes no custom target: env runs it (valgrind follows the exec).
+  test('binding-haskell', find_program('env'), args: [haskell_test_binding], protocol: 'tap', env: test_env_base,
+    suite: ['bindings', 'ghc'], depends: plugins + bindings + [haskell_test_binding])
+endif

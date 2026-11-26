@@ -25,6 +25,8 @@ module Ugly.Native
   , c_ugly_describe
   , c_ugly_take_error, c_ugly_restore_error, c_ugly_error_free, c_ugly_error_payload, c_ugly_raise_handle
   , c_ugly_error_status, c_ugly_error_language, c_ugly_error_type, c_ugly_error_message
+    -- the binding
+  , c_binding_attach, c_binding_detach, c_binding_error, c_ugly_rt_get, c_ugly_rt_import, c_ugly_rt_eval
   ) where
 
 import Data.Int
@@ -142,3 +144,13 @@ foreign import ccall unsafe "ugly_error_status" c_ugly_error_status :: Ptr Err -
 foreign import ccall unsafe "ugly_error_language" c_ugly_error_language :: Ptr Err -> IO CString
 foreign import ccall unsafe "ugly_error_type" c_ugly_error_type :: Ptr Err -> IO CString
 foreign import ccall unsafe "ugly_error_message" c_ugly_error_message :: Ptr Err -> IO CString
+
+
+-- The binding (binding.c): a Haskell program as the host.
+foreign import ccall safe "ugly_hs_binding_attach" c_binding_attach :: IO Status
+foreign import ccall safe "ugly_hs_binding_detach" c_binding_detach :: IO ()
+foreign import ccall unsafe "ugly_hs_binding_error" c_binding_error :: IO CString
+foreign import ccall safe "ugly_rt_get" c_ugly_rt_get :: Ptr Ctx -> CString -> Ptr (Ptr Rt) -> IO Status
+foreign import ccall safe "ugly_rt_import" c_ugly_rt_import :: Ptr Ctx -> Ptr Rt -> CString -> Ptr Handle -> IO Status
+foreign import ccall safe "ugly_rt_eval"
+  c_ugly_rt_eval :: Ptr Ctx -> Ptr Rt -> CString -> CSize -> Kind -> Ptr Val -> IO Status

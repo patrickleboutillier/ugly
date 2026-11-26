@@ -62,3 +62,15 @@
    fun:strncmp
    fun:is_dst
 }
+# A Haskell program's own exit (the binding's test, tests/haskell/
+# TestBinding.hs): GHC 8.8's RTS loses a block while shutting down. A plain
+# "main = print 1" built the same way (-dynamic -threaded) loses the same 112
+# bytes. Only what's allocated under shutdownHaskellAndExit.
+{
+   ghc-rts-shutdown-definitely-lost
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   ...
+   fun:shutdownHaskellAndExit
+}
