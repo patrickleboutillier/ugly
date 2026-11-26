@@ -41,7 +41,7 @@ if dotnet_ok
 
   # dotnet build, out of the source tree: intermediate files in the private dir.
   ugly_dll = custom_target('Ugly.dll',
-    input: ['Ugly.csproj', 'Bridge.cs', 'Foreign.cs', 'Native.cs', 'Protocol.cs'],
+    input: ['Ugly.csproj', 'Binding.cs', 'Bridge.cs', 'Foreign.cs', 'Native.cs', 'Protocol.cs'],
     output: ['Ugly.dll', 'Ugly.runtimeconfig.json'],
     command: [dotnet, 'build', '@INPUT0@', '--nologo', '-v', 'quiet', '-c', 'Release',
       '--artifacts-path', '@PRIVATE_DIR@', '-o', '@OUTDIR@'],

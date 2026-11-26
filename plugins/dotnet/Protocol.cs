@@ -17,11 +17,6 @@ using System.Reflection;
 
 namespace Ugly;
 
-sealed class Kw(string[] names, object?[] values) {
-    public string[] Names { get; } = names;
-    public object?[] Values { get; } = values;
-}
-
 // A method (static, or bound to a target), as a callable value.
 sealed class MethodRef(Type cls, object? target, string name) {
     public Type Cls { get; } = cls;
@@ -253,7 +248,7 @@ static class Protocol {
             case Foreign x:
                 // A hint names a .NET overload: it can't go on to another language (exact or refused).
                 if (Hint != null) throw new Failure(Status.NotSupported, "NotSupportedException", "a hint applies to .NET overloads only");
-                return x.CallKw(args, kw);
+                return x.CallWith(args, kw);
             default:
                 throw Fail.NotCapable("value is not callable");
         }

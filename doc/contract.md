@@ -396,12 +396,13 @@ value code. v2 makes this structural:
 So each language needs one adapter with two modes, not two adapters. The
 essay's "2N" becomes about N plus N thin API wrappers.
 
-**As built (Lua, Python, JS and Perl, 2026-11-24; Java, 2026-11-25).**
+**As built (Lua, Python, JS and Perl, 2026-11-24; Java, 2026-11-25; .NET, 2026-11-26).**
 
 - **One source file, compiled twice.** Each plugin's source is built as the
   plugin (`ugly_<lang>.so`, linked with the interpreter library) and as the
   binding: the native module `ugly` (a Lua C module, a Python extension),
-  linked with no interpreter library.
+  linked with no interpreter library. (.NET needs neither: its binding is
+  the plugin's managed half, below.)
   - The binding's interpreter symbols come from the host process.
   - This is required, not just tidy: Debian's `python3` and `lua5.4` are
     statically linked. Loading the plugin's `.so` into them would put a
@@ -467,6 +468,26 @@ essay's "2N" becomes about N plus N thin API wrappers.
     passes.
   - Only the thread that loaded the binding can use it. Other Java threads
     get `IllegalStateException` (TODO.md: any-thread runtimes).
+- **.NET** (`dotnet`, 2026-11-26): the binding is `Ugly.dll` itself, with
+  no native shim: the CLR is already running, and the plugin's C side does
+  nothing but start one. A program references `Ugly.dll` like any assembly.
+  - On the first use of `Ugly.Interop`, it loads libugly (`UGLY_LIBRARY`,
+    else `libugly.so.2` by the system's search, else beside `Ugly.dll`),
+    builds the `ugly_plugin` vtable in C# from the same
+    `[UnmanagedCallersOnly]` entry points `dotnet.c` hands the core, and
+    calls `ugly_lang_register()` and `ugly_rt_attach()` on that thread
+    (`ugly_ctx_thread`). The CLR serves every thread, so the attached
+    runtime does too.
+  - The API is `Ugly.Interop`: `Module`, `Eval`, `Configure`, `IsForeign`,
+    and the markers `Interop.Kw(...)` and `Interop.Opts(hint:, context:)`,
+    passed last. Through `dynamic`, a call's named arguments are keyword
+    arguments: `json.dumps(data, indent: 2)`. Foreign values are
+    `Ugly.Foreign`, a `DynamicObject`; errors are `Ugly.ForeignException`.
+  - **Teardown is explicit**: `Interop.Shutdown()`, on the thread that
+    attached. .NET's `ProcessExit` runs on another thread, whether `Main`
+    returns or `Environment.Exit` is called (checked), and that thread owns
+    no ctx: the VMDeath trick that works for the JVM has no equivalent.
+    Without `Shutdown`, UGLY is left as a process exit leaves it.
 - **Lua attaches on first use** (2026-11-25, found by the HAProxy proof of
   concept). HAProxy loads every Lua state on its main thread and then runs
   each one on a worker thread, so attaching at `require "ugly"` gave the

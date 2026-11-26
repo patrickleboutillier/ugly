@@ -124,6 +124,15 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
       suite: ['bindings', 'jvm'], depends: plugins + bindings + [binding_jar])
   endif
 
+  # A plain .NET program (dotnet test_binding.dll): the binding is Ugly.dll, which finds
+  # libugly through UGLY_LIBRARY. Teardown (Interop.Shutdown) prints the last test.
+  if test_plugins.contains('dotnet')
+    env = environment(test_env_vars)
+    env.set('UGLY_LIBRARY', libugly.full_path())
+    test('binding-dotnet', dotnet, args: [test_binding_dll.full_path()], protocol: 'tap', env: env,
+      suite: ['bindings', 'clr'], depends: plugins + bindings + [test_binding_dll])
+  endif
+
   # The Lua binding, once per Lua it was built for, under that Lua's own interpreter.
   foreach v, d : lua_deps
     lua_exe = find_program('lua' + v, required: false)
