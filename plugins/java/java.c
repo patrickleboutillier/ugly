@@ -43,10 +43,10 @@ static jrt *the_rt ;             /* one runtime at a time */
 
 /* Classes and members, global refs, looked up once. */
 static struct {
-	jclass Bridge, Foreign, ForeignException, NotFound, NotCapable, TypeMismatch, Throwable, Class ;
+	jclass Bridge, Foreign, ForeignException, NotFound, NotCapable, TypeMismatch, Throwable, Class, Object ;
 	jclass Boolean, Long, Integer, Short, Byte, Double, Float, Character, String, BigInteger, Number, ByteArray ;
 	jmethodID b_importClass, b_traits, b_typeName, b_getMember, b_setMember, b_memberNames, b_length,
-		b_getIndex, b_setIndex, b_deleteMember, b_splice, b_hint, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf ;
+		b_getIndex, b_setIndex, b_deleteMember, b_splice, b_hint, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf, b_kind ;
 	jmethodID f_of ;
 	jfieldID f_handle ;
 	jmethodID fe_new, fe_take, fe_payload ;
@@ -231,27 +231,34 @@ static ugly_status type_error(ugly_ctx *ctx, const char *to){
 }
 
 
+/* Bridge.kind's answers: what a Java value converts to. */
+enum { K_NULL, K_BOOL, K_INTEGRAL, K_BIG, K_FLOATING, K_CHAR, K_STRING, K_BYTES, K_OBJECT } ;
+
 static ugly_status to_val(JNIEnv *env, ugly_ctx *ctx, jobject o, ugly_kind want, ugly_val *out){
 	*out = ugly_null() ;
-	int integral = is(env, o, J.Long)||is(env, o, J.Integer)||is(env, o, J.Short)||is(env, o, J.Byte) ;
-	int floating = is(env, o, J.Double)||is(env, o, J.Float) ;
-	int big = is(env, o, J.BigInteger) ;
-	int text = is(env, o, J.String)||is(env, o, J.Character) ;
+	/* One call into Java, where the checks are cheap, rather than an IsInstanceOf per type. */
+	jint k = K_NULL ;
+	if (o != NULL){
+		k = (*env)->CallStaticIntMethod(env, J.Bridge, J.b_kind, o) ;
+		JCHECK(env, ctx) ;
+	}
+	int integral = (k == K_INTEGRAL), floating = (k == K_FLOATING), big = (k == K_BIG) ;
+	int text = (k == K_STRING)||(k == K_CHAR) ;
 
 	if (want == UGLY_ANY){
 		if (o == NULL) return UGLY_OK ;
-		else if (is(env, o, J.Boolean)) want = UGLY_BOOL ;
+		else if (k == K_BOOL) want = UGLY_BOOL ;
 		else if (integral||big) want = UGLY_INT ;
 		else if (floating) want = UGLY_DOUBLE ;
 		else if (text) want = UGLY_STRING ;
-		else if (is(env, o, J.ByteArray)) want = UGLY_BYTES ;
+		else if (k == K_BYTES) want = UGLY_BYTES ;
 		else want = UGLY_HANDLE ;
 	}
 	switch (want){
 		case UGLY_NULL:
 			return (o == NULL ? UGLY_OK : type_error(ctx, "null")) ;
 		case UGLY_BOOL:
-			if (! is(env, o, J.Boolean)) return type_error(ctx, "a boolean") ;
+			if (k != K_BOOL) return type_error(ctx, "a boolean") ;
 			*out = ugly_bool((*env)->CallBooleanMethod(env, o, J.bool_value)) ;
 			JCHECK(env, ctx) ;
 			return UGLY_OK ;
@@ -275,16 +282,16 @@ static ugly_status to_val(JNIEnv *env, ugly_ctx *ctx, jobject o, ugly_kind want,
 			JCHECK(env, ctx) ;
 			return UGLY_OK ;
 		case UGLY_STRING:
-			if (is(env, o, J.Character)){
+			if (k == K_CHAR){
 				jchar ch = (*env)->CallCharMethod(env, o, J.char_value) ;
 				JCHECK(env, ctx) ;
 				jstring js = (*env)->NewString(env, &ch, 1) ;
 				return string_val(env, ctx, js, out) ;
 			}
-			if (! is(env, o, J.String)) return type_error(ctx, "a string") ;
+			if (k != K_STRING) return type_error(ctx, "a string") ;
 			return string_val(env, ctx, (jstring)o, out) ;
 		case UGLY_BYTES: {
-			if (! is(env, o, J.ByteArray)) return type_error(ctx, "bytes") ;
+			if (k != K_BYTES) return type_error(ctx, "bytes") ;
 			jsize n = (*env)->GetArrayLength(env, (jbyteArray)o) ;
 			jbyte *b = (*env)->GetByteArrayElements(env, (jbyteArray)o, NULL) ;
 			ugly_status st = ugly_val_set_bytes(ctx, out, (const uint8_t *)b, (size_t)n) ;
@@ -292,7 +299,7 @@ static ugly_status to_val(JNIEnv *env, ugly_ctx *ctx, jobject o, ugly_kind want,
 			return st ;
 		}
 		case UGLY_HANDLE: {
-			if ((o == NULL)||is(env, o, J.Boolean)||integral||floating||big||text||is(env, o, J.ByteArray)){
+			if (k != K_OBJECT){
 				return type_error(ctx, "a handle") ;
 			}
 			ugly_handle h ;
@@ -368,9 +375,7 @@ static jobject to_java_raw(JNIEnv *env, ugly_ctx *ctx, ugly_val v, ugly_status *
 
 
 static jobjectArray to_java_array(JNIEnv *env, ugly_ctx *ctx, const ugly_val *args, size_t n, ugly_status *st){
-	jclass object = (*env)->FindClass(env, "java/lang/Object") ;
-	jobjectArray a = (*env)->NewObjectArray(env, (jsize)n, object, NULL) ;
-	(*env)->DeleteLocalRef(env, object) ;
+	jobjectArray a = (*env)->NewObjectArray(env, (jsize)n, J.Object, NULL) ;     /* FindClass here walked the stack on every call */
 	size_t i ;
 	*st = UGLY_OK ;
 	for (i = 0 ; i < n ; i++){
@@ -1295,6 +1300,7 @@ static int lookup(JNIEnv *env){
 	J.BigInteger = global_class(env, "java/math/BigInteger") ;
 	J.Number = global_class(env, "java/lang/Number") ;
 	J.ByteArray = global_class(env, "[B") ;
+	J.Object = global_class(env, "java/lang/Object") ;
 
 	const char *O = "Ljava/lang/Object;" ;
 	char sig[256] ;
@@ -1330,6 +1336,8 @@ static int lookup(JNIEnv *env){
 	J.b_releaseId = (*env)->GetStaticMethodID(env, J.Bridge, "releaseId", sig) ;
 	snprintf(sig, sizeof(sig), "(%s)Lugly/Foreign;", O) ;
 	J.b_foreignOf = (*env)->GetStaticMethodID(env, J.Bridge, "foreignOf", sig) ;
+	snprintf(sig, sizeof(sig), "(%s)I", O) ;
+	J.b_kind = (*env)->GetStaticMethodID(env, J.Bridge, "kind", sig) ;
 
 	J.f_of = (*env)->GetStaticMethodID(env, J.Foreign, "of", "(J)Lugly/Foreign;") ;
 	J.f_handle = (*env)->GetFieldID(env, J.Foreign, "handle", "J") ;

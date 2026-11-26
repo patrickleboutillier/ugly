@@ -119,12 +119,13 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 
 ## Engineering
 
-- [ ] **Java's call cost.** About 600 ns per call into Java, against 60 to
-  150 ns for the other languages (doc/benchmarks.md): each call crosses JNI
-  several times (a local frame, an argument array, boxing, reflection, the
-  result's `IsInstanceOf` checks). Profile it (perf), then cut crossings:
-  convert simple arguments and results on the Java side in one call, keep
-  a cached `Method` per callee.
+- [ ] **Java's call cost.** About 440 ns per call into Java (from 1 µs:
+  doc/benchmarks.md), against 60 to 160 ns for the other languages. Profiled
+  with perf: what's left is about five JNI calls into Java per call
+  (boxing, the call, classifying and unboxing the result, the argument
+  array), 30 to 60 ns each. Next: one Java entry point per call that boxes
+  and unboxes itself (primitive arguments in a long[]/double[]), or
+  Panama upcalls once JDK 22+ is the baseline.
 - [ ] **Python called from many threads.** Every call takes the GIL, which
   changes hands on every call when several threads call at once (about
   8 µs per call with 4 threads). Nothing UGLY can do short of a

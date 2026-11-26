@@ -157,9 +157,14 @@ found these, now fixed:
   lock, so calls into separate runtimes scale with threads (it was one
   global lock, and adding threads made the total slower). A plugin-wide
   lock on every call would put that back.
-- **Each crossing costs.** Java's remaining ~600 ns per call is JNI: a local
-  frame, an argument array, boxing, reflection, the result's type checks.
-  Fewer crossings per call is the lever.
+- **Each crossing costs.** Every JNI call into Java costs 30 to 60 ns of VM
+  transition; Java's ~440 ns per call is about five of them. Count them
+  with perf (`linux-tools-generic`; JIT frames need
+  `JAVA_TOOL_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:+DumpPerfMapAtExit"`).
+  Classify a value with one call into the language, not a check per type
+  (Java's eleven `IsInstanceOf` were 11% of a call), and never look things
+  up by name on the call path: JNI's `FindClass` walks the Java stack to
+  find its caller's class loader (12% of a call, until it was cached).
 - **Measure honestly.** Let JITs warm up (the benchmark's growing runs do),
   and turn debug checks off: the JVM's `-Xcheck:jni`, which the tests turn
   on, made each call into Java about 40% slower.
