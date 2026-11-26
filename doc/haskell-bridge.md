@@ -1,7 +1,8 @@
 # The Haskell bridge: a plan
 
 Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
-export tables and calls, and module libraries are done). Once it works,
+export tables and calls, module libraries, and foreign values in Haskell
+are done). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -309,19 +310,48 @@ So Haskell is strict in the way Python is, not lenient like Perl.
 
 ### Foreign values in Haskell
 
-- A foreign value is a `Value` (`Ugly.Value`): a handle, released by a
-  finalizer, which may run on any thread; the core queues that release.
-- Operations on it are in `IO`: `get`, `call`, `invoke`, `index`.
+Built (`Ugly.Types`, `Ugly.Marshal`, and the module `Ugly` for Haskell
+code), and tested by `haskell-foreign` with values whose home is the C host
+(callables, a core list and map).
+
+- **A foreign value is a `Foreign`**, or a `Value` holding one (`VForeign`):
+  an owned handle (the borrowed argument, duplicated when the call takes
+  it), released when Haskell drops it. The finalizer is a Haskell one
+  (`Foreign.Concurrent`), run on the RTS's finalizer thread, never inside
+  the GC, since a release can run plugin code; off the value's home thread,
+  the core defers the release to it.
+- **An export takes one** as a `Foreign` parameter (cost 0), a `Value`
+  (cost 4), or `[Value]` for a sequence: its length when the call takes it,
+  each element when it's forced. Going out again it's its own handle
+  (rule 5: `identity(x)` is `x`).
+- **Operations on it are in `IO`** (module `Ugly`): `call`, `invoke`,
+  `get`, `index`, `size`, `members`, `typeOf`, with `toValue` and
+  `fromValue` (the argument rules, a refusal thrown as a `TypeError`). They
+  go through the core on the calling thread's ctx, so a runtime bound to
+  another thread refuses them (`WRONG_THREAD`), as it should. A result
+  whose home is the current Haskell runtime is its box; the current
+  runtime is per OS thread, set by each entry point (`glue.c`), since each
+  call from C runs as a bound thread on its caller's OS thread.
 - **A foreign callable passed where a Haskell function type is expected**
-  (`transpose`'s `Interval -> Note -> Note`) becomes a pure Haskell
-  function, through `unsafePerformIO`. That's the FFI's own precedent: a
-  `foreign import` of a C function may be declared pure. Its errors are
-  thrown from pure code, as `error` would be.
+  (`transpose`'s `Interval -> Note -> Note`) becomes a Haskell function
+  (`Collect`): it gathers its arguments, then makes one call with all of
+  them, so `f 3 4` is `f(3, 4)`, not `f(3)(4)`. Its result converts by
+  `FromUgly`. It's pure, through `unsafePerformIO`, unless its result is
+  in `IO`: that's the FFI's own precedent, as a `foreign import` of a C
+  function may be declared pure. A pure one is called when its result is
+  forced, and its errors are thrown from there, as `error` would be. A
+  lazy result keeps it: `map f [1, 2, 3]` returned as a list calls `f`
+  when an element is read, after the call that passed it has returned.
+- In an export table, a function-typed parameter needs the other way
+  round: its parameters `ToUgly`, its result `FromUgly` (`usableType`).
 - Rule 5: a Haskell value coming home, such as `above` passed back to
   `transpose`, resolves to the original closure, with no conversion.
 - Every call out uses a `safe` foreign import, which releases the RTS
   capability. So a callback into Haskell works, from the same thread or
   another one.
+- A Haskell value passed out from Haskell code (a box among a call's
+  arguments) is exported to the current runtime for the call. Code with no
+  current runtime (a thread Haskell forked) can't pass one.
 
 ### Laziness and errors
 
@@ -335,10 +365,18 @@ So Haskell is strict in the way Python is, not lenient like Perl.
 - **Haskell exceptions out**: type is the exception's type name
   (`ErrorCall`, `ArithException`), message is `displayException`, and the
   payload is the boxed `SomeException`. Coming home, it's rethrown with
-  `throwIO`, the same value (rule 7).
-- **Foreign errors in**: a `ForeignError` exception that owns the taken
-  `ugly_error`. Haskell can `catch` it; if it escapes, the plugin
-  recognises it and restores the original error.
+  `throwIO`, the same value (rule 7): an `ErrorCall` that went out through
+  a Python callback is caught in Haskell as that `ErrorCall` (built).
+- **Foreign errors in** (built): any failed operation, an exception or not
+  (`NOT_FOUND`, `WRONG_THREAD`), is a `ForeignError` exception that owns the
+  taken `ugly_error`, with its status, language, type, message and payload
+  copied for Haskell. Haskell can `catch` it; if it escapes, the plugin
+  restores the original error, unchanged. Thrown again after that (Haskell
+  kept it), it's raised from its copies. A caught one is freed by a weak
+  reference's finalizer.
+- **A callback's result that doesn't convert** is a `TypeError` thrown
+  where it's forced: `UGLY_ERR_RAISED` if it escapes, not `UGLY_ERR_TYPE`,
+  as it happened inside Haskell code.
 - `StackOverflow` and `HeapOverflow` are ordinary asynchronous exceptions,
   and are caught like the rest. Running out of memory with no `-M` limit
   goes through the RTS's `outOfHeapHook`, which exits; that's a pitfall to
@@ -401,9 +439,9 @@ program's RTS wasn't started with `keep_cafs`, so attaching must call
    overloads; `invoke` with the receiver last.
 4. **Module libraries** (done): building one against the `ugly` package (a
    package database in the build tree), and `import` from the module path,
-   replacing the built-in modules. Next: foreign values in Haskell
-   (proxies, callbacks, foreign errors), then `hint` and `want` for
-   overloads.
+   replacing the built-in modules. Then foreign values in Haskell (done:
+   foreign values, callbacks, foreign errors). Next: `hint` and `want`
+   for overloads.
 5. **The fixture** (`tests/haskell/Conformance.hs`), then the protocol until
    the suite and pairwise pass.
 6. **music-diatonic** as an example, from Python and Lua.

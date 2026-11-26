@@ -1,4 +1,4 @@
-{-# LANGUAGE ExistentialQuantification, FlexibleContexts, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
 -- MonoLocalBinds: without it, generalizing a local 'call' settles its
 -- Result (a -> b) constraint with the overlappable instance, too early.
 {-# LANGUAGE MonoLocalBinds #-}
@@ -18,19 +18,24 @@
 -- cost, so that a call to an overloaded (polymorphic) function picks the
 -- instantiation its arguments fit best.
 --
+-- A foreign value is a 'Foreign' (Ugly.Types), or a 'Value' holding one. A
+-- foreign callable where a Haskell function is expected becomes one
+-- ('Collect'): pure, through unsafePerformIO, as a foreign import of a C
+-- function may be declared pure, unless its result is in IO.
+--
 -- The choices are doc/haskell-bridge.md's "Decided": integers out of range
 -- are refused, never wrapped; Maybe is flattened unless Just x is itself
 -- null.
 module Ugly.Value
   ( Value (..), Box (..), Info (..), Members (..), Elems (..), Arg (..), Conv
-  , ToUgly (..), FromUgly (..), Result (..)
+  , Foreign, ForeignError (..)
+  , ToUgly (..), FromUgly (..), Result (..), Collect (..)
   , info, boxShow, boxOpaque, boxWith, moduleBox, overloaded
-  , typeName, validText, describeArg, home
+  , typeName, validText, describeArg, home, fromValue
   ) where
 
 import Control.Exception (evaluate)
 import qualified Data.ByteString as B
-import Data.Char (ord)
 import Data.Int
 import Data.List (intercalate, sortOn)
 import qualified Data.Map as M
@@ -38,61 +43,10 @@ import qualified Data.Text as T
 import Data.Typeable
 import Data.Word
 import Numeric.Natural (Natural)
+import System.IO.Unsafe (unsafePerformIO)
 
--- | What crosses: a primitive, by value, or a box, by handle.
-data Value
-  = VNull
-  | VBool !Bool
-  | VInt !Int64
-  | VDouble !Double
-  | VString !T.Text
-  | VBytes !B.ByteString
-  | VBox !Box
-
--- | A Haskell value, its identity (the value itself), and what can be asked
--- of it. 'Typeable', so that it can be cast back when it comes home.
-data Box = forall a. Typeable a => Box a Info
-
-data Info = Info
-  { infoType :: String              -- ^ describe's type name: "Note", "[Int]", "module"
-  , infoShow :: Maybe String        -- ^ its text, for want = string (lazy: forced when asked)
-  , infoMembers :: Maybe Members    -- ^ MEMBERS
-  , infoElems :: Maybe Elems        -- ^ ELEMENTS
-  , infoCall :: Maybe ([Arg] -> Conv (IO Value))   -- ^ CALLABLE: match the arguments, then run
-  , infoMethods :: Maybe (String -> Maybe Value)   -- ^ for invoke: functions taking this value last
-  }
-
--- | A box with nothing but a type name.
-info :: String -> Info
-info ty = Info ty Nothing Nothing Nothing Nothing Nothing
-
-data Members = Members
-  { memberNames :: [String]
-  , memberGet :: String -> Maybe Value
-  }
-
--- | Read-only elements. The length is lazy: an infinite list has none, but
--- its elements can still be read.
-data Elems = Elems
-  { elemsLength :: Int
-  , elemsIndex :: Int -> Maybe Value    -- ^ Nothing outside the elements
-  }
-
--- | An argument, as passed: a primitive, or a handle. A handle whose home is
--- this runtime arrives as its box.
-data Arg
-  = ANull
-  | ABool Bool
-  | AInt Int64
-  | ADouble Double
-  | AString T.Text
-  | ABytes B.ByteString
-  | AHome Box
-  | AForeign Word64    -- ^ a borrowed handle from another runtime
-
--- | A conversion: why not, or its cost (0 is exact) and how. The "how" runs
--- only for the overload that's chosen.
-type Conv a = Either String (Int, a)
+import Ugly.Marshal (foreignCall, foreignIndex, foreignLength, throwConv, validText)
+import Ugly.Types
 
 -- | How a Haskell type crosses out. Every type is 'Typeable', for its name.
 class Typeable a => ToUgly a where
@@ -170,10 +124,6 @@ overloaded ty candidates = VBox (Box candidates (info ty) { infoCall = Just call
           | otherwise -> Left ("ambiguous: these instances of " ++ ty ++ " take these arguments equally well:"
                                ++ concat [ "\n  " ++ t | (t, (c', _)) <- fits, c' == c ])
 
--- | Text that is valid Unicode. A Haskell 'Char' can be a lone surrogate,
--- which UTF-8 can't encode (and Data.Text would silently replace).
-validText :: String -> Bool
-validText = all (\c -> ord c < 0xD800 || ord c > 0xDFFF)
 
 
 -- Out.
@@ -301,6 +251,9 @@ instance ToUgly v => ToUgly (M.Map String v) where
 instance ToUgly Value where
   toUgly = id
 
+instance ToUgly Foreign where
+  toUgly = VForeign
+
 -- | A function is callable: arguments are matched against its parameter
 -- types, then applied. Fewer than its arity give a partial application.
 instance (Typeable a, Typeable b, FromUgly a, Result b) => ToUgly (a -> b) where
@@ -420,19 +373,33 @@ instance FromUgly a => FromUgly (Maybe a) where
 instance {-# OVERLAPPABLE #-} Typeable a => FromUgly [a]
 
 -- | [Value] (what an unconstrained [a] becomes) takes any sequence that
--- comes home, read lazily through its elements.
+-- comes home, read lazily through its elements, and any foreign value,
+-- read through its elements too: its length when the call takes it, each
+-- element when it's forced.
 instance {-# OVERLAPPING #-} FromUgly [Value] where
   fromUgly arg@(AHome (Box _ i)) = case (home arg, infoElems i) of
     (Right r, _) -> Right r
     (_, Just es) -> Right (4, return (walk es 0))
     _ -> Left (describeArg arg ++ " isn't a sequence")
     where walk es n = maybe [] (: walk es (n + 1)) (elemsIndex es n)
+  fromUgly (AForeign take') = Right (4, do
+    f <- take'
+    n <- foreignLength f
+    return [ unsafePerformIO (foreignIndex f i) | i <- [0 .. n - 1] ])
   fromUgly arg = home arg
 instance (Typeable a, Typeable b) => FromUgly (a, b)
 instance (Typeable a, Typeable b, Typeable c) => FromUgly (a, b, c)
 instance Typeable v => FromUgly (M.Map String v)
--- | A function: a Haskell function coming home (foreign callables come later).
-instance (Typeable a, Typeable b) => FromUgly (a -> b)
+-- | A function: a Haskell function coming home, or a foreign callable,
+-- which becomes a Haskell function ('Collect').
+instance (Typeable a, Typeable b, Collect (a -> b)) => FromUgly (a -> b) where
+  fromUgly (AForeign take') = Right (1, (\f -> collect f []) <$> take')
+  fromUgly arg = home arg
+
+-- | A foreign value as itself.
+instance FromUgly Foreign where
+  fromUgly (AForeign take') = Right (0, take')
+  fromUgly arg = home arg
 
 -- | Value takes anything, for a type variable with no constraint.
 instance FromUgly Value where
@@ -444,5 +411,41 @@ instance FromUgly Value where
     AString t -> ok (VString t)
     ABytes b -> ok (VBytes b)
     AHome b -> ok (VBox b)
-    AForeign _ -> Left "foreign values aren't supported in Haskell yet"
+    AForeign take' -> Right (4, VForeign <$> take')
     where ok v = Right (4, return v)
+
+
+-- Foreign callables as Haskell functions.
+
+-- | A Haskell function of type r over a foreign callable: it gathers its
+-- arguments, then makes one call with all of them, its result converted by
+-- 'FromUgly' (a refusal is a TypeError). Pure unless the result is in IO:
+-- a pure one is called when its result is forced, and its errors are thrown
+-- from there, as 'error' would be.
+class Typeable r => Collect r where
+  collect :: Foreign -> [Value] -> r
+
+instance {-# OVERLAPPING #-} (Typeable a, Typeable b, ToUgly a, Collect b) => Collect (a -> b) where
+  collect f acc x = collect f (acc ++ [toUgly x])
+
+instance {-# OVERLAPPING #-} (Typeable a, FromUgly a) => Collect (IO a) where
+  collect f acc = foreignCall f acc >>= fromValue
+
+instance {-# OVERLAPPABLE #-} (Typeable r, FromUgly r) => Collect r where
+  collect f acc = unsafePerformIO (foreignCall f acc >>= fromValue)
+  {-# NOINLINE collect #-}
+
+-- | A value converted to a Haskell type, by the rules for an argument.
+-- A refusal is thrown (a TypeError).
+fromValue :: FromUgly a => Value -> IO a
+fromValue v = either throwConv snd (fromUgly arg)
+  where
+    arg = case v of
+      VNull -> ANull
+      VBool b -> ABool b
+      VInt i -> AInt i
+      VDouble d -> ADouble d
+      VString t -> AString t
+      VBytes b -> ABytes b
+      VBox b -> AHome b
+      VForeign f -> AForeign (return f)

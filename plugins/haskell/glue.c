@@ -1,14 +1,15 @@
 /*
  * C helpers for the Haskell side, compiled by ghc into libugly_hs.so: they
- * read and write ugly_val, so the Haskell code never depends on its layout.
- * The status and kind values Haskell mirrors (Ugly.Native) are pinned here.
+ * read and write ugly_val, so the Haskell code never depends on its layout,
+ * and keep the Haskell runtime of the current entry. The status and kind
+ * values Haskell mirrors (Ugly.Native) are pinned here.
  */
 #include <stdlib.h>
 
 #include "ugly_plugin.h"
 
 _Static_assert(UGLY_OK == 0 && UGLY_ERR_RAISED == 1 && UGLY_ERR_TYPE == 2 && UGLY_ERR_NOT_FOUND == 3
-	&& UGLY_ERR_NOT_CAPABLE == 4 && UGLY_ERR_NOT_SUPPORTED == 9 && UGLY_ERR_NOT_IMPLEMENTED == 10
+	&& UGLY_ERR_NOT_CAPABLE == 4 && UGLY_ERR_STALE_HANDLE == 5 && UGLY_ERR_NOT_SUPPORTED == 9 && UGLY_ERR_NOT_IMPLEMENTED == 10
 	&& UGLY_ERR_NOMEM == 12 && UGLY_ERR_INTERNAL == 13, "Ugly.Native's statuses") ;
 _Static_assert(UGLY_ANY == 0 && UGLY_NULL == 1 && UGLY_BOOL == 2 && UGLY_INT == 3 && UGLY_DOUBLE == 4
 	&& UGLY_STRING == 5 && UGLY_BYTES == 6 && UGLY_HANDLE == 7, "Ugly.Native's kinds") ;
@@ -85,4 +86,54 @@ size_t ugly_hs_len(const ugly_val *v){
 
 ugly_handle ugly_hs_handle(const ugly_val *v){
 	return v->as.h ;
+}
+
+
+/*
+ * Haskell calling out (Ugly.Marshal). Each entry point from the core runs as
+ * a bound thread on the caller's OS thread, so the Haskell runtime it runs
+ * for is a per-thread value: entries set it, nested ones restore it. Code
+ * running outside any entry (a thread of Haskell's own) has none, and can't
+ * turn a handle into a box of a runtime.
+ */
+static _Thread_local ugly_rt *current_rt ;
+
+ugly_rt *ugly_hs_enter(ugly_rt *rt){
+	ugly_rt *before = current_rt ;
+	current_rt = rt ;
+	return before ;
+}
+
+void ugly_hs_leave(ugly_rt *before){
+	current_rt = before ;
+}
+
+ugly_rt *ugly_hs_current_rt(void){
+	return current_rt ;
+}
+
+/* This thread's ctx: the caller's, inside an entry; otherwise one of the thread's own. */
+ugly_ctx *ugly_hs_ctx(void){
+	ugly_ctx *ctx = ugly_current_ctx() ;
+	if ((ctx == NULL)&&(ugly_ctx_thread(&ctx) != UGLY_OK)){
+		return NULL ;
+	}
+	return ctx ;
+}
+
+size_t ugly_hs_val_size(void){
+	return sizeof(ugly_val) ;
+}
+
+ugly_val *ugly_hs_val_at(ugly_val *vals, size_t i){
+	return &vals[i] ;
+}
+
+/* Borrowed: for arguments, valid during the call. */
+void ugly_hs_set_string(ugly_val *v, const char *p, size_t len){
+	*v = ugly_str(p, len) ;
+}
+
+void ugly_hs_set_bytes(ugly_val *v, const uint8_t *p, size_t len){
+	*v = ugly_bytes(p, len) ;
 }

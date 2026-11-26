@@ -224,14 +224,22 @@ holds listed = go (8 :: Int)
 
 -- | Whether a monomorphic function type can be called: its parameters
 -- FromUgly, its result (an IO's result) ToUgly. A parameter that is itself
--- a function only needs Typeable.
+-- a function (a callback: a Haskell function coming home, or a foreign
+-- callable) the other way round: its parameters ToUgly, its result FromUgly.
 usableType :: [Name] -> Type -> Q Bool
 usableType listed t = do
   let (params, result) = arrows t
-  ps <- mapM (\p -> if isArrow p then return True else holds listed (AppT (ConT ''FromUgly) p)) params
+  ps <- mapM param params
   r <- holds listed (AppT (ConT ''ToUgly) (unIO result))
   return (and ps && r)
   where
+    param p
+      | isArrow p = do
+          let (cps, cr) = arrows p
+          as <- mapM (holds listed . AppT (ConT ''ToUgly)) cps
+          b <- holds listed (AppT (ConT ''FromUgly) (unIO cr))
+          return (and as && b)
+      | otherwise = holds listed (AppT (ConT ''FromUgly) p)
     arrows (AppT (AppT ArrowT a) b) = let (ps, r) = arrows b in (a : ps, r)
     arrows x = ([], x)
     isArrow (AppT (AppT ArrowT _) _) = True

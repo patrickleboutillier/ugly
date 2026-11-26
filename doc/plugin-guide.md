@@ -93,6 +93,17 @@ lines of C, with no interpreter in the way: read it first.
   proxy cache releases outside its lock.
 - Threads your language starts need a ctx of their own:
   `ugly_ctx_thread` makes one, deleted when the thread ends.
+- **Release from a finalizer thread, not from inside the GC.** A release
+  can run plugin code synchronously (on the value's home thread), which
+  may call back into your runtime. GHC's C finalizers run inside the GC,
+  so Haskell's foreign values use Haskell finalizers (`Foreign.Concurrent`),
+  which run on a thread of their own; `ugly_release` takes a NULL ctx
+  there. Haskell taught this.
+- **"The current runtime" may be per OS thread.** A plugin whose code
+  runs outside its entry points (Haskell's lazy thunks, forced later)
+  can't keep the runtime in its own state: Haskell keeps it in a C
+  thread-local, set and restored by every entry point, and only resolves
+  handles when there is one.
 - **Test it under ThreadSanitizer** as well as helgrind: helgrind doesn't
   model atomics, TSan does. On recent kernels TSan needs address
   randomization off: `meson setup build-tsan -Db_sanitize=thread`, then

@@ -39,8 +39,8 @@ int main(void){
 	ugly_release(ctx, h) ;
 	ok(error_is(ugly_rt_import(ctx, rt, "No.Such", &h), UGLY_ERR_NOT_FOUND, "ModuleNotFound", "No.Such"),
 		"import No.Such: NOT_FOUND, ModuleNotFound") ;
-	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 36),
-		"member_names: the 36 exports") ;
+	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 49),
+		"member_names: the 49 exports") ;
 	ok((ugly_get_index(ctx, h, 2, UGLY_ANY, &v) == UGLY_OK)&&is_string(v, "answer"), "in order: answer is third") ;
 	ugly_val_release(ctx, &v) ;
 	ugly_release(ctx, h) ;
