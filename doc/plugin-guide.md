@@ -189,6 +189,12 @@ found these, now fixed:
   put it back. The fork fix's HAProxy test passed without it (HAProxy's
   master has one thread); the C test with a busy Python thread failed 20
   out of 20.
+- **A runtime that reserves a huge address range** defeats valgrind's
+  `--track-origins`: GHC's RTS reserves 1 TB at startup, and even a plain
+  Haskell `main = print 1` never finishes under it. Without origins it runs
+  in seconds, so suite `ghc` has its own setup (`valgrindghc`) with the
+  same checks minus origins. Bisect valgrind's flags before blaming the
+  plugin. Haskell taught this.
 - **Children under valgrind**: a forked child that exits is leak-checked on
   the heap it inherited, which says nothing. Have it report through a pipe
   and end with `SIGKILL`.

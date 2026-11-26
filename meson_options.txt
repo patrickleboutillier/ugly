@@ -12,3 +12,5 @@ option('java', type: 'feature', value: 'auto',
   description: 'The Java plugin (needs a JDK: javac, jni.h, libjvm.so)')
 option('dotnet', type: 'feature', value: 'auto',
   description: 'The .NET plugin (needs a .NET 10 SDK: dotnet, with its nethost pack)')
+option('haskell', type: 'feature', value: 'auto',
+  description: 'The Haskell plugin (needs GHC 8.8+ with shared libraries and the threaded RTS: ghc)')

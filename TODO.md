@@ -97,17 +97,17 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   doesn't state yet.
 - [ ] **Julia** (`jl_init`): numerical work, the same once-per-process shape
   as Python.
-- [ ] **Haskell**: possible, but awkward, and the language that would test
-  the contract's assumptions most. GHC compiles, so a plugin would load a
-  compiled bridge: the library's functions registered in a table, with
-  their types and argument conversions (`foreign export`, `StablePtr`,
-  `Data.Dynamic`), values as handles, `show` as a string. Values are
-  immutable, functions curried, type classes polymorphic: the essay's
-  "types flow from the static side", where `want` and hints carry real
-  weight. The test case is the author's own `music-diatonic` (Hackage
-  0.1.2: notes, intervals, chords, keys, scales, degrees, harmonies),
-  richer than its JS port; its sources wait in `stuff/haskell/` (local,
-  re-fetch from Hackage if missing).
+- [ ] **Haskell** (in progress): the language that tests the contract's
+  assumptions most. The plan is [doc/haskell-bridge.md](doc/haskell-bridge.md):
+  GHC's RTS in the host's process, modules as compiled export tables that
+  Template Haskell generates, polymorphic functions expanded into one
+  overload per instance and chosen at the call by argument types, `hint`
+  and `want`. The skeleton is in `plugins/haskell/` (the RTS starts,
+  runtimes come and go from any thread, every operation is refused); next
+  are values and boxes, then export tables. The test case is the author's
+  own `music-diatonic` (Hackage 0.1.2), whose sources wait in
+  `stuff/haskell/` with the spikes (local, re-fetch from Hackage if
+  missing).
 - [ ] **Bindings for compiled languages**, with no plugin: a safe Rust crate,
   a C++ header, Go and Zig wrappers over `ugly.h`. Cheap, and they bring
   every embedded language to programs in those languages.
