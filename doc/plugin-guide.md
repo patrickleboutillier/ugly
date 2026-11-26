@@ -231,3 +231,18 @@ found these, now fixed:
 - **Pairwise finds what the suite can't**: two VMs' signal handlers, two
   runtimes' errors crossing. The JVM's `-Xcheck:jni` found perl resetting
   SIGFPE in `pairwise-java-perl5`.
+- **`finalized()` must be deterministic.** A runtime whose finalizers run
+  later, on a thread of their own (GHC's), can't count them right after a
+  collection. Count weak pointers the collection found dead instead
+  (`deRefWeak` is `Nothing` as soon as the GC has run). Haskell's fixture
+  does.
+- **An explicit `--suite` overrides a setup's `exclude_suites`**: `meson
+  test --setup valgrindghc --suite ghc` ran the Haskell–Java pairs under
+  valgrind. Name the exclusions too (`--no-suite jvm --no-suite clr`).
+- **Re-entry costs C stack, and the core's `UGLY_MAX_DEPTH` (1000) is
+  only the core's limit.** A runtime that runs on its caller's C stack
+  (GHC's scheduler, about 17 KB a level) overflows 8 MB first: the
+  callbacks group's runaway recursion crashed. Measure what's left
+  (`pthread_getattr_np`) and refuse a call with the language's own error
+  before it's gone, as Lua, QuickJS and .NET do with their own limits.
+  Haskell taught this.

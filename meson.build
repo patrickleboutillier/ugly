@@ -67,9 +67,11 @@ subdir('examples')
 # GHC's RTS reserves 1 TB of address space at startup, and --track-origins
 # doesn't get through that (a Haskell "main = print 1" doesn't finish), so
 # suite 'ghc' (anything that starts the RTS) has its own setup, the same
-# without origins: meson test --setup valgrindghc --suite ghc. The RTS's
-# scheduler synchronizes in ways helgrind doesn't model, so 'ghc' is left out
-# of helgrind.
+# without origins: meson test --setup valgrindghc --suite ghc --no-suite jvm
+# --no-suite clr (an explicit --suite overrides the setup's exclusions, and
+# Haskell's pairs with Java and C# are in 'ghc' too). The RTS's scheduler
+# synchronizes in ways helgrind doesn't model, so 'ghc' is left out of
+# helgrind.
 valgrind = find_program('valgrind', required: false)
 if valgrind.found()
   memcheck = [valgrind,

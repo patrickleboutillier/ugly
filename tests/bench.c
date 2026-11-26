@@ -24,7 +24,7 @@
 
 #include "conformance.h"
 
-static const char *const all[] = { "mock", "lua", "python", "js", "perl5", "java", "dotnet" } ;
+static const char *const all[] = { "mock", "lua", "python", "js", "perl5", "java", "dotnet", "haskell" } ;
 #define NALL (sizeof(all) / sizeof(all[0]))
 
 typedef struct lang {

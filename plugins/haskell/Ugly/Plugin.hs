@@ -18,7 +18,6 @@
 -- error escaping goes on unchanged.
 module Ugly.Plugin () where
 
-import Control.Exception (evaluate)
 import qualified Data.ByteString.Unsafe as BU
 import Data.Int
 import Data.IORef
@@ -27,6 +26,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Word
 import Foreign.C.String
 import Foreign.C.Types
+import Foreign.Marshal.Alloc (allocaBytes)
 import Foreign.Marshal.Array
 import Foreign.Ptr
 import Foreign.StablePtr
@@ -38,7 +38,7 @@ import Ugly.Value
 
 -- | haskell.c's BRIDGE_ABI: the two sides must come from the same build.
 bridgeAbi :: CInt
-bridgeAbi = 5
+bridgeAbi = 6
 
 -- | A runtime. Modules are libraries, loaded once per process (haskell.c),
 -- so a runtime has no state yet.
@@ -67,7 +67,8 @@ hsDescribe :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Word32 -> Ptr Val -> IO Status
 hsDescribe ctx rt ref traits typeName' = guarded ctx rt $ do
   Box _ i <- deref ref
   let has f bit = maybe 0 (const bit) (f i)
-  poke traits (has infoMembers traitMembers + has infoElems traitElements + has infoCall traitCallable)
+  poke traits (has infoMembers traitMembers + has infoElems traitElements + has infoCall traitCallable
+    + (if infoNew i then traitInstantiable else 0))
   setText ctx typeName' (T.pack (infoType i))
 
 -- | A box's members, or a refusal.
@@ -88,13 +89,30 @@ withElems ctx rt ref k = do
 hsGetMember :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Kind -> Ptr Val -> IO Status
 hsGetMember ctx rt ref cname want out = guarded ctx rt $ withMembers ctx rt ref $ \ms -> do
   name <- peekUtf8 cname
-  case memberGet ms name of
+  r <- memberGet ms name
+  case r of
     Just v -> put ctx rt want v out
     Nothing -> failWith ctx rt errNotFound "NotInScope" ("Variable not in scope: " ++ name)
 
+-- | Sets a member of a mutable value. An immutable one refuses
+-- (NOT_CAPABLE); one whose members are fixed has no new ones (NOT_FOUND).
+hsSetMember :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> IO Status
+hsSetMember ctx rt ref cname v = guarded ctx rt $ withMembers ctx rt ref $ \ms -> do
+  name <- peekUtf8 cname
+  case memberSet ms of
+    Nothing -> failWith ctx rt errNotCapable "TypeError" "Haskell values are immutable"
+    Just set -> case set name of
+      Nothing -> failWith ctx rt errNotFound "NotInScope" ("no member " ++ name ++ " to set (its members are fixed)")
+      Just conv -> do
+        arg <- readArg ctx rt v
+        case arg >>= conv of
+          Left why -> failWith ctx rt errType "TypeError" (name ++ ": " ++ why)
+          Right (_, run) -> run >> return ok
+
 hsMemberNames :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Handle -> IO Status
 hsMemberNames ctx rt ref out = guarded ctx rt $ withMembers ctx rt ref $ \ms -> do
-  let encoded = map (TE.encodeUtf8 . T.pack) (memberNames ms)
+  names <- memberNames ms
+  let encoded = map (TE.encodeUtf8 . T.pack) names
       n = length encoded
   allocaArray n $ \ptrs -> allocaArray n $ \lens ->
     let go _ [] = c_names ctx ptrs lens (fromIntegral n) out
@@ -106,15 +124,53 @@ hsMemberNames ctx rt ref out = guarded ctx rt $ withMembers ctx rt ref $ \ms -> 
 
 hsLength :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Int64 -> IO Status
 hsLength ctx rt ref out = guarded ctx rt $ withElems ctx rt ref $ \es -> do
-  n <- evaluate (elemsLength es)
+  n <- elemsLength es
   poke out (fromIntegral n)
   return ok
 
 hsGetIndex :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Kind -> Ptr Val -> IO Status
-hsGetIndex ctx rt ref i want out = guarded ctx rt $ withElems ctx rt ref $ \es ->
-  case elemsIndex es (fromIntegral i) of
+hsGetIndex ctx rt ref i want out = guarded ctx rt $ withElems ctx rt ref $ \es -> do
+  r <- elemsIndex es (fromIntegral i)
+  case r of
     Just v -> put ctx rt want v out
     Nothing -> failWith ctx rt errNotFound "ArrayException" "index out of range"
+
+-- | Splices a mutable sequence (the core has checked the range).
+splice :: Ptr Ctx -> Ptr Rt -> Elems -> Int -> Int -> Ptr Val -> Int -> IO Status
+splice ctx rt es off n ins count = case elemsSplice es of
+  Nothing -> failWith ctx rt errNotCapable "TypeError" "Haskell values are immutable"
+  Just sp -> do
+    args <- sequence <$> mapM (\i -> c_arg ins (fromIntegral i) >>= readArg ctx rt) [0 .. count - 1]
+    case args >>= sp off n of
+      Left why -> failWith ctx rt errType "TypeError" why
+      Right (_, run) -> run >> return ok
+
+hsSplice :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Int64 -> Ptr Val -> CSize -> IO Status
+hsSplice ctx rt ref off n ins count = guarded ctx rt $ withElems ctx rt ref $ \es ->
+  splice ctx rt es (fromIntegral off) (fromIntegral n) ins (fromIntegral count)
+
+-- | set_index: replaces element i, or appends at the length.
+hsSetIndex :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Ptr Val -> IO Status
+hsSetIndex ctx rt ref i v = guarded ctx rt $ withElems ctx rt ref $ \es -> do
+  n <- elemsLength es
+  let i' = fromIntegral i
+  if i' < 0 || i' > n
+    then failWith ctx rt errNotFound "ArrayException" "index out of range"
+    else splice ctx rt es i' (if i' == n then 0 else 1) v 1
+
+-- | new: calls a constructor.
+hsNewInstance :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Ptr Handle -> IO Status
+hsNewInstance ctx rt ref argv nargs out = guarded ctx rt $ do
+  b@(Box _ i) <- deref ref
+  decoded <- decodeArgs ctx rt argv nargs
+  if not (infoNew i)
+    then failWith ctx rt errNotCapable "TypeError" ("a value of type " ++ infoType i ++ " isn't a constructor")
+    else case decoded of
+      Left why -> failWith ctx rt errType "TypeError" why
+      Right args -> allocaBytes' $ \val -> do
+        st <- callValue' ctx rt (infoType i) (VBox b) args plainCall kHandle val
+        if st /= ok then return st else c_handle val >>= poke out >> return ok
+  where allocaBytes' k = c_val_size >>= \sz -> allocaBytes (fromIntegral sz) (\p -> c_set_null p >> k p)
 
 -- | The arguments, decoded (Ugly.Marshal.readArg).
 decodeArgs :: Ptr Ctx -> Ptr Rt -> Ptr Val -> CSize -> IO (Either String [Arg])
@@ -132,8 +188,8 @@ callOf want chint = do
       , (kString, WantString), (kBytes, WantBytes), (kHandle, WantHandle) ])
 
 -- | Calls what v is, with these arguments.
-callValue :: Ptr Ctx -> Ptr Rt -> String -> Value -> [Arg] -> Call -> Kind -> Ptr Val -> IO Status
-callValue ctx rt name v args call want out = case v of
+callValue' :: Ptr Ctx -> Ptr Rt -> String -> Value -> [Arg] -> Call -> Kind -> Ptr Val -> IO Status
+callValue' ctx rt name v args call want out = case v of
   VBox (Box _ i) | Just f <- infoCall i -> case f call args of
     Left (Refused why) -> failWith ctx rt errType "TypeError" (name ++ ": " ++ why)
     Left (NoInstance why) -> failWith ctx rt errNotFound "TypeError" (name ++ ": " ++ why)
@@ -147,7 +203,7 @@ hsCall ctx rt ref argv nargs hint want out = guarded ctx rt $ do
   call <- callOf want hint
   case decoded of
     Left why -> failWith ctx rt errType "TypeError" why
-    Right args -> callValue ctx rt ("a value of type " ++ infoType i) (VBox b) args call want out
+    Right args -> callValue' ctx rt ("a value of type " ++ infoType i) (VBox b) args call want out
 
 -- | A method call. On a module (anything with members), its function, with
 -- no receiver. On any other box, a function from the module that exported
@@ -160,9 +216,11 @@ hsInvoke ctx rt ref cname argv nargs hint want out = guarded ctx rt $ do
   call <- callOf want hint
   case decoded of
     Left why -> failWith ctx rt errType "TypeError" why
-    Right args -> case (infoMembers i >>= (`memberGet` name), infoMethods i >>= ($ name)) of
-      (Just f, _) -> callValue ctx rt name f args call want out
-      (_, Just f) -> callValue ctx rt name f (args ++ [AHome b]) call want out
+    Right args -> do
+     member <- maybe (return Nothing) (`memberGet` name) (infoMembers i)
+     case (member, infoMethods i >>= ($ name)) of
+      (Just f, _) -> callValue' ctx rt name f args call want out
+      (_, Just f) -> callValue' ctx rt name f (args ++ [AHome b]) call want out
       _ -> failWith ctx rt errNotFound "NotInScope" ("Variable not in scope: " ++ name ++ " (for a value of type " ++ infoType i ++ ")")
 
 -- | Called on any thread, possibly in the middle of a call: freeing a
@@ -190,5 +248,9 @@ foreign export ccall "ugly_hs_get_index" hsGetIndex :: Ptr Ctx -> Ptr Rt -> Ptr 
 foreign export ccall "ugly_hs_release" hsRelease :: Ptr Rt -> Ptr () -> IO ()
 foreign export ccall "ugly_hs_live_refs" hsLiveRefs :: IO CInt
 foreign export ccall "ugly_hs_live_foreign" hsLiveForeign :: IO CInt
+foreign export ccall "ugly_hs_set_member" hsSetMember :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> IO Status
+foreign export ccall "ugly_hs_set_index" hsSetIndex :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Ptr Val -> IO Status
+foreign export ccall "ugly_hs_splice" hsSplice :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Int64 -> Ptr Val -> CSize -> IO Status
+foreign export ccall "ugly_hs_new_instance" hsNewInstance :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Ptr Handle -> IO Status
 foreign export ccall "ugly_hs_call" hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status
 foreign export ccall "ugly_hs_invoke" hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status

@@ -8,8 +8,9 @@
  * init starts the RTS and checks that the two sides agree; runtimes come and
  * go, from any thread. import finds a module in a module library (below).
  * The rest of the protocol is Haskell's (Ugly.Plugin), on boxes: describe,
- * members, elements, call and invoke (receiver last). Haskell values are
- * immutable, so writing is refused. The RTS is one-way (it can't be started
+ * members, elements, call and invoke (receiver last), new (a constructor).
+ * Haskell values are immutable, so writing is refused, except for the
+ * mutable values a module makes itself (IORefs behind a box). The RTS is one-way (it can't be started
  * again once stopped), so there's no 'term' and no UGLY_CAP_RESTARTABLE.
  * doc/haskell-bridge.md is the plan.
  */
@@ -23,7 +24,7 @@
 
 #include "ugly_plugin.h"
 
-#define BRIDGE_ABI 5     /* Ugly.Plugin.bridgeAbi */
+#define BRIDGE_ABI 6     /* Ugly.Plugin.bridgeAbi */
 
 /* libugly_rts.so */
 extern int ugly_hs_start(const char *opts) ;
@@ -46,6 +47,13 @@ extern ugly_status ugly_hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugl
 extern ugly_status ugly_hs_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
 	size_t nargs, const char *hint, ugly_kind want, ugly_val *out) ;
 extern void ugly_hs_release(ugly_rt *rt, void *ref) ;
+/* Mutable values (an IORef behind a box), and constructors. */
+extern ugly_status ugly_hs_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, const ugly_val *v) ;
+extern ugly_status ugly_hs_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, const ugly_val *v) ;
+extern ugly_status ugly_hs_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n) ;
+extern ugly_status ugly_hs_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_handle *out) ;
 
 
 /*
@@ -266,13 +274,52 @@ static ugly_status hs_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_
  * overloaded). Haskell has no keyword arguments and no call context: both
  * are refused.
  */
+
+/*
+ * The C stack. Each call into Haskell from C runs the RTS's scheduler on the
+ * caller's stack, and StgRun reserves 16 KB more: tens of KB a level, so
+ * re-entry (C -> Haskell -> C -> ...) exhausts an 8 MB stack long before
+ * the core's UGLY_MAX_DEPTH. A call is refused, as Haskell's StackOverflow,
+ * once less than STACK_RESERVE is left (other languages have the same
+ * limit: Lua's C calls, QuickJS's stack check, .NET's
+ * EnsureSufficientExecutionStack).
+ */
+#define STACK_RESERVE (1024 * 1024)
+
+static _Thread_local const char *stack_floor ;     /* lowest address a call may start at; (char *)1 if unknown */
+
+static int stack_left(void){
+	if (stack_floor == NULL){
+		pthread_attr_t attr ;
+		void *low = NULL ;
+		size_t size = 0 ;
+		stack_floor = (const char *)1 ;
+		if (pthread_getattr_np(pthread_self(), &attr) == 0){
+			if ((pthread_attr_getstack(&attr, &low, &size) == 0)&&(size > 2 * STACK_RESERVE)){
+				stack_floor = (const char *)low + STACK_RESERVE ;
+			}
+			pthread_attr_destroy(&attr) ;
+		}
+	}
+	char here ;
+	return &here > stack_floor ;
+}
+
+#define STACK_CHECK() \
+	if (! stack_left()){ \
+		return ugly_fail(ctx, rt, UGLY_ERR_RAISED, "StackOverflow", \
+			"haskell: the C stack is nearly exhausted (calls nested too deep through Haskell)") ; \
+	}
+
 static ugly_status hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs, ugly_kind want,
 	ugly_val *out){
+	STACK_CHECK() ;
 	return ugly_hs_call(ctx, rt, ref, args, nargs, NULL, want, out) ;
 }
 
 static ugly_status hs_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
 	size_t nargs, ugly_kind want, ugly_val *out){
+	STACK_CHECK() ;
 	return ugly_hs_invoke(ctx, rt, ref, method, args, nargs, NULL, want, out) ;
 }
 
@@ -291,42 +338,39 @@ static ugly_status refuse_opts(ugly_ctx *ctx, ugly_rt *rt, const ugly_opts *opts
 
 static ugly_status hs_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 	const ugly_opts *opts, ugly_kind want, ugly_val *out){
+	STACK_CHECK() ;
 	ugly_status st = refuse_opts(ctx, rt, opts) ;
 	return st != UGLY_OK ? st : ugly_hs_call(ctx, rt, ref, args, nargs, opts->hint, want, out) ;
 }
 
 static ugly_status hs_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
 	size_t nargs, const ugly_opts *opts, ugly_kind want, ugly_val *out){
+	STACK_CHECK() ;
 	ugly_status st = refuse_opts(ctx, rt, opts) ;
 	return st != UGLY_OK ? st : ugly_hs_invoke(ctx, rt, ref, method, args, nargs, opts->hint, want, out) ;
 }
 
 
-/* Haskell values are immutable. */
-#define IMMUTABLE() return ugly_fail(ctx, rt, UGLY_ERR_NOT_CAPABLE, "TypeError", "Haskell values are immutable")
+/* Members are fixed: Haskell's records, and the mutable values a module makes. */
+#define FIXED() return ugly_fail(ctx, rt, UGLY_ERR_NOT_CAPABLE, "TypeError", "a Haskell value's members are fixed")
 
-/* Not yet. */
-#define TODO(op) return ugly_fail(ctx, rt, UGLY_ERR_NOT_IMPLEMENTED, "", "haskell: " op " isn't implemented yet")
-
+/* Haskell has no global namespace: a module's exports are its members. */
 static ugly_status hs_globals(ugly_ctx *ctx, ugly_rt *rt, ugly_val *out){
-	TODO("globals") ;
+	(void)out ;
+	return ugly_fail(ctx, rt, UGLY_ERR_NOT_SUPPORTED, "", "haskell: no globals (Haskell has none: import a module)") ;
 }
+
+/* A value passed by value, to Haskell by pointer. */
 static ugly_status hs_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_val v){
-	IMMUTABLE() ;
+	return ugly_hs_set_member(ctx, rt, ref, name, &v) ;
 }
 static ugly_status hs_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_val v){
-	IMMUTABLE() ;
-}
-static ugly_status hs_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_handle *out){
-	TODO("new_instance") ;
+	return ugly_hs_set_index(ctx, rt, ref, i, &v) ;
 }
 static ugly_status hs_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
-	IMMUTABLE() ;
-}
-static ugly_status hs_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
-	const ugly_val *insert, size_t n){
-	IMMUTABLE() ;
+	(void)ref ;
+	(void)name ;
+	FIXED() ;
 }
 
 
@@ -348,9 +392,9 @@ static const ugly_plugin plugin = {
 	.set_index = hs_set_index,
 	.call = hs_call,
 	.invoke = hs_invoke,
-	.new_instance = hs_new_instance,
+	.new_instance = ugly_hs_new_instance,
 	.delete_member = hs_delete_member,
-	.splice = hs_splice,
+	.splice = ugly_hs_splice,
 	.release = ugly_hs_release,
 	.options = (const char *const []){ "rts", "path", NULL },
 	.call_opts = hs_call_opts,

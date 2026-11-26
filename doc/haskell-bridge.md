@@ -1,8 +1,9 @@
 # The Haskell bridge: a plan
 
 Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
-export tables and calls, module libraries, foreign values in Haskell, and
-hint and want for overloads are done). Once it works,
+export tables and calls, module libraries, foreign values in Haskell,
+hint and want for overloads, and the conformance suite are done: Haskell
+passes all 9 groups and pairwise with every other language). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -215,7 +216,9 @@ the same value read twice is the same handle.
 | a module | `MEMBERS`: its exports, in order |
 | a type with `Show` (`boxShow`), or none (`boxOpaque`) | none: a type name, and a text if it has `Show` |
 | a function, or an `IO` action | `CALLABLE` |
-| a record | `MEMBERS`: its fields (not yet) |
+| a record (a listed type with one record constructor) | `MEMBERS`: its fields that can cross, read only |
+| a data constructor | `CALLABLE` and `INSTANTIABLE`: `new` calls it |
+| a mutable value a module makes (`IORef`s behind a box) | what its `ToUgly` instance says: the fixture's counter has settable members, its list `set_index` and `splice` |
 
 - **`want`, by Haskell's rules: strict.** An int widens to a double (the
   suite requires it); nothing else converts implicitly. A number asked for
@@ -224,9 +227,25 @@ the same value read twice is the same handle.
   other primitive form: `"Green"`, `"[2,3,5,7,11]"`, `"(1,\"one\")"`. A
   list's or tuple's text is built from its elements' (`textOf`), so it
   needs no `Show` instance of its own.
-- **Nothing is mutable.** `set_member`, `set_index`, `splice` and
-  `delete_member` are refused with `UGLY_ERR_NOT_CAPABLE`. An `IORef` or
-  `MVar` could be a one-member box later.
+- **Haskell values are immutable**: `set_member`, `set_index` and
+  `splice` on them are refused with `UGLY_ERR_NOT_CAPABLE`. A module can
+  make a mutable value of its own, by hand: members and elements are read
+  in `IO` (`Members`, `Elems`, with `fixedMembers` and `fixedElems` for the
+  immutable), and may have a setter (`memberSet`, per name: `NOT_FOUND`
+  for a name it can't set, so members are fixed) and a splice
+  (`elemsSplice`; `set_index` is a one-element splice, appending at the
+  length). The conformance fixture's counter and list are `IORef`s.
+  `delete_member` is always `NOT_CAPABLE`: members are fixed.
+- **`new` calls a constructor**: an exported data constructor is
+  `INSTANTIABLE` as well as callable (`new(Point, 3, 4)` is `Point 3 4`).
+  There are no classes in the protocol's sense; a type isn't a member
+  (types and values are different namespaces in Haskell: `Pt` the type and
+  `Pt` the constructor).
+- **Exceptions with members**: an exception type declared under
+  `UglyException` (its `Exception` instance uses `uglyToException` and
+  `uglyFromException`, GHC's exception hierarchy) crosses as a box of its
+  own `ToUgly` instance, still the same `SomeException`: the fixture's
+  `ConformanceError` has a `message` member, and comes home as itself.
 - **Lists are lazy.** `length` forces the spine (and doesn't return for an
   infinite list); `get_index` walks to the element and forces only it, so
   `[0..]` has a 1000th element, and `[1, error "x", 3]` raises at index 1
@@ -419,6 +438,14 @@ code), and tested by `haskell-foreign` with values whose home is the C host
   Haskell calling Lua from a call that came from that Lua is on the right
   thread. Haskell code that `forkIO`s and calls a thread-bound runtime from
   there gets `UGLY_ERR_WRONG_THREAD`, which is correct.
+- **The C stack.** Each call into Haskell from C runs the RTS's scheduler
+  on the caller's C stack, and `StgRun` reserves 16 KB more: about 17 KB a
+  level, so C → Haskell → C → ... exhausts an 8 MB stack at about 450
+  levels, well before the core's `UGLY_MAX_DEPTH` (1000). `haskell.c`
+  refuses a call once less than 1 MB of the thread's stack is left
+  (`pthread_getattr_np`): `UGLY_ERR_RAISED`, type `StackOverflow`, as
+  Haskell names it. The conformance suite's runaway recursion stops at
+  about 400 levels, every level unwinding.
 - **Fork**: the RTS's worker threads don't survive a C `fork()`, like the
   JVM's and the CLR's: forking once Haskell has started is the host's to
   avoid. GHC's own `forkProcess` shows how the RTS could be told; revisit
@@ -473,8 +500,14 @@ program's RTS wasn't started with `keep_cafs`, so attaching must call
    replacing the built-in modules. Then foreign values in Haskell (done:
    foreign values, callbacks, foreign errors), and `hint` and `want` for
    overloads (done).
-5. **The fixture** (`tests/haskell/Conformance.hs`), then the protocol until
-   the suite and pairwise pass.
+5. **The fixture** (done: `tests/haskell/Conformance.hs`, module
+   `conformance` in `conformance.so`), then the protocol until the suite
+   and pairwise pass (done: mutable values a module makes, constructors as
+   `new`, records' fields as members, exceptions with members, the C
+   stack guard). The fixture's `finalized()` counts weak pointers a major
+   GC found dead (deterministic: the finalizers themselves run later, on a
+   thread of their own). Haskell is in `test_plugins`: all 9 groups, and
+   pairwise with every language, the JVM and the CLR included.
 6. **music-diatonic** as an example, from Python and Lua.
 7. **The binding**, then the docs.
 

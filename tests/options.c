@@ -106,7 +106,9 @@ int main(void){
 
 	/*
 	 * An overload hint: Java and C# pick the overload (over(int), over(long),
-	 * over(Object)), by their own names for the parameter types; others refuse it.
+	 * over(Object)), by their own names for the parameter types; Haskell
+	 * picks the instantiation of over :: Over a => a -> String, by type
+	 * application; others refuse it.
 	 */
 	static const char *const java_hints[][2] = {
 		{ NULL, "long" }, { "int", "int" }, { "long", "long" }, { "java.lang.Object", "java.lang.Object" }, { NULL, NULL },
@@ -114,8 +116,12 @@ int main(void){
 	static const char *const dotnet_hints[][2] = {
 		{ NULL, "long" }, { "int", "int" }, { "long", "long" }, { "object", "object" }, { "System.Int32", "int" }, { NULL, NULL },
 	} ;
+	static const char *const haskell_hints[][2] = {
+		{ NULL, "Int" }, { "Int", "Int" }, { "@Int64", "Int64" }, { "Value", "Value" }, { NULL, NULL },
+	} ;
 	const char *const (*hints)[2] = (strcmp(plugin_name(), "java") == 0 ? java_hints
-		: strcmp(plugin_name(), "dotnet") == 0 ? dotnet_hints : NULL) ;
+		: strcmp(plugin_name(), "dotnet") == 0 ? dotnet_hints
+		: strcmp(plugin_name(), "haskell") == 0 ? haskell_hints : NULL) ;
 	ugly_opts h = UGLY_OPTS_INIT ;
 	h.hint = "int" ;
 	if (hints == NULL){
@@ -144,7 +150,7 @@ int main(void){
 			ugly_val_release(ctx, &v) ;
 		}
 		st = ugly_invoke(ctx, f.mod, "over", &one, 1, UGLY_STRING, &v) ;
-		ok((st == UGLY_OK)&&(strcmp(sval(&v), "long") == 0), "  ... and a hint lasts one call: the next one picks the best fit again") ;
+		ok((st == UGLY_OK)&&(strcmp(sval(&v), hints[0][1]) == 0), "  ... and a hint lasts one call: the next one picks the best fit again") ;
 		if (st == UGLY_OK){
 			ugly_val_release(ctx, &v) ;
 		}

@@ -12,7 +12,7 @@ module Ugly.Native
   , ok, errRaised, errType, errNotFound, errNotCapable, errStale, errNotSupported, errNotImplemented, errNoMem
   , noHandle
   , kAny, kNull, kBool, kInt, kDouble, kString, kBytes, kHandle
-  , traitMembers, traitElements, traitCallable
+  , traitMembers, traitElements, traitCallable, traitInstantiable
   , c_ugly_export, c_ugly_fail, c_ugly_raise_native
   , c_ugly_val_set_string, c_ugly_val_set_bytes
   , c_set_null, c_set_bool, c_set_int, c_set_double, c_set_handle, c_names
@@ -67,10 +67,11 @@ kHandle = 7
 noHandle :: Handle
 noHandle = 0
 
-traitMembers, traitElements, traitCallable :: Word32
+traitMembers, traitElements, traitCallable, traitInstantiable :: Word32
 traitMembers = 1
 traitElements = 2
 traitCallable = 4
+traitInstantiable = 8
 
 foreign import ccall safe "ugly_export"
   c_ugly_export :: Ptr Ctx -> Ptr Rt -> Ptr () -> CUIntPtr -> Ptr Handle -> IO Status

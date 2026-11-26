@@ -21,8 +21,11 @@ module Ugly
     Value (..), Foreign, ToUgly (..), FromUgly, toValue, fromValue
     -- * Operations on a foreign value
   , call, invoke, get, index, size, members, typeOf
+    -- * Any callable value, Haskell's own or foreign
+  , callValue
     -- * Errors
   , ForeignError, errorStatus, errorLanguage, errorType, errorMessage, errorPayload
+  , UglyException, uglyToException, uglyFromException, exceptionValue, rethrow
   ) where
 
 import Ugly.Marshal
@@ -59,3 +62,9 @@ members = foreignNames
 -- | Its type's name, in its own language.
 typeOf :: Foreign -> IO String
 typeOf = foreignType
+
+-- | Raises a value again: an exception that came home (as a value, from
+-- 'exceptionValue' or a payload) as itself, or a foreign value as an error
+-- whose payload it is.
+rethrow :: Value -> IO a
+rethrow = rethrowValue
