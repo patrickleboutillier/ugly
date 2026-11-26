@@ -264,6 +264,20 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
 }
 ```
 
+## Languages
+
+Each language has a guide: using UGLY from it, how its values look to the
+others, and its pitfalls.
+
+| Language | Guide | Can be the host |
+|---|---|---|
+| Lua 5.4 or 5.3 | [doc/languages/lua.md](doc/languages/lua.md) | yes: `lua`, HAProxy, any program with Lua built in |
+| CPython 3.10+ | [doc/languages/python.md](doc/languages/python.md) | yes: `python3` |
+| JavaScript (QuickJS) | [doc/languages/js.md](doc/languages/js.md) | yes: `qjs` |
+| Perl 5 | [doc/languages/perl5.md](doc/languages/perl5.md) | yes: `perl` |
+| Java (JDK 21+) | [doc/languages/java.md](doc/languages/java.md) | yes: `java` |
+| C# / .NET 10 | [doc/languages/dotnet.md](doc/languages/dotnet.md) | not yet |
+
 ## Concepts
 
 - **Primitives cross by value**: null, bool, int64, double, UTF-8 string and
@@ -337,7 +351,7 @@ fit; if you need cross-language inlining in hot loops, GraalVM is. The
 | `plugins/dotnet/` | C# and .NET, on the CLR through its hosting API (`hostfxr`). One CLR per process; types are imported by full name from loaded assemblies or the module path, overloads are chosen as in Java, and keyword arguments bind to parameters by name. Most of it is C# (`Ugly.dll`), which calls the core through P/Invoke; `Ugly.Foreign` is a `DynamicObject`. No binding yet. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs, run as tests: Lua using Python, a C host, and HAProxy asking Python for a decision on each request (`haproxy/`). |
-| `doc/` | The contract and the design essay. |
+| `doc/` | The contract, the design essay, and a guide per language (`doc/languages/`). |
 
 ## Status
 

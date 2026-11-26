@@ -1,0 +1,11 @@
+<!--
+  For every C# project in the tree (plugins/dotnet, tests/dotnet): builds
+  that don't say where their output goes (an editor's C# extension, a plain
+  `dotnet build`) put it in .artifacts/ at the top, not in bin/ and obj/
+  beside each project. Meson's builds name their own artifacts path, which wins.
+-->
+<Project>
+  <PropertyGroup>
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory).artifacts</ArtifactsPath>
+  </PropertyGroup>
+</Project>

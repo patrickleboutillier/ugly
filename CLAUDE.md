@@ -119,6 +119,8 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 ## Docs
 
-- `README.md` is the only README.
+- `README.md` is the only README; it links to the language guides.
 - `doc/design-essay.md` is in the author's first-person voice; the author verified its Inline::Java claims on 2026-11-24. It describes the 2013 design historically.
 - `doc/contract.md` is the v2 spec. It is kept current: record any change to the contract in it, and in the headers.
+- `doc/languages/<lang>.md` are the user guides, one per language (binding API, values both ways, options, errors, threads, configuring, pitfalls). They link to contract §10 rather than copy it. Keep them current with any change to a plugin or binding; their examples were run when written.
+- `Directory.Build.props` sends C# builds made outside Meson (the editor's C# extension, a plain `dotnet build`) to `.artifacts/`; Meson's pass their own `--artifacts-path`.
