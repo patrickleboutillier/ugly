@@ -39,3 +39,15 @@
    fun:malloc
    obj:*/bin/python3.12
 }
+# GHC's RTS (plugins/haskell) is started once per process and never stopped
+# (hs_exit can't be undone), so its threads (the timer, the IO manager, the
+# workers) are still running at exit, and their stacks and thread-local
+# storage show up as "possibly lost". Only that kind, and only for blocks
+# allocated under the RTS.
+{
+   ghc-rts-live-threads-possibly-lost
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   obj:*/libHSrts*.so*
+}

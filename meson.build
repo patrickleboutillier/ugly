@@ -44,6 +44,7 @@ subdir('plugins/js')
 subdir('plugins/perl5')
 subdir('plugins/java')
 subdir('plugins/dotnet')
+subdir('plugins/haskell')
 subdir('tests')
 subdir('examples')
 
@@ -62,25 +63,37 @@ subdir('examples')
 # JVM can't run under valgrind (it uses SIGSEGV on purpose), so suite 'jvm'
 # (anything that starts it) is left out; the Java plugin's checks are -Xcheck:jni
 # (UGLY_JAVA_CHECK) and the JVM's own. The same goes for the CLR, suite 'clr'.
+#
+# GHC's RTS reserves 1 TB of address space at startup, and --track-origins
+# doesn't get through that (a Haskell "main = print 1" doesn't finish), so
+# suite 'ghc' (anything that starts the RTS) has its own setup, the same
+# without origins: meson test --setup valgrindghc --suite ghc. The RTS's
+# scheduler synchronizes in ways helgrind doesn't model, so 'ghc' is left out
+# of helgrind.
 valgrind = find_program('valgrind', required: false)
 if valgrind.found()
+  memcheck = [valgrind,
+    '--error-exitcode=99',
+    '--leak-check=full',
+    '--errors-for-leak-kinds=definite,indirect,possible',
+    '--num-callers=30',
+    '--keep-debuginfo=yes',
+    '--suppressions=' + (meson.project_source_root() / 'tests' / 'valgrind.supp'),
+  ]
   add_test_setup('valgrind',
-    exe_wrapper: [valgrind,
-      '--error-exitcode=99',
-      '--leak-check=full',
-      '--errors-for-leak-kinds=definite,indirect,possible',
-      '--track-origins=yes',
-      '--num-callers=30',
-      '--keep-debuginfo=yes',
-      '--suppressions=' + (meson.project_source_root() / 'tests' / 'valgrind.supp'),
-    ],
+    exe_wrapper: memcheck + ['--track-origins=yes'],
+    exclude_suites: ['jvm', 'clr', 'ghc', 'haproxy'],
+    timeout_multiplier: 10,
+  )
+  add_test_setup('valgrindghc',
+    exe_wrapper: memcheck,
     exclude_suites: ['jvm', 'clr', 'haproxy'],
     timeout_multiplier: 10,
   )
   # Data races, on the threads group: meson test --setup helgrind threads-mock threads-lua ...
   add_test_setup('helgrind',
     exe_wrapper: [valgrind, '--tool=helgrind', '--error-exitcode=99', '--num-callers=30'],
-    exclude_suites: ['jvm', 'clr', 'haproxy'],
+    exclude_suites: ['jvm', 'clr', 'ghc', 'haproxy'],
     timeout_multiplier: 10,
   )
 endif
