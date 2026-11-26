@@ -8,6 +8,11 @@
 *.so.*
 *.a
 
+# dotnet build in the source tree (an editor's C# extension, say; Meson builds
+# Ugly.dll in the build directory)
+/plugins/dotnet/bin/
+/plugins/dotnet/obj/
+
 # Editors
 *~
 *.swp
