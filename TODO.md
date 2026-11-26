@@ -86,6 +86,12 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   so the binding is mostly attach mode: `Ugly.dll` loaded by the program,
   registering the plugin (`ugly_lang_register`) and attaching to the running
   CLR, with teardown at `ProcessExit`. Then NuGet packages on the module path.
+- [ ] **.NET's lazy signal handlers.** Starting the CLR leaves the host's
+  signals alone, but C# code that uses `Console` or `Process` makes .NET's
+  System.Native install terminal and child-process handlers (SIGCHLD,
+  SIGCONT, SIGWINCH...) at that point. Test it, and decide whether the
+  plugin should do anything (it can't take them back without breaking
+  `Process`).
 - [ ] **Java through Panama FFM** for the helper side, once JDK 22+ is the
   baseline. Creating the JVM still needs the JNI invocation API.
 - [ ] **R** (`Rf_initEmbeddedR`): the data-science ecosystem. Everything is a
