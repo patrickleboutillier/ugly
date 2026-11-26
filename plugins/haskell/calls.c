@@ -4,29 +4,9 @@
  * for arguments (doc/haskell-bridge.md), IO, Haskell functions coming home,
  * invoke with the receiver last, and overloads chosen by the arguments.
  */
-#define _GNU_SOURCE     /* RTLD_DEFAULT */
-#include <dlfcn.h>
-#include <stdio.h>
-#include <string.h>
+#include "tap.h"
 
-#include "ugly.h"
-
-static int n, failed ;
-static ugly_ctx *ctx ;
 static ugly_handle mod ;
-
-static void ok(int cond, const char *what){
-	printf("%sok %d - %s\n", cond ? "" : "not ", ++n, what) ;
-	failed |= ! cond ;
-}
-
-static int is_string(ugly_val v, const char *s){
-	return (v.kind == UGLY_STRING)&&(v.as.str.len == strlen(s))&&(memcmp(v.as.str.ptr, s, v.as.str.len) == 0) ;
-}
-
-static int is_int(ugly_val v, int64_t i){
-	return (v.kind == UGLY_INT)&&(v.as.i == i) ;
-}
 
 /* The member 'name' of Ugly.Smoke, as a handle (owned). */
 static ugly_handle fn(const char *name){
@@ -44,43 +24,12 @@ static ugly_status call(const char *name, const ugly_val *args, size_t nargs, ug
 	return st ;
 }
 
-static int type_is(ugly_handle h, uint32_t traits, const char *name){
-	uint32_t t = 99 ;
-	ugly_val tn = ugly_null() ;
-	int good = (ugly_describe(ctx, h, &t, &tn) == UGLY_OK)&&(t == traits)&&is_string(tn, name) ;
-	if (! good){
-		printf("# describe: traits %u, type %.*s\n", t, tn.kind == UGLY_STRING ? (int)tn.as.str.len : 0,
-			tn.kind == UGLY_STRING ? tn.as.str.ptr : "") ;
-	}
-	ugly_val_release(ctx, &tn) ;
-	return good ;
-}
-
-static int error_is(ugly_status st, ugly_status expect, const char *type, const char *message){
-	const ugly_error *e = ugly_last_error(ctx) ;
-	int good = (st == expect)&&(e != NULL)&&(strcmp(ugly_error_type(e), type) == 0)
-		&&(strstr(ugly_error_message(e), message) != NULL) ;
-	if (! good){
-		printf("# status %d, error %s: %s\n", st, e ? ugly_error_type(e) : "-", e ? ugly_error_message(e) : "-") ;
-	}
-	return good ;
-}
-
 
 int main(void){
-	setvbuf(stdout, NULL, _IOLBF, 0) ;
-	ugly_lang *lang = NULL ;
-	ugly_rt *rt = NULL ;
+	ugly_rt *rt = start("Ugly.Smoke", &mod) ;
 	ugly_val v, w ;
 	ugly_handle h, f ;
 	bool same ;
-
-	ugly_ctx_new(&ctx) ;
-	if ((ugly_lang_load(ctx, "haskell", &lang) != UGLY_OK)||(ugly_rt_new(ctx, lang, &rt) != UGLY_OK)
-		||(ugly_rt_import(ctx, rt, "Ugly.Smoke", &mod) != UGLY_OK)){
-		printf("not ok 1 - haskell starts\n1..1\n") ;
-		return 1 ;
-	}
 
 	/* Functions are callable, and curried. */
 	f = fn("add") ;
@@ -199,8 +148,7 @@ int main(void){
 
 	ugly_release(ctx, mod) ;
 	ok(ugly_rt_delete(ctx, rt) == UGLY_OK, "runtime deleted") ;
-	int (*live_refs)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "ugly_hs_live_refs") ;
-	ok((live_refs != NULL)&&(live_refs() == 0), "every ref released") ;
+	all_released() ;
 	ugly_ctx_delete(ctx) ;
 	printf("1..%d\n", n) ;
 	return failed ;

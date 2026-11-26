@@ -29,7 +29,8 @@ if haskell_ok
   # The Haskell modules are a package of their own ('ugly'), so that modules
   # built later against it share these symbols. Its .hi files stay in the
   # private dir for now.
-  hs_sources = files('Ugly/Native.hs', 'Ugly/Plugin.hs', 'Ugly/Smoke.hs', 'Ugly/Value.hs')
+  hs_sources = files('Ugly/Example.hs', 'Ugly/ExampleExports.hs', 'Ugly/Export.hs', 'Ugly/Native.hs',
+    'Ugly/Plugin.hs', 'Ugly/Smoke.hs', 'Ugly/Value.hs')
   ugly_hs = custom_target('libugly_hs.so',
     input: ['rts.c', 'glue.c', hs_sources],
     output: 'libugly_hs.so',
@@ -56,9 +57,10 @@ if haskell_ok
   plugin_dirs += meson.current_build_dir()
 
   # Not in the conformance suite yet: the RTS and runtimes (smoke), values
-  # and boxes (values) and calls (calls), from the built-in module Ugly.Smoke. Suite
+  # and boxes (values) and calls (calls), from the built-in module Ugly.Smoke,
+  # and uglyModule's export tables (exports), from Ugly.Example. Suite
   # 'ghc' is anything that starts the RTS (see the valgrind setups).
-  foreach t : ['smoke', 'values', 'calls']
+  foreach t : ['smoke', 'values', 'calls', 'exports']
     test('haskell-' + t,
       executable('haskell_' + t, t + '.c', dependencies: [ugly_dep, dependency('threads'), cc.find_library('dl')]),
       env: {'UGLY_PLUGIN_PATH': meson.current_build_dir()},

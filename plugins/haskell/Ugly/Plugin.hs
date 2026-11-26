@@ -40,6 +40,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Mem.StableName
 
 import Ugly.Native
+import qualified Ugly.ExampleExports as Example
 import qualified Ugly.Smoke as Smoke
 import Ugly.Value
 
@@ -56,7 +57,7 @@ data Named = forall a. Named (StableName a)
 
 -- | Modules built into the plugin, until modules load from export tables.
 builtins :: M.Map String Box
-builtins = M.fromList [("Ugly.Smoke", Smoke.smoke)]
+builtins = M.fromList [("Ugly.Smoke", Smoke.smoke), ("Ugly.Example", Example.uglyExports)]
 
 
 -- Strings to and from C are UTF-8, whatever the locale.

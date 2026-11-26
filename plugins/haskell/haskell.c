@@ -6,12 +6,12 @@
  * exports.
  *
  * init starts the RTS and checks that the two sides agree; runtimes come and
- * go, from any thread. The reading operations are Haskell's (Ugly.Plugin),
- * on boxes: import (built-in modules only, for now), describe, members and
- * elements, calls and invoke (receiver last). Haskell values are
- * immutable, so writing is refused. The RTS is one-way (it can't be started again once
- * stopped), so there's no 'term' and no UGLY_CAP_RESTARTABLE.
- * doc/haskell-bridge.md is the plan.
+ * go, from any thread. The protocol is Haskell's (Ugly.Plugin), on boxes:
+ * import (built-in modules only, for now), describe, members, elements,
+ * call and invoke (receiver last). Haskell values are immutable, so writing
+ * is refused. The RTS is one-way (it can't be started again once stopped),
+ * so there's no 'term' and no UGLY_CAP_RESTARTABLE. doc/haskell-bridge.md
+ * is the plan.
  */
 #include <stdio.h>
 #include <stdlib.h>
