@@ -103,8 +103,8 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   Template Haskell generates, polymorphic functions expanded into one
   overload per instance and chosen at the call by argument types, `hint`
   and `want`. In `plugins/haskell/`: the skeleton, values and boxes,
-  export tables and calls are done; next are module libraries loaded from a
-  path, then foreign values in Haskell. The test case is the author's
+  export tables and calls, and module libraries loaded from a path are
+  done; next are foreign values in Haskell, then `hint` and `want`. The test case is the author's
   own `music-diatonic` (Hackage 0.1.2), whose sources wait in
   `stuff/haskell/` with the spikes (local, re-fetch from Hackage if
   missing).

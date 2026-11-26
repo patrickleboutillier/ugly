@@ -1,6 +1,6 @@
 /*
  * Calls into Haskell, until the plugin joins the conformance suite: the
- * functions of the built-in module Ugly.Smoke. Currying, the literal rules
+ * functions of the test module Smoke. Currying, the literal rules
  * for arguments (doc/haskell-bridge.md), IO, Haskell functions coming home,
  * invoke with the receiver last, and overloads chosen by the arguments.
  */
@@ -8,14 +8,14 @@
 
 static ugly_handle mod ;
 
-/* The member 'name' of Ugly.Smoke, as a handle (owned). */
+/* The member 'name' of Smoke, as a handle (owned). */
 static ugly_handle fn(const char *name){
 	ugly_val v = ugly_null() ;
 	ugly_get_member(ctx, mod, name, UGLY_HANDLE, &v) ;
 	return v.kind == UGLY_HANDLE ? v.as.h : UGLY_NO_HANDLE ;
 }
 
-/* Calls Ugly.Smoke's 'name' with args, as 'want'. */
+/* Calls Smoke's 'name' with args, as 'want'. */
 static ugly_status call(const char *name, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out){
 	ugly_handle f = fn(name) ;
 	*out = ugly_null() ;
@@ -26,7 +26,7 @@ static ugly_status call(const char *name, const ugly_val *args, size_t nargs, ug
 
 
 int main(void){
-	ugly_rt *rt = start("Ugly.Smoke", &mod) ;
+	ugly_rt *rt = start("Smoke", &mod) ;
 	ugly_val v, w ;
 	ugly_handle h, f ;
 	bool same ;
@@ -106,7 +106,7 @@ int main(void){
 
 	/* invoke: a module's function, or a method with the receiver last. */
 	ok((ugly_invoke(ctx, mod, "add", (ugly_val[]){ ugly_int(1), ugly_int(2) }, 2, UGLY_ANY, &v) == UGLY_OK)
-		&&is_int(v, 3), "Ugly.Smoke.add(1, 2): no receiver") ;
+		&&is_int(v, 3), "Smoke.add(1, 2): no receiver") ;
 	ok((ugly_invoke(ctx, f, "next", NULL, 0, UGLY_STRING, &v) == UGLY_OK)&&is_string(v, "Blue"),
 		"color.next(): next Green is Blue") ;
 	ugly_val_release(ctx, &v) ;

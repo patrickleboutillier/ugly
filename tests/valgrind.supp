@@ -51,3 +51,14 @@
    ...
    obj:*/libHSrts*.so*
 }
+# The dynamic loader's own strncmp (in ld.so, which valgrind doesn't
+# replace) reads a word at a time, past the end of a string it strdup'ed:
+# here an rpath, while it checks for $ORIGIN-style tokens (is_dst). Whether
+# it shows depends on the rpath's length modulo 8, so on the build path:
+# ghc gives its libraries long rpaths (plugins/haskell). A false positive.
+{
+   ld-so-strncmp-reads-past-an-rpath
+   Memcheck:Addr8
+   fun:strncmp
+   fun:is_dst
+}

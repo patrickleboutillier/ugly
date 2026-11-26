@@ -1,6 +1,6 @@
 /*
  * The Haskell plugin's values and boxes, until it joins the conformance
- * suite: every kind of value in the built-in module Ugly.Smoke, read back
+ * suite: every kind of value in the test module Smoke, read back
  * with each 'want', by Haskell's rules (doc/haskell-bridge.md): primitives
  * by value, everything else boxed, read-only, lazy where Haskell is, and
  * exceptions raised where a value is forced.
@@ -9,7 +9,7 @@
 
 static ugly_handle mod ;
 
-/* Member 'name' of Ugly.Smoke, as 'want'; the status. */
+/* Member 'name' of Smoke, as 'want'; the status. */
 static ugly_status get(const char *name, ugly_kind want, ugly_val *out){
 	*out = ugly_null() ;
 	return ugly_get_member(ctx, mod, name, want, out) ;
@@ -32,9 +32,9 @@ int main(void){
 	}
 
 	/* Modules. */
-	ok(ugly_rt_import(ctx, rt, "Ugly.Smoke", &mod) == UGLY_OK, "import Ugly.Smoke (built in)") ;
+	ok(ugly_rt_import(ctx, rt, "Smoke", &mod) == UGLY_OK, "import Smoke (from Smoke.so, on UGLY_HASKELL_PATH)") ;
 	ok(type_is(mod, UGLY_TRAIT_MEMBERS, "module"), "a module: MEMBERS, type module") ;
-	ok((ugly_rt_import(ctx, rt, "Ugly.Smoke", &h) == UGLY_OK)&&(ugly_same(ctx, mod, h, &same) == UGLY_OK)&&same,
+	ok((ugly_rt_import(ctx, rt, "Smoke", &h) == UGLY_OK)&&(ugly_same(ctx, mod, h, &same) == UGLY_OK)&&same,
 		"imported again: the same handle") ;
 	ugly_release(ctx, h) ;
 	ok(error_is(ugly_rt_import(ctx, rt, "No.Such", &h), UGLY_ERR_NOT_FOUND, "ModuleNotFound", "No.Such"),

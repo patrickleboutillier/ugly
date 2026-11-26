@@ -1,10 +1,9 @@
 {-# LANGUAGE FlexibleInstances, FunctionalDependencies #-}
 
--- | A small library for uglyModule's test (Ugly.ExampleExports): types,
--- classes (one with two parameters and a functional dependency), and
--- polymorphic functions, as music-diatonic has them. Built into the plugin
--- until modules load from a path.
-module Ugly.Example
+-- | A small library for uglyModule's test (exports.c), exported by
+-- Example.Ugly: types, classes (one with two parameters and a functional
+-- dependency), and polymorphic functions, as music-diatonic has them.
+module Example
   ( Shape (..), Pt (..), HasArea (..), Scalable (..), Unit (..)
   , origin, largest, firstOf, label
   ) where

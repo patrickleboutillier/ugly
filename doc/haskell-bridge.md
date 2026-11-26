@@ -1,7 +1,7 @@
 # The Haskell bridge: a plan
 
 Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
-export tables and calls are done). Once it works,
+export tables and calls, and module libraries are done). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -70,8 +70,9 @@ All with GHC 8.8.4 (Ubuntu 22.04); CI will add 9.4 (24.04).
 
 - `init` starts the RTS once per process, and nothing stops it (`hs_exit`
   then `hs_init` isn't supported). No `term`, no `UGLY_CAP_RESTARTABLE`.
-- A runtime is plain Haskell state: the modules it has loaded. GHC has no
-  global interpreter state, so runtimes are independent and cheap:
+- A runtime is plain Haskell state, and has none yet: modules are
+  libraries, loaded once per process (below). GHC has no global
+  interpreter state, so runtimes are independent and cheap:
   `UGLY_CAP_MULTI_RUNTIME`.
 - The threaded RTS takes calls from any OS thread: `UGLY_CAP_ANY_THREAD`.
   Values are immutable, so nothing needs a lock except a runtime's module
@@ -80,13 +81,20 @@ All with GHC 8.8.4 (Ubuntu 22.04); CI will add 9.4 (24.04).
 - The `rts` option passes RTS flags (`-N4`, `-M1g`); the RTS also reads
   `GHCRTS`. Pitfall: an invalid RTS flag makes `hs_init` exit the process,
   as it would for any GHC program.
+- The RTS keeps every CAF (`keep_cafs`). Module libraries are dlopen'ed
+  after it starts, and nothing tells it that their foreign exports are
+  roots: GHC 9 processes those only in `hs_init` and in its own linker. So
+  a top-level value, such as a module's box, could otherwise be collected
+  while code that enters it is still reachable. The cost: a CAF that grows
+  (`[0..]` at top level) is never freed.
 
-Two libraries: `ugly_haskell.so` is the vtable in C, built by Meson, and
-`libugly_hs.so` is the Haskell side, built by ghc, which also compiles the
-small C file that starts the RTS. Only ghc knows where its RTS headers are,
-and they moved in 9.4. The Haskell modules are a package of their own
-(`-this-unit-id ugly`), so that module libraries built later link against
-the same symbols.
+Three libraries: `ugly_haskell.so` is the vtable in C, built by Meson;
+`libugly_rts.so` is the small C file that starts the RTS, which links it,
+built by ghc because only ghc knows where its RTS headers are (they moved
+in 9.4); and `libugly_hs.so` is the Haskell side, the package `ugly`
+(`-this-unit-id ugly`), with no RTS of its own. Module libraries are built
+against that package, so they share its types, and Template Haskell loads
+it into ghc while compiling them, where it runs on ghc's own RTS.
 
 ### Modules: compiled export tables
 
@@ -109,8 +117,8 @@ uglyModule "Music.Diatonic"
 ```
 
 `uglyModule` (Template Haskell, `Ugly.Export`) is built, and tested by
-`haskell-exports` on a built-in example (`Ugly.Example`, with
-`Ugly.ExampleExports`). It declares `uglyExports`, the module's box:
+`haskell-exports` on a test library (`Example`, exported by
+`Example.Ugly`). It declares `uglyExports`, the module's box:
 
 - **A type name** (`''Note`) gets `ToUgly` and `FromUgly` instances, unless
   it has them: a box whose text is its `show` (if it has `Show`), and whose
@@ -130,15 +138,53 @@ uglyModule "Music.Diatonic"
   the library, so all of its instances are included. An instance defined
   later in another package isn't. That's Haskell's open world, made
   explicit.
-- Next: built with `ghc -dynamic -shared` against the `ugly` package into a
-  library on the module path (a `path` option, and `UGLY_HASKELL_PATH`),
-  which `import("Music.Diatonic")` dlopens. Until then, `import` knows the
-  built-in modules only.
+- `uglyModule` also declares the module's root: a foreign export,
+  `ugly_hs_module_` plus the name encoded (ASCII letters and digits as they
+  are, any other UTF-8 byte as `_` and two hex digits:
+  `ugly_hs_module_Music_2eDiatonic`), that gives a stable pointer to its
+  box. `uglyModuleFrom "Smoke" 'smoke` declares one for a box written by
+  hand with `Ugly.Value` (`moduleBox`).
+
+### Module libraries
+
+Built. An export module is compiled, with the library it exports and
+anything else it needs, into a **module library**: a `.so` built against
+the package `ugly`, with no RTS, which joins the plugin's.
+
+```
+ghc -dynamic -shared -fPIC -package-db <build>/plugins/haskell/package.db -package ugly \
+    -this-unit-id music-diatonic-ugly -o Music.Diatonic.so Music/Diatonic/Ugly.hs
+```
+
+- **The package `ugly`** is registered in a package database in the build
+  tree (`plugins/haskell/package.db`, by `package.py`). Its interfaces are
+  `.dyn_hi`, which `ghc -dynamic` looks for in a package. Meson builds
+  module libraries with `ghc_module` (the command) and
+  `ghc_module_depends`; the plugin's own tests build theirs in
+  `plugins/haskell/test/`. Not installed yet: a database for an installed
+  plugin, with the interfaces beside it, comes with the first module
+  library built outside the tree (music-diatonic).
+- **`import "A.B.C"`** looks for the module's root symbol in the process
+  first (a host program that links its export modules), then in
+  `<dir>/A.B.C.so`, `<dir>/A.B.so`, `<dir>/A.so`, the longest prefix first,
+  for each directory of the `path` option, then of `UGLY_HASKELL_PATH`. So
+  one library can hold several modules (`Example.so` has `Example` and
+  `Example.Points`). A library that can't be loaded stops the search:
+  `UGLY_ERR_NOT_FOUND`, `ModuleNotFound`, with the loader's message. A
+  name with a `/` is never a path.
+- **Libraries are never closed**, as the RTS holds pointers into their
+  code, and they're opened `RTLD_LOCAL`, so two of them can each hold a
+  Haskell module of the same name. Modules are found once per process and
+  cached: every runtime gets the same box, and the same identity.
+- **Pitfall: give each library its own unit** (`-this-unit-id`). Two
+  libraries built as the default unit `main` that both have a module
+  `Utils` link apart, but their types have the same `Typeable`
+  fingerprint, so a value of one would pass for the other's.
 
 ### Values
 
 Built (`Ugly.Value`, `Ugly.Plugin`), and tested by `haskell-values`
-against the built-in module `Ugly.Smoke`. A `ToUgly` instance says how each
+against the test module `Smoke` (`plugins/haskell/test/`). A `ToUgly` instance says how each
 type crosses. Primitives cross by value:
 
 | Haskell | ugly |
@@ -327,6 +373,10 @@ main = Ugly.withUgly $ do
 It registers the plugin (`ugly_lang_register`) and attaches to the
 program's own RTS (`UGLY_CAP_ATTACH`). Haskell values passed to Python are
 then boxes in that runtime, so Python can call back into the program.
+The program's own export modules are found in the process (linked with
+`-rdynamic`, so their root symbols are visible), with no library. The
+program's RTS wasn't started with `keep_cafs`, so attaching must call
+`setKeepCAFs()` before any module library loads.
 
 ## Later
 
@@ -349,10 +399,11 @@ then boxes in that runtime, so Python can call back into the program.
 3. **Export tables and calls** (done): `uglyModule`, with instantiation;
    arguments in (`FromUgly`, the literal rules); calls, currying, `IO`;
    overloads; `invoke` with the receiver last.
-4. **Module libraries**: building one against the `ugly` package (a package
-   database in the build tree), and `import` from the module path,
-   replacing the built-in modules. Then foreign values in Haskell (proxies,
-   callbacks, foreign errors), `hint` and `want` for overloads.
+4. **Module libraries** (done): building one against the `ugly` package (a
+   package database in the build tree), and `import` from the module path,
+   replacing the built-in modules. Next: foreign values in Haskell
+   (proxies, callbacks, foreign errors), then `hint` and `want` for
+   overloads.
 5. **The fixture** (`tests/haskell/Conformance.hs`), then the protocol until
    the suite and pairwise pass.
 6. **music-diatonic** as an example, from Python and Lua.

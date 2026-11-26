@@ -1,0 +1,2 @@
+Not a library: copied into the build tree as Broken.so, for smoke.c, where
+import "Broken" finds it on the path and fails to load it.
