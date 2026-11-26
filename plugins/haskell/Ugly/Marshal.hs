@@ -80,13 +80,19 @@ data Named = forall a. Named (StableName a)
 -- | A new ref for a box, and its identity key: the index of its value's
 -- stable name, plus one (zero means "no identity"). The value is forced to
 -- weak head normal form first, so a thunk and its value are one identity.
+--
+-- An exception's identity is the exception inside its SomeException: since
+-- GHC 9.10, throwIO wraps it again (with its context) every time it's
+-- thrown, so the wrapper of an exception rethrown at home is a new object,
+-- but what it wraps isn't (rule 7).
 newRef :: Box -> IO (Ptr (), CUIntPtr)
 newRef b@(Box x _) = do
-  x' <- evaluate x
-  sn <- makeStableName x'
-  sp <- newStablePtr (Ref b (Named sn))
+  sn <- case cast x of
+    Just (SomeException inner) -> evaluate inner >>= fmap Named . makeStableName
+    Nothing -> evaluate x >>= fmap Named . makeStableName
+  sp <- newStablePtr (Ref b sn)
   count liveRefs 1
-  return (castStablePtrToPtr sp, fromIntegral (hashStableName sn) + 1)
+  return (castStablePtrToPtr sp, fromIntegral (case sn of Named n -> hashStableName n) + 1)
 
 -- | Refs not yet released, for the tests: ugly_hs_live_refs.
 liveRefs :: IORef Int
