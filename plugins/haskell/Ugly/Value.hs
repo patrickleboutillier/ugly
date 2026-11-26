@@ -351,12 +351,12 @@ intoIntegral cost (AInt i)
   | otherwise = Left (show i ++ " doesn't fit in " ++ typeNameP (Proxy :: Proxy a))
 intoIntegral _ arg = home arg
 
--- Costs: 0 for a kind's own type (int: Int, Int64; double: Double; string:
--- String), 1 for another that holds every value (Integer, Text), 2 for a
+-- Costs: 0 for a kind's own type (int: Int; double: Double; string:
+-- String), 1 for another that holds every value (Int64, Integer, Text), 2 for a
 -- narrower one the value fits, 3 for a literal of another kind (an int as a
 -- Double), 4 for Value, which takes anything.
 instance FromUgly Int where fromUgly = intoIntegral 0
-instance FromUgly Int64 where fromUgly = intoIntegral 0
+instance FromUgly Int64 where fromUgly = intoIntegral 1
 instance FromUgly Int8 where fromUgly = intoIntegral 2
 instance FromUgly Int16 where fromUgly = intoIntegral 2
 instance FromUgly Int32 where fromUgly = intoIntegral 2
@@ -418,6 +418,16 @@ instance FromUgly a => FromUgly (Maybe a) where
     Left _ -> fmap (fmap (fmap Just)) (fromUgly arg)
 
 instance {-# OVERLAPPABLE #-} Typeable a => FromUgly [a]
+
+-- | [Value] (what an unconstrained [a] becomes) takes any sequence that
+-- comes home, read lazily through its elements.
+instance {-# OVERLAPPING #-} FromUgly [Value] where
+  fromUgly arg@(AHome (Box _ i)) = case (home arg, infoElems i) of
+    (Right r, _) -> Right r
+    (_, Just es) -> Right (4, return (walk es 0))
+    _ -> Left (describeArg arg ++ " isn't a sequence")
+    where walk es n = maybe [] (: walk es (n + 1)) (elemsIndex es n)
+  fromUgly arg = home arg
 instance (Typeable a, Typeable b) => FromUgly (a, b)
 instance (Typeable a, Typeable b, Typeable c) => FromUgly (a, b, c)
 instance Typeable v => FromUgly (M.Map String v)

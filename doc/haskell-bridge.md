@@ -1,7 +1,7 @@
 # The Haskell bridge: a plan
 
-Status: proposal, being built in `plugins/haskell/` (the skeleton, then
-values and boxes, are done). Once it works,
+Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
+export tables and calls are done). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -90,37 +90,50 @@ the same symbols.
 
 ### Modules: compiled export tables
 
-A module that other languages can use is a small Haskell file compiled into
-a library:
+A module that other languages can use is a small Haskell file, its export
+list written by hand (decision 4):
 
 ```haskell
-module Music.Diatonic.Ugly where
+{-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
+module Music.Diatonic.Ugly (uglyExports) where
 import Ugly.Export
 import Music.Diatonic
 import Music.Diatonic.Chord
 import Music.Diatonic.Scale
 
 uglyModule "Music.Diatonic"
-  [ 'C, 'D, 'E, 'F, 'G, 'A, 'B, 'Note, 'Sharp, 'Flat
-  , 'raise, 'lower, 'transpose, 'above, 'below, 'Min3rd, 'Maj3rd
-  , 'majorScale, 'minorScale, 'majorChord, 'tonic, 'dominant, 'notes ]
+  [ ''Note, ''Interval, ''Scale, ''Chord
+  , 'C, 'D, 'E, 'F, 'G, 'A, 'B, 'raise, 'lower, 'transpose, 'above, 'below
+  , 'Min3rd, 'Maj3rd, 'majorScale, 'minorScale, 'majorChord, 'tonic, 'notes ]
 ```
 
-- `uglyModule` (Template Haskell) generates the export table: one entry per
-  name, each with its instantiations (above), the argument conversions and
-  the result's operations, all decided at compile time, where the types
-  are known.
-- Built with `ghc -dynamic -shared` against the `ugly` package, into
-  `Music.Diatonic.so`. `import("Music.Diatonic")` looks for it on the
-  module path (a `path` option, and `UGLY_HASKELL_PATH`), dlopens it and
-  reads its table.
-- The names are listed by hand, because TH can't list a module's exports.
-  Later, a build helper could read them from the `.hi` file
-  (`ghc --show-iface`).
+`uglyModule` (Template Haskell, `Ugly.Export`) is built, and tested by
+`haskell-exports` on a built-in example (`Ugly.Example`, with
+`Ugly.ExampleExports`). It declares `uglyExports`, the module's box:
+
+- **A type name** (`''Note`) gets `ToUgly` and `FromUgly` instances, unless
+  it has them: a box whose text is its `show` (if it has `Show`), and whose
+  methods (`invoke`, receiver last) are this module's exports. Only types
+  of kind `*`. The instances are orphans, hence `-Wno-orphans`.
+- **A value name** (`'transpose`, a constructor `'C`, a class method) is an
+  export. A polymorphic one is expanded into its instantiations: for each
+  constraint in its context, the instances in scope whose heads match it
+  (a two-parameter class with a fundep binds both variables), checking the
+  instances' own contexts (`Ord [a]` needs `Ord a`); a variable with no
+  constraint becomes `Value`. Instantiations that need a type with no
+  `ToUgly`/`FromUgly` are left out silently: `Ord` and `Show` have
+  instances for many types that can't cross (`largest :: Ord a => [a] ->
+  a` keeps those that can). An export with none left, or with a type
+  variable of a higher kind (`Functor f`), is a compile error.
 - Instances are those visible where the table is compiled, which is after
   the library, so all of its instances are included. An instance defined
   later in another package isn't. That's Haskell's open world, made
   explicit.
+- Next: built with `ghc -dynamic -shared` against the `ugly` package into a
+  library on the module path (a `path` option, and `UGLY_HASKELL_PATH`),
+  which `import("Music.Diatonic")` dlopens. Until then, `import` knows the
+  built-in modules only.
 
 ### Values
 
@@ -154,7 +167,7 @@ the same value read twice is the same handle.
 | a `Map String v` | `MEMBERS` (read only) |
 | a module | `MEMBERS`: its exports, in order |
 | a type with `Show` (`boxShow`), or none (`boxOpaque`) | none: a type name, and a text if it has `Show` |
-| a function, or an `IO` action | `CALLABLE` (not yet) |
+| a function, or an `IO` action | `CALLABLE` |
 | a record | `MEMBERS`: its fields (not yet) |
 
 - **`want`, by Haskell's rules: strict.** An int widens to a double (the
@@ -181,10 +194,14 @@ the same value read twice is the same handle.
   catch: type is the exception's type name (`ErrorCall`,
   `ArithException`), message is `displayException`, payload a box of the
   `SomeException`.
-- **Calls are curried** (not yet). Fewer arguments than the arity give a
-  partial application, itself a callable. More are applied to the result,
-  if it's a function. A pure function's result is evaluated; an `IO`
-  result is run.
+- **Calls are curried.** Fewer arguments than the arity give a partial
+  application, itself a callable (`add(2)` is an `Int -> Int`). More are
+  refused (`UGLY_ERR_TYPE`, too many arguments), and so is a call with
+  none. A pure function's result is evaluated to weak head normal form; an
+  `IO` result is run, and an `IO` action is called with no arguments.
+- **`invoke`**: on a module, its function, with no receiver; on another
+  box, a function of the module that exported its type, with the receiver
+  last (decision 1): `pt.scale(0.5)` is `scale 0.5 pt`.
 - **`describe`** gives the type's name as `Typeable` shows it: `Color`,
   `[Int]`, `Maybe (Maybe Int)`, `Map [Char] Int` (a `String` is `[Char]`
   to `Typeable`).
@@ -195,39 +212,54 @@ the same value read twice is the same handle.
 ### Polymorphism: overloads chosen at the call
 
 A polymorphic export is a set of monomorphic instantiations, like a Java
-method's overloads, and a call picks one the same way, by scoring:
+method's overloads (`overloaded`), and a call picks one the same way, by
+cost (built):
 
-1. **Argument types.** A Haskell value coming home carries its exact
-   `TypeRep`, so `tonic(scale)` picks `Scale -> Note`. A foreign primitive
-   matches every parameter type it converts to.
-2. **The `hint` call option** names the type when arguments don't decide:
-   `transpose(Min3rd, above, x, opts(hint="Chord"))`.
-3. **`want` picks the result type** for functions polymorphic in their
-   result alone (`read`, `fromInteger`, `minBound`): `read("C#")` with
-   `want` = int is refused, and with a hint of `Note` gives a `Note`.
-   This is the essay's "types flow from the static side", where the
-   caller's `want` is the static side, and it's the one place in UGLY where
-   `want` chooses the function as well as the conversion.
+1. **Argument types.** Each instantiation matches the arguments by its
+   parameter types alone, without evaluating anything, and each argument's
+   conversion has a cost (below). A Haskell value coming home carries its
+   exact type, so `tonic(scale)` picks `Scale -> Note` at cost 0; a foreign
+   primitive matches every parameter type it converts to. The cheapest
+   instantiation is called; a tie is refused as ambiguous (`UGLY_ERR_TYPE`,
+   listing them), as is a call no instantiation takes.
+2. **The `hint` call option** will name the type when arguments don't
+   decide: `transpose(Min3rd, above, x, opts(hint="Chord"))`. Not yet.
+3. **`want` will pick the result type** for functions polymorphic in their
+   result alone (`read`, `fromInteger`, `minBound`): `read("C#")` with a
+   hint of `Note` gives a `Note`. This is the essay's "types flow from the
+   static side", where the caller is the static side, and it's the one
+   place in UGLY where `want` chooses the function as well as the
+   conversion. Not yet.
 
-A type variable with no constraint becomes `Value`, the universal type,
-which holds any box or foreign value. So `id`, `map` and `foldr` work on
-anything.
+A type variable with no constraint becomes `Value`, which takes anything:
+`id` works on any value, and `[Value]` takes any sequence that comes home,
+read through its elements, so `head` works on any list.
 
 ### Arguments: a foreign value enters as a literal would
 
 Haskell has no implicit conversions. It has overloaded literals:
 `42 :: Double` is `fromInteger 42`, and with `OverloadedStrings`, `"x" ::
 Text` is `fromString "x"`. A foreign primitive arriving where a Haskell
-type is expected converts the way a literal of that kind would:
+type is expected converts the way a literal of that kind would (built,
+`FromUgly`), at a cost that ranks overloads:
 
-- an int to any `Num` type, range-checked (`UGLY_ERR_TYPE` outside it,
-  where `fromInteger` would wrap silently);
-- a double to `Double` or `Float`;
-- a string to `String`, `Text`, or another `IsString` type;
-- never through `Read`: a string isn't a `Note`, even though `read "C#"`
+| Argument | Cost 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| int | `Int` | `Int64`, `Integer` | a narrower type it fits (`Word8`, `Int32`, `Natural`...) | `Double`, `Float` | `Value` |
+| double | `Double` | | `Float` | | `Value` |
+| string | `String` | `Text` | `Char`, if one character | | `Value` |
+| bytes, bool | `ByteString`, `Bool` | | | | `Value` |
+| null | `()`, `Nothing` | | | | `Value` |
+| a Haskell value | its own type | | | | `Value`; `[Value]` for any sequence |
+
+- An int that doesn't fit is refused (decision 2), so `widen(300)` with a
+  `Word8` parameter is `UGLY_ERR_TYPE`, and an overload on `Int8` or
+  `Word8` is chosen by the value's range.
+- Never through `Read`: a string isn't a `Note`, even though `read "C#"`
   is one.
+- A double isn't an `Int`: no truncation.
 
-So a Haskell value is strict in the way Python is, not lenient like Perl.
+So Haskell is strict in the way Python is, not lenient like Perl.
 
 ### Foreign values in Haskell
 
@@ -314,14 +346,17 @@ then boxes in that runtime, so Python can call back into the program.
 2. **Values and boxes** (done): `Ugly.Value`, the primitive conversions,
    boxes and their identity, `release`, `describe`, and the text for `want`
    = string, from a built-in module (`Ugly.Smoke`) until modules load.
-3. **Export tables and calls**: `uglyModule`, with instantiation; arguments
-   in (`FromUgly`, the literal rules); calls and currying; building a module
-   library against the `ugly` package (a package database in the build
-   tree); `import` from the module path, replacing `Ugly.Smoke`.
-4. **The fixture** (`tests/haskell/Conformance.hs`), then the protocol until
+3. **Export tables and calls** (done): `uglyModule`, with instantiation;
+   arguments in (`FromUgly`, the literal rules); calls, currying, `IO`;
+   overloads; `invoke` with the receiver last.
+4. **Module libraries**: building one against the `ugly` package (a package
+   database in the build tree), and `import` from the module path,
+   replacing the built-in modules. Then foreign values in Haskell (proxies,
+   callbacks, foreign errors), `hint` and `want` for overloads.
+5. **The fixture** (`tests/haskell/Conformance.hs`), then the protocol until
    the suite and pairwise pass.
-5. **music-diatonic** as an example, from Python and Lua.
-6. **The binding**, then the docs.
+6. **music-diatonic** as an example, from Python and Lua.
+7. **The binding**, then the docs.
 
 ## Decided (2026-11-26)
 
