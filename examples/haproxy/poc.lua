@@ -4,7 +4,10 @@
 -- Use ugly in actions, not when the file loads: HAProxy loads Lua on its main
 -- thread (and in its master process, before forking), then runs actions on
 -- the workers. The binding attaches on first use, so this state belongs to
--- the worker that runs it, and Python starts there.
+-- the worker that runs it, and Python starts there. With lua-load, starting
+-- Python at load time works too (it's started in the master, and the worker
+-- inherits it through fork): run_poc.py's "at-load" mode sets
+-- UGLY_POC_AT_LOAD to check it.
 
 local ugly = require "ugly"
 local policy
@@ -13,6 +16,10 @@ local policy
 -- time (core.thread is 0); with lua-load-per-thread, each thread has its own.
 if core.thread == 0 then
     ugly.shared_by_threads()
+end
+
+if os.getenv("UGLY_POC_AT_LOAD") then
+    policy = ugly.module("python", "policy")
 end
 
 core.register_action("decide", { "http-req" }, function(txn)

@@ -1,7 +1,11 @@
 """The HAProxy proof of concept, as a test (TAP): HAProxy runs Lua, which asks
 Python (policy.py) whether to let each request through.
 
-    run_poc.py HAPROXY_BIN [NBTHREAD [lua-load|lua-load-per-thread]]
+    run_poc.py HAPROXY_BIN [NBTHREAD [lua-load|lua-load-per-thread [at-load]]]
+
+With "at-load", HAProxy runs as master and worker (-W): it loads the Lua
+file in the master, which starts Python there (UGLY_POC_AT_LOAD), then forks
+the worker, which must still be able to use Python.
 
 It needs the environment the tests set (UGLY_PLUGIN_PATH, and LUA_CPATH to
 the Lua binding that matches HAProxy's Lua); it adds this directory to
@@ -20,6 +24,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 haproxy = sys.argv[1]
 nbthread = sys.argv[2] if len(sys.argv) > 2 else "1"
 load = sys.argv[3] if len(sys.argv) > 3 else "lua-load"
+at_load = len(sys.argv) > 4 and sys.argv[4] == "at-load"
 
 count = 0
 failures = 0
@@ -56,13 +61,17 @@ cfg = (cfg.replace("@PORT@", str(port)).replace("@NBTHREAD@", nbthread)
 
 env = dict(os.environ)
 env["PYTHONPATH"] = here + os.pathsep + env.get("PYTHONPATH", "")
+if at_load:
+    env["UGLY_POC_AT_LOAD"] = "1"
 
 with tempfile.TemporaryDirectory() as tmp:
     cfg_path = os.path.join(tmp, "haproxy.cfg")
     with open(cfg_path, "w") as f:
         f.write(cfg)
-    # -db: foreground, no fork; HAProxy's own output goes to stderr.
-    proc = subprocess.Popen([haproxy, "-db", "-f", cfg_path], env=env,
+    # -db: foreground, no fork; HAProxy's own output goes to stderr. With
+    # -W, a master process forks the worker (the master stays in front).
+    cmd = [haproxy] + (["-W"] if at_load else []) + ["-db", "-f", cfg_path]
+    proc = subprocess.Popen(cmd, env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     try:
         for _ in range(100):
@@ -73,7 +82,8 @@ with tempfile.TemporaryDirectory() as tmp:
                 break
             except OSError:
                 time.sleep(0.05)
-        ok(proc.poll() is None, f"haproxy is up ({load}, nbthread {nbthread})")
+        mode = f"{load}, nbthread {nbthread}" + (", Python started in the master before forking the worker" if at_load else "")
+        ok(proc.poll() is None, f"haproxy is up ({mode})")
 
         status, body = request(port, "/")
         ok(status == 200 and body == "allowed: ok", f"GET / is allowed by Python: {status} {body!r}")

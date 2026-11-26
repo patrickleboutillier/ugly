@@ -141,9 +141,10 @@ Keys: `path` and `cpath` (`package.path`, `package.cpath`), ahead of
 - **0-based and 1-based.** Lua code sees 1-based indexes on proxies, and
   other languages see Lua tables 0-based. Don't translate by hand.
 - **HAProxy: use `ugly` inside actions.** HAProxy loads Lua on its main
-  thread, and in its master process before forking. A module imported at
-  load time starts Python in the master, and every worker inherits a forked
-  interpreter.
+  thread, so with `lua-load-per-thread` a state that used `ugly` at load
+  time would belong to the main thread, not the worker running it. With
+  `lua-load`, using it at load time works, Python included: HAProxy's
+  master starts Python, and the worker it forks inherits a working one.
 - **Calls block.** A call into another language is a plain C call: Lua
   can't yield across it, so it suits quick decisions, not I/O.
 - **Strings are bytes.** A Lua string that isn't valid UTF-8 arrives

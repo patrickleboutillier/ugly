@@ -69,6 +69,7 @@ ugly_status ugly_ctx_new(ugly_ctx **out){
 	}
 	ctx->thread = pthread_self() ;
 	current = ctx ;
+	lang_fork_safety() ;
 
 	ugly_status st = rt_create(ctx, lang_builtin_c(), NULL, 0, &ctx->host) ;
 	if (st != UGLY_OK){

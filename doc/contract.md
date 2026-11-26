@@ -861,6 +861,26 @@ All of them are in the headers and covered by the conformance suite.
     among the framework's, then in any assembly on the module path.
   - The CLR is kept out of valgrind and helgrind (suite `clr`), like the
     JVM.
+- **Fork** (2026-11-26): a host may fork after languages started, as
+  HAProxy's master does when it starts its workers, and the child has only
+  the forking thread. Rule 9 in `ugly_plugin.h`.
+  - The core takes its three locks before a fork (`pthread_atfork`), in
+    their usual order, and releases them after it in both processes, so no
+    child inherits one held by a thread that no longer exists. A fork from
+    inside a plugin's `init`, which runs under `langs_lock`, skips that one.
+  - CPython must be told, as `os.fork()` does: the Python plugin's
+    `pthread_atfork` handlers take the GIL and call `PyOS_BeforeFork`, then
+    `PyOS_AfterFork_Parent` or `PyOS_AfterFork_Child` and let the GIL go. An
+    `os.register_at_fork` callback marks `os.fork()` in progress, so Python's
+    own forks aren't bracketed twice. Without this, a child forked while
+    another thread held the GIL deadlocked on its first call into Python:
+    `python-fork` saw 20 out of 20.
+  - HAProxy in master-worker mode, with Python started when the Lua file
+    loads (in the master), is a test (`haproxy-poc-lua-load-4-at-load`).
+    Its master has one thread, so it passed before the fix too; the
+    deadlock needs a second thread, which `python-fork` has.
+  - The JVM and the CLR can't be forked once started (their threads are
+    lost): that's for the host to avoid.
 - **Rule 7, completed** (found by the bindings). When an error returns to
   the language its payload came from, that language raises the original
   value or exception object, not a wrapper. A Python exception that crosses

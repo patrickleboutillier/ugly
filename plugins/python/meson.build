@@ -14,5 +14,13 @@ if python_dep.found()
   plugins += ugly_python
   plugin_dirs += meson.current_build_dir()
   test_plugins += 'python'
+
+  # A process that forks after Python started: each child can call into it.
+  test('python-fork', executable('python_fork', 'fork.c', dependencies: ugly_dep),
+    env: {'UGLY_PLUGIN_PATH': meson.current_build_dir(), 'PYTHONMALLOC': 'malloc', 'PYTHONDONTWRITEBYTECODE': '1'},
+    depends: ugly_python,
+    protocol: 'tap',
+    suite: ['python'],
+  )
   subdir('binding')
 endif

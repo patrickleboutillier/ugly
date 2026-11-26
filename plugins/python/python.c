@@ -20,6 +20,7 @@
  */
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <pthread.h>
 #include <string.h>
 
 #include "ugly_plugin.h"
@@ -1490,6 +1491,96 @@ static void py_release(ugly_rt *rt, void *ref){
 /* Lifecycle                                                        */
 /* ---------------------------------------------------------------- */
 
+/*
+ * Fork. A program that forks after Python started (HAProxy's master starting
+ * its workers, with Python used at load time) copies only the forking
+ * thread, and CPython must be told: os.fork() calls PyOS_BeforeFork and
+ * PyOS_AfterFork_Parent/Child around fork(), a C program doesn't. Without
+ * them a child inherits the parent's thread states and locks, and
+ * deadlocks if another thread held the GIL. These pthread_atfork handlers
+ * bracket any fork the same way: the GIL taken (so no other thread holds
+ * it), then PyOS_BeforeFork; after it, PyOS_AfterFork_*, then the GIL let go.
+ * os.fork() itself is left to Python: its before-callback marks this thread.
+ */
+static _Thread_local int python_forking ;     /* os.fork() in progress on this thread */
+static _Thread_local int fork_bracketed ;
+static _Thread_local PyGILState_STATE fork_gil ;
+
+static void at_fork_prepare(void){
+	if (python_forking || (! Py_IsInitialized())){
+		return ;
+	}
+	fork_gil = PyGILState_Ensure() ;
+	PyOS_BeforeFork() ;
+	fork_bracketed = 1 ;
+}
+
+
+static void at_fork_parent(void){
+	if (fork_bracketed){
+		fork_bracketed = 0 ;
+		PyOS_AfterFork_Parent() ;
+		PyGILState_Release(fork_gil) ;
+	}
+}
+
+
+static void at_fork_child(void){
+	if (fork_bracketed){
+		fork_bracketed = 0 ;
+		PyOS_AfterFork_Child() ;
+		PyGILState_Release(fork_gil) ;
+	}
+}
+
+
+static PyObject *fork_mark(PyObject *self, PyObject *unused){
+	(void)self ; (void)unused ;
+	python_forking = 1 ;
+	Py_RETURN_NONE ;
+}
+
+
+static PyObject *fork_unmark(PyObject *self, PyObject *unused){
+	(void)self ; (void)unused ;
+	python_forking = 0 ;
+	Py_RETURN_NONE ;
+}
+
+
+static PyMethodDef fork_defs[] = {
+	{ "_fork_mark", fork_mark, METH_NOARGS, NULL },
+	{ "_fork_unmark", fork_unmark, METH_NOARGS, NULL },
+} ;
+
+
+/* Once per process, with the GIL held. */
+static void fork_safety(void){
+	static int done = 0 ;
+	if (done){
+		return ;
+	}
+	done = 1 ;
+	pthread_atfork(at_fork_prepare, at_fork_parent, at_fork_child) ;
+	PyObject *os = PyImport_ImportModule("os") ;
+	PyObject *reg = (os != NULL ? PyObject_GetAttrString(os, "register_at_fork") : NULL) ;
+	PyObject *mark = PyCFunction_New(&fork_defs[0], NULL), *unmark = PyCFunction_New(&fork_defs[1], NULL) ;
+	PyObject *kw = Py_BuildValue("{sOsOsO}", "before", mark, "after_in_parent", unmark, "after_in_child", unmark) ;
+	PyObject *empty = PyTuple_New(0) ;
+	PyObject *r = ((reg != NULL)&&(kw != NULL)&&(empty != NULL) ? PyObject_Call(reg, empty, kw) : NULL) ;
+	if (r == NULL){
+		PyErr_Clear() ;
+	}
+	Py_XDECREF(r) ;
+	Py_XDECREF(empty) ;
+	Py_XDECREF(kw) ;
+	Py_XDECREF(mark) ;
+	Py_XDECREF(unmark) ;
+	Py_XDECREF(reg) ;
+	Py_XDECREF(os) ;
+}
+
+
 static ugly_status py_init(ugly_ctx *ctx, const char *dir){
 	(void)ctx ; (void)dir ;
 	if (! Py_IsInitialized()){
@@ -1498,6 +1589,7 @@ static ugly_status py_init(ugly_ctx *ctx, const char *dir){
 		PyEval_SaveThread() ;
 	}
 	ENTER ;
+	fork_safety() ;
 	ugly_status st = UGLY_OK ;
 	if (ugly_module == NULL){
 		if ((PyType_Ready(&ProxyType) < 0)

@@ -117,10 +117,11 @@ Python starts.
 - **No signal handlers.** The plugin starts Python with
   `Py_InitializeEx(0)`, so Ctrl-C doesn't raise `KeyboardInterrupt` in
   embedded Python: signals belong to the host.
-- **Forking after Python started.** A host that forks after Python started
-  (HAProxy's master, if Python is used at load time) gives every child a
-  copy of an interpreter with its threads gone. Start Python in the child.
-  Not detected yet (TODO).
+- **Forking after Python started works**, even from C: the plugin tells
+  CPython about every `fork()` in the process (`pthread_atfork`), the way
+  `os.fork()` does, so each child has a working interpreter (HAProxy's
+  master starting its workers). The child has only the thread that forked;
+  Python threads the parent had are gone, as with `os.fork()`.
 - **Foreign elements can't be deleted or resized from Python** yet:
   `del p[0]`, `p.append(x)` and slice assignment aren't there (TODO).
   Assign to `p[len(p)]` to append to a Lua table or a Java list.
