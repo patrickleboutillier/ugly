@@ -61,8 +61,8 @@ static int fault(const char *which){
 		*(volatile int *)NULL = 1 ;
 	}
 	else {
-		volatile int zero = 0 ;
-		printf("%d\n", 1 / zero) ;
+		volatile int one = 1, zero = 0 ;     /* both volatile: GCC 13 folds 1 / x into a compare, which never traps */
+		printf("# %d\n", one / zero) ;
 	}
 	return 3 ;     /* no fault */
 }
