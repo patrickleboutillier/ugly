@@ -18,7 +18,7 @@ module Ugly.Marshal
     -- * Refs
   , Ref (..), newRef, deref, liveRefs, liveForeign
     -- * Entry points
-  , guarded, failWith, put, setText, readArg
+  , guarded, failWith, put, setText, readArg, exceptionValue, rethrowValue
     -- * Calling out
   , foreignCall, foreignInvoke, foreignGet, foreignIndex, foreignLength, foreignNames, foreignType
   , throwConv
@@ -146,10 +146,37 @@ raise :: Ptr Ctx -> Ptr Rt -> SomeException -> IO Status
 raise ctx rt e = case fromException e of
   Just fe -> restore ctx rt fe
   Nothing -> do
-    let ty = case e of SomeException inner -> show (typeOf inner)
-    msg <- evaluate (force (displayException e)) `catch` \(_ :: SomeException) -> return ty
-    (sp, key) <- newRef (Box e (info ty) { infoShow = Just msg })
+    (b, ty, msg) <- exceptionBox e
+    (sp, key) <- newRef b
     withUtf8 ty $ \t -> withUtf8 msg $ \m -> c_ugly_raise_native ctx rt t m sp key
+
+-- | An exception as the core sees it: a box of the SomeException itself
+-- (so that it comes home as itself), its type's name and its message. One
+-- declared under UglyException has its own type's members.
+exceptionBox :: SomeException -> IO (Box, String, String)
+exceptionBox e = do
+  let (ty, own) = case fromException e of
+        Just (UglyException inner i) -> (show (typeOf inner), i)
+        Nothing -> (case e of SomeException inner -> show (typeOf inner), Nothing)
+  msg <- evaluate (force (displayException e)) `catch` \(_ :: SomeException) -> return ty
+  let base = maybe (info ty) id own
+  return (Box e base { infoType = ty, infoShow = Just msg }, ty, msg)
+
+-- | Raises a value again: an exception that came home (a box of a
+-- SomeException) as itself; a foreign value as an error whose payload is
+-- that value, unchanged (rule 7 at its home).
+rethrowValue :: Value -> IO a
+rethrowValue v = case v of
+  VBox (Box x _) | Just (e :: SomeException) <- cast x -> throwIO e
+  VForeign f -> do
+    ty <- foreignType f `catch` \(_ :: SomeException) -> return "?"
+    owned <- newIORef nullPtr
+    throwIO (ForeignError errRaised "haskell" ty "a foreign value, raised again" (Just v) owned)
+  _ -> throwIO (ErrorCall "ugly: only an exception or a foreign value can be raised again")
+
+-- | An exception as a value: what a Haskell catch hands back to a caller.
+exceptionValue :: SomeException -> IO Value
+exceptionValue e = (\(b, _, _) -> VBox b) <$> exceptionBox e
 
 -- | A foreign error leaving Haskell: the core's error, as it was taken. If
 -- it left once already (Haskell kept the exception and threw it again),

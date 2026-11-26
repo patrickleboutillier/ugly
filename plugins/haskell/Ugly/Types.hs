@@ -5,11 +5,11 @@
 module Ugly.Types
   ( Value (..), Box (..), Info (..), Members (..), Elems (..), Arg (..), Conv
   , Want (..), Call (..), Refused (..), plainCall
-  , Foreign (..), ForeignError (..)
-  , info
+  , Foreign (..), ForeignError (..), UglyException (..)
+  , info, fixedMembers, fixedElems
   ) where
 
-import Control.Exception (Exception (..))
+import Control.Exception (Exception (..), evaluate)
 import qualified Data.ByteString as B
 import Data.Int
 import Data.IORef (IORef)
@@ -43,23 +43,39 @@ data Info = Info
   , infoElems :: Maybe Elems        -- ^ ELEMENTS
   , infoCall :: Maybe (Call -> [Arg] -> Either Refused (Int, IO Value))   -- ^ CALLABLE: match, then run
   , infoMethods :: Maybe (String -> Maybe Value)   -- ^ for invoke: functions taking this value last
+  , infoNew :: Bool                 -- ^ INSTANTIABLE: a constructor, which new calls
   }
 
 -- | A box with nothing but a type name.
 info :: String -> Info
-info ty = Info ty Nothing Nothing Nothing Nothing Nothing
+info ty = Info ty Nothing Nothing Nothing Nothing Nothing False
 
+-- | Members, read (and, for a mutable value, written) in IO.
 data Members = Members
-  { memberNames :: [String]
-  , memberGet :: String -> Maybe Value
+  { memberNames :: IO [String]
+  , memberGet :: String -> IO (Maybe Value)
+    -- | Nothing: immutable. Otherwise, for a name, how to set it from an
+    -- argument (Nothing: no such member to set; its members are fixed).
+  , memberSet :: Maybe (String -> Maybe (Arg -> Conv (IO ())))
   }
 
--- | Read-only elements. The length is lazy: an infinite list has none, but
--- its elements can still be read.
+-- | An immutable value's members.
+fixedMembers :: [String] -> (String -> Maybe Value) -> Members
+fixedMembers names get = Members (return names) (return . get) Nothing
+
+-- | Elements, read (and, for a mutable sequence, spliced) in IO.
 data Elems = Elems
-  { elemsLength :: Int
-  , elemsIndex :: Int -> Maybe Value    -- ^ Nothing outside the elements
+  { elemsLength :: IO Int
+  , elemsIndex :: Int -> IO (Maybe Value)    -- ^ Nothing outside the elements
+    -- | Nothing: immutable. Otherwise: from offset, remove n, insert these
+    -- (the core has checked the range).
+  , elemsSplice :: Maybe (Int -> Int -> [Arg] -> Conv (IO ()))
   }
+
+-- | An immutable value's elements. The length is lazy, and forced only
+-- when asked: an infinite list has none, but its elements can be read.
+fixedElems :: Int -> (Int -> Maybe Value) -> Elems
+fixedElems n at = Elems (evaluate n) (return . at) Nothing
 
 -- | An argument, as passed: a primitive, a Haskell value (a handle whose
 -- home is this runtime, or a value already in Haskell), or a foreign
@@ -123,3 +139,21 @@ instance Show ForeignError where
   show e = errorLanguage e ++ " " ++ errorType e ++ ": " ++ errorMessage e
 
 instance Exception ForeignError
+
+-- | The root of exceptions that cross with their own members: a Haskell
+-- exception type declared under it is raised to the core as a box of its
+-- ToUgly instance (a ConformanceError's 'message'), still the same
+-- SomeException, so that it comes home as itself. Ugly.Value's
+-- 'uglyToException' and 'uglyFromException' declare one:
+--
+-- > instance Exception ConformanceError where
+-- >   toException = uglyToException
+-- >   fromException = uglyFromException
+-- >   displayException = message
+data UglyException = forall e. Exception e => UglyException e (Maybe Info)
+
+instance Show UglyException where
+  show (UglyException e _) = show e
+
+instance Exception UglyException where
+  displayException (UglyException e _) = displayException e

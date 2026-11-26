@@ -104,8 +104,10 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   overload per instance and chosen at the call by argument types, `hint`
   and `want`. In `plugins/haskell/`: the skeleton, values and boxes,
   export tables and calls, module libraries loaded from a path, and
-  foreign values in Haskell, and `hint` and `want` for overloads are
-  done; next is the conformance fixture. The test case is the author's
+  foreign values in Haskell, `hint` and `want` for overloads, and the
+  conformance suite (all 9 groups, pairwise with every language) are
+  done; next is music-diatonic as an example, then the binding and the
+  docs. The test case is the author's
   own `music-diatonic` (Hackage 0.1.2), whose sources wait in
   `stuff/haskell/` with the spikes (local, re-fetch from Hackage if
   missing).

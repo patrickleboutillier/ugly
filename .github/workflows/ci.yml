@@ -79,13 +79,16 @@ jobs:
       - name: Valgrind (memcheck, all but the JVM, the CLR and GHC's RTS)
         run: meson test -C build --setup valgrind --print-errorlogs
 
-      # GHC's RTS: memcheck without --track-origins (see meson.build).
+      # GHC's RTS: memcheck without --track-origins (see meson.build). An
+      # explicit --suite overrides the setup's exclusions: the pairs with the
+      # JVM or the CLR are left out by name.
       - name: Valgrind (memcheck, GHC's RTS)
-        run: meson test -C build --setup valgrindghc --suite ghc --print-errorlogs
+        run: meson test -C build --setup valgrindghc --suite ghc --no-suite jvm --no-suite clr --print-errorlogs
 
-      - name: Helgrind (threads group, but the JVM and the CLR)
+      # GHC's RTS is left out too: helgrind doesn't model its scheduler's synchronization.
+      - name: Helgrind (threads group, but the JVM, the CLR and GHC's RTS)
         run: |
-          tests=$(meson test -C build --list 2>/dev/null | grep -o 'threads-[a-z0-9_]*' | grep -v -E '^threads-(java|dotnet)$' | sort -u)
+          tests=$(meson test -C build --list 2>/dev/null | grep -o 'threads-[a-z0-9_]*' | grep -v -E '^threads-(java|dotnet|haskell)$' | sort -u)
           meson test -C build --setup helgrind --print-errorlogs $tests
 
       - name: Keep the test logs

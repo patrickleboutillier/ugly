@@ -41,7 +41,7 @@ import Foreign.StablePtr (StablePtr, newStablePtr)
 import Language.Haskell.TH
 import Numeric (showHex)
 
-import Ugly.Value (Box, FromUgly, ToUgly (..), Value, boxWith, instantiation, moduleBox, overloaded)
+import Ugly.Value (Box, FromUgly, ToUgly (..), Value, boxRecord, boxWith, constructor, instantiation, moduleBox, overloaded)
 
 type Subst = M.Map Name Type
 
@@ -95,7 +95,7 @@ symbolPrefix = "ugly_hs_module_"
 
 -- | ToUgly and FromUgly for a listed type, unless it has them.
 typeInstances :: [Name] -> Name -> Q [Dec]
-typeInstances _ t = do
+typeInstances listed t = do
   info <- reify t
   case info of
     TyConI dec | not (null (tyParams dec)) ->
@@ -104,15 +104,26 @@ typeInstances _ t = do
   hasTo <- isInstance ''ToUgly [ConT t]
   hasFrom <- isInstance ''FromUgly [ConT t]
   hasShow <- isInstance ''Show [ConT t]
+  -- A record (one constructor, with fields): its fields that can cross are members.
+  fields <- case info of
+    TyConI (DataD _ _ _ _ [RecC _ fs] _) -> crossing fs
+    TyConI (NewtypeD _ _ _ _ (RecC _ fs) _) -> crossing fs
+    _ -> return []
   let methods = [| (`lookup` $(varE (mkName "uglyEntries"))) |]
       text = if hasShow then [| Just . show |] else [| const Nothing |]
+      members = listE [ [| ($(stringE (nameBase f)), \r -> toUgly ($(varE f) r)) |] | f <- fields ]
   to <- if hasTo then return [] else
-    [d| instance ToUgly $(conT t) where
-          toUgly x = boxWith ($text x) $methods x
-          textOf = $text |]
+    if null fields
+      then [d| instance ToUgly $(conT t) where
+                 toUgly x = boxWith ($text x) $methods x
+                 textOf = $text |]
+      else [d| instance ToUgly $(conT t) where
+                 toUgly x = boxRecord ($text x) $methods $members x
+                 textOf = $text |]
   from <- if hasFrom then return [] else [d| instance FromUgly $(conT t) |]
   return (to ++ from)
   where
+    crossing fs = map (\(f, _, _) -> f) <$> filterM (\(_, _, ft) -> holds listed (AppT (ConT ''ToUgly) ft)) fs
     tyParams (DataD _ _ ps _ _ _) = ps
     tyParams (NewtypeD _ _ ps _ _ _) = ps
     tyParams (TySynD _ ps _) = ps
@@ -148,7 +159,10 @@ entry listed (n, info) = do
                       $(listE [ [| instantiation $(listE (map typeArg targs)) ($(return ref) :: $(return m)) |]
                               | (targs, m) <- usable ]) |]
   where
-    one e = (: []) <$> [| ($(stringE (nameBase n)), $e) |]
+    -- A data constructor is also what new calls (INSTANTIABLE).
+    one e = case info of
+      DataConI {} -> (: []) <$> [| ($(stringE (nameBase n)), constructor $e) |]
+      _ -> (: []) <$> [| ($(stringE (nameBase n)), $e) |]
     typeArg t = [| show (typeRep (Proxy :: Proxy $(return t))) |]
     failWith msg = fail ("uglyModule: " ++ nameBase n ++ ": " ++ msg)
 

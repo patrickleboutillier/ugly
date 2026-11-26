@@ -68,6 +68,7 @@ if haskell_ok
   )
   plugins += [ugly_haskell, ugly_hs, ugly_rts]
   plugin_dirs += meson.current_build_dir()
+  test_plugins += 'haskell'
 
   # The package 'ugly' in a package database in the build tree: module
   # libraries are built against it with ghc_module (below). Not installed yet.

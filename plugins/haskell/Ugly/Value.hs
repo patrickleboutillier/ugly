@@ -31,11 +31,12 @@ module Ugly.Value
   , Foreign, ForeignError (..), Want (..), Call (..), Refused (..), plainCall
   , ToUgly (..), FromUgly (..), Result (..), Collect (..)
   , Instance, instantiation, overloaded, parseHint
-  , info, boxShow, boxOpaque, boxWith, moduleBox
-  , typeName, validText, describeArg, home, fromValue
+  , info, boxShow, boxOpaque, boxWith, boxRecord, constructor, moduleBox, fixedMembers, fixedElems
+  , typeName, validText, describeArg, home, fromValue, valueArg, callValue
+  , UglyException, uglyToException, uglyFromException
   ) where
 
-import Control.Exception (evaluate)
+import Control.Exception (Exception, SomeException, evaluate, fromException, toException)
 import qualified Data.ByteString as B
 import Data.Char (isAlphaNum, isSpace)
 import Data.Int
@@ -45,7 +46,7 @@ import qualified Data.Text as T
 import Data.Typeable
 import Data.Word
 import Numeric.Natural (Natural)
-import System.IO.Unsafe (unsafePerformIO)
+import System.IO.Unsafe (unsafeInterleaveIO, unsafePerformIO)
 
 import Ugly.Marshal (foreignCall, foreignIndex, foreignLength, throwConv, validText)
 import Ugly.Types
@@ -132,12 +133,24 @@ boxOpaque x = VBox (Box x (info (typeName x)))
 boxWith :: Typeable a => Maybe String -> (String -> Maybe Value) -> a -> Value
 boxWith txt methods x = VBox (Box x (info (typeName x)) { infoShow = txt, infoMethods = Just methods })
 
+-- | A record's box: a text, methods, and its fields as read-only members
+-- (what uglyModule gives a listed type with one record constructor).
+boxRecord :: Typeable a => Maybe String -> (String -> Maybe Value) -> [(String, a -> Value)] -> a -> Value
+boxRecord txt methods fields x = VBox (Box x (info (typeName x))
+  { infoShow = txt, infoMethods = Just methods
+  , infoMembers = Just (fixedMembers (map fst fields) (\n -> ($ x) <$> lookup n fields)) })
+
+-- | A data constructor: a function that new calls too (INSTANTIABLE).
+constructor :: Value -> Value
+constructor (VBox (Box x i)) = VBox (Box x i { infoNew = True })
+constructor v = v
+
 -- | A module: its exports as members. The list is its identity, so the same
 -- module is the same handle while one is live.
 moduleBox :: String -> [(String, Value)] -> Box
 moduleBox name entries = Box entries (info "module")
   { infoShow = Just ("module " ++ name)
-  , infoMembers = Just (Members (map fst entries) (`lookup` entries))
+  , infoMembers = Just (fixedMembers (map fst entries) (`lookup` entries))
   }
 
 -- | One instantiation of a polymorphic export: its type arguments (as
@@ -328,7 +341,7 @@ instance ToUgly B.ByteString where
 instance {-# OVERLAPPABLE #-} ToUgly a => ToUgly [a] where
   toUgly xs = VBox (Box xs (info (typeName xs)) { infoShow = textOf xs, infoElems = Just elems })
     where
-      elems = Elems (length xs) at
+      elems = fixedElems (length xs) at
       at i
         | i < 0 = Nothing
         | otherwise = case drop i xs of
@@ -342,7 +355,7 @@ instance ToUgly a => ToUgly (Maybe a) where
   wantCost _ w = if w == WantNull then Just 0 else wantCost (Proxy :: Proxy a) w
   toUgly Nothing = VNull
   toUgly m@(Just x) = case toUgly x of
-    VNull -> VBox (Box m (info (typeName m)) { infoShow = textOf m, infoElems = Just (Elems 1 one) })
+    VNull -> VBox (Box m (info (typeName m)) { infoShow = textOf m, infoElems = Just (fixedElems 1 one) })
     v -> v
     where one i = if i == 0 then Just VNull else Nothing
   textOf Nothing = Just "Nothing"
@@ -351,19 +364,19 @@ instance ToUgly a => ToUgly (Maybe a) where
 
 -- | Tuples are read-only elements.
 instance (ToUgly a, ToUgly b) => ToUgly (a, b) where
-  toUgly p@(a, b) = VBox (Box p (info (typeName p)) { infoShow = textOf p, infoElems = Just (Elems 2 at) })
+  toUgly p@(a, b) = VBox (Box p (info (typeName p)) { infoShow = textOf p, infoElems = Just (fixedElems 2 at) })
     where at i = lookup i [(0, toUgly a), (1, toUgly b)]
   textOf (a, b) = (\x y -> "(" ++ x ++ "," ++ y ++ ")") <$> textOf a <*> textOf b
 
 instance (ToUgly a, ToUgly b, ToUgly c) => ToUgly (a, b, c) where
-  toUgly t@(a, b, c) = VBox (Box t (info (typeName t)) { infoShow = textOf t, infoElems = Just (Elems 3 at) })
+  toUgly t@(a, b, c) = VBox (Box t (info (typeName t)) { infoShow = textOf t, infoElems = Just (fixedElems 3 at) })
     where at i = lookup i [(0, toUgly a), (1, toUgly b), (2, toUgly c)]
   textOf (a, b, c) = (\x y z -> "(" ++ x ++ "," ++ y ++ "," ++ z ++ ")") <$> textOf a <*> textOf b <*> textOf c
 
 -- | A map with string keys: its entries are members (read-only).
 instance ToUgly v => ToUgly (M.Map String v) where
   toUgly m = VBox (Box m (info (typeName m)) { infoMembers = Just members })
-    where members = Members (M.keys m) (\k -> toUgly <$> M.lookup k m)
+    where members = fixedMembers (M.keys m) (\k -> toUgly <$> M.lookup k m)
 
 instance ToUgly Value where
   toUgly = id
@@ -519,9 +532,11 @@ instance {-# OVERLAPPABLE #-} Typeable a => FromUgly [a]
 instance {-# OVERLAPPING #-} FromUgly [Value] where
   fromUgly arg@(AHome (Box _ i)) = case (home arg, infoElems i) of
     (Right r, _) -> Right r
-    (_, Just es) -> Right (4, return (walk es 0))
+    (_, Just es) -> Right (4, walk es 0)
     _ -> Left (describeArg arg ++ " isn't a sequence")
-    where walk es n = maybe [] (: walk es (n + 1)) (elemsIndex es n)
+    where walk es n = unsafeInterleaveIO $ do
+            v <- elemsIndex es n
+            maybe (return []) (\x -> (x :) <$> walk es (n + 1)) v
   fromUgly (AForeign take') = Right (4, do
     f <- take'
     n <- foreignLength f
@@ -578,14 +593,42 @@ instance {-# OVERLAPPABLE #-} (Typeable r, FromUgly r) => Collect r where
 -- | A value converted to a Haskell type, by the rules for an argument.
 -- A refusal is thrown (a TypeError).
 fromValue :: FromUgly a => Value -> IO a
-fromValue v = either throwConv snd (fromUgly arg)
-  where
-    arg = case v of
-      VNull -> ANull
-      VBool b -> ABool b
-      VInt i -> AInt i
-      VDouble d -> ADouble d
-      VString t -> AString t
-      VBytes b -> ABytes b
-      VBox b -> AHome b
-      VForeign f -> AForeign (return f)
+fromValue v = either throwConv snd (fromUgly (valueArg v))
+
+-- | A Value as an argument, for a call made from Haskell.
+valueArg :: Value -> Arg
+valueArg v = case v of
+  VNull -> ANull
+  VBool b -> ABool b
+  VInt i -> AInt i
+  VDouble d -> ADouble d
+  VString t -> AString t
+  VBytes b -> ABytes b
+  VBox b -> AHome b
+  VForeign f -> AForeign (return f)
+
+-- | Calls a value, Haskell's own (a box) or foreign, with these arguments.
+-- A refusal is thrown (a TypeError).
+callValue :: Value -> [Value] -> IO Value
+callValue (VForeign f) args = foreignCall f args
+callValue (VBox (Box _ i)) args | Just f <- infoCall i =
+  case f plainCall (map valueArg args) of
+    Left (Refused why) -> throwConv why
+    Left (NoInstance why) -> throwConv why
+    Right (_, run) -> run
+callValue _ _ = throwConv "not a function"
+
+
+-- Exceptions with members.
+
+-- | toException for an exception that crosses with its own members (Ugly.Types.UglyException).
+uglyToException :: (Exception e, ToUgly e) => e -> SomeException
+uglyToException e = toException (UglyException e (case toUgly e of
+  VBox (Box _ i) -> Just i
+  _ -> Nothing))
+
+-- | fromException for the same.
+uglyFromException :: Exception e => SomeException -> Maybe e
+uglyFromException se = do
+  UglyException e _ <- fromException se
+  cast e

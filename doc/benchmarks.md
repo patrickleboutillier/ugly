@@ -25,35 +25,39 @@ meson test -C build --benchmark --verbose
 
 ## Results
 
-2026-11-26 (after the fixes below): Intel Core i7-1365U, 6 CPUs under WSL2 (Linux 6.6), GCC 11.4,
-a `debugoptimized` build (`-O2 -g`); Lua 5.4.4, CPython 3.10.12, QuickJS
-2026-06-04, Perl 5.34.0, OpenJDK 21.0.13, .NET 10.0.15.
+2026-11-26 (after the fixes below; Haskell added when it joined the
+conformance suite): Intel Core i7-1365U, 6 CPUs under WSL2 (Linux 6.6),
+GCC 11.4, a `debugoptimized` build (`-O2 -g`); Lua 5.4.4, CPython 3.10.12,
+QuickJS 2026-06-04, Perl 5.34.0, OpenJDK 21.0.13, .NET 10.0.15, GHC 8.8.4.
 
 ### C calling each language (ns per call to `echo`)
 
 | Language | int | 16-byte string | its own object | natively, in the language |
 |---|---|---|---|---|
-| mock | 96.5 ns | 137 ns | 165 ns | 13.4 ns |
-| lua | 61.0 ns | 124 ns | 163 ns | 8.4 ns |
-| python | 118 ns | 147 ns | 191 ns | 43.5 ns |
-| js | 80.7 ns | 117 ns | 169 ns | 18.7 ns |
-| perl5 | 157 ns | 255 ns | 283 ns | 28.3 ns |
-| java | 437 ns | 626 ns | 787 ns | 0.0 ns |
-| dotnet | 123 ns | 263 ns | 251 ns | 0.1 ns |
+| mock | 96.7 ns | 137 ns | 163 ns | 13.0 ns |
+| lua | 60.7 ns | 121 ns | 177 ns | 8.4 ns |
+| python | 117 ns | 155 ns | 194 ns | 45.4 ns |
+| js | 78.3 ns | 110 ns | 173 ns | 18.0 ns |
+| perl5 | 157 ns | 249 ns | 259 ns | 28.6 ns |
+| java | 419 ns | 437 ns | 614 ns | 0.0 ns |
+| dotnet | 126 ns | 288 ns | 258 ns | 0.1 ns |
+| haskell | 407 ns | 643 ns | 873 ns | 0.2 ns |
 
-The JITs inline a native `echo` away entirely, hence the zeros.
+The JITs inline a native `echo` away entirely, hence the zeros; so does
+GHC, whose `echo` is `id`.
 
 ### Each language calling each other one (ns per call: row's loop calling column's `echo`)
 
-| Caller \ callee | mock | lua | python | js | perl5 | java | dotnet |
-|---|---|---|---|---|---|---|---|
-| mock | 20.0 ns | 141 ns | 205 ns | 169 ns | 229 ns | 466 ns | 193 ns |
-| lua | 190 ns | 9.1 ns | 262 ns | 393 ns | 324 ns | 600 ns | 260 ns |
-| python | 289 ns | 220 ns | 39.9 ns | 241 ns | 352 ns | 676 ns | 337 ns |
-| js | 231 ns | 135 ns | 211 ns | 20.9 ns | 254 ns | 540 ns | 215 ns |
-| perl5 | 421 ns | 417 ns | 502 ns | 388 ns | 31.9 ns | 880 ns | 874 ns |
-| java | 392 ns | 415 ns | 422 ns | 355 ns | 481 ns | 65.2 ns | 476 ns |
-| dotnet | 281 ns | 264 ns | 415 ns | 301 ns | 456 ns | 700 ns | 76.7 ns |
+| Caller \ callee | mock | lua | python | js | perl5 | java | dotnet | haskell |
+|---|---|---|---|---|---|---|---|---|
+| mock | 19.3 ns | 131 ns | 203 ns | 154 ns | 223 ns | 480 ns | 212 ns | 510 ns |
+| lua | 185 ns | 8.9 ns | 269 ns | 375 ns | 293 ns | 563 ns | 248 ns | 537 ns |
+| python | 239 ns | 220 ns | 47.9 ns | 228 ns | 340 ns | 626 ns | 300 ns | 642 ns |
+| js | 167 ns | 135 ns | 219 ns | 19.5 ns | 294 ns | 519 ns | 214 ns | 503 ns |
+| perl5 | 384 ns | 379 ns | 452 ns | 405 ns | 29.3 ns | 806 ns | 448 ns | 786 ns |
+| java | 346 ns | 331 ns | 415 ns | 348 ns | 456 ns | 63.4 ns | 421 ns | 686 ns |
+| dotnet | 264 ns | 256 ns | 369 ns | 275 ns | 412 ns | 694 ns | 73.7 ns | 647 ns |
+| haskell | 211 ns | 184 ns | 266 ns | 196 ns | 286 ns | 562 ns | 274 ns | 58.7 ns |
 
 ### Threads (total calls per second)
 
@@ -74,6 +78,13 @@ The JITs inline a native `echo` away entirely, hence the zeros.
   classifying the result, unboxing it, the argument array), at 30 to 60 ns
   of VM transition each. Fewer would take one Java call doing all of it, or
   Panama's faster upcalls.
+- **Haskell is the next slowest callee, at 400 to 900 ns**, and a fast
+  caller (about 200 ns to the interpreters). Each call in from C is an
+  in-call to the RTS (a bound Haskell thread, run by the scheduler on the
+  caller's OS thread), then the arguments are matched against the
+  callee's type (`FromUgly`, the overload costs) and the result boxed; a
+  handle result also takes a `StableName` and a `StablePtr`. Calls out
+  are a `safe` foreign call each. Not profiled yet.
 - **Python doesn't scale with threads, and slows down.** Every call into
   Python takes the GIL, and with several threads calling at once the GIL
   changes hands on every call: about 8 µs per call with 4 or more threads.
