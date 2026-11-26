@@ -78,9 +78,9 @@ jobs:
       - name: Valgrind (memcheck, all but the JVM and the CLR)
         run: meson test -C build --setup valgrind --print-errorlogs
 
-      - name: Helgrind (threads group)
+      - name: Helgrind (threads group, but the JVM and the CLR)
         run: |
-          tests=$(meson test -C build --list 2>/dev/null | grep -o 'threads-[a-z0-9_]*' | grep -v '^threads-java$' | sort -u)
+          tests=$(meson test -C build --list 2>/dev/null | grep -o 'threads-[a-z0-9_]*' | grep -v -E '^threads-(java|dotnet)$' | sort -u)
           meson test -C build --setup helgrind --print-errorlogs $tests
 
       - name: Keep the test logs

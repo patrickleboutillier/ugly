@@ -20,6 +20,12 @@ if test_plugins.contains('java')
   plugins += conformance_jar
 endif
 
+# C# fixtures: conformance.dll on UGLY_DOTNET_PATH (it references the plugin's Ugly.dll).
+dotnet_fixture_dir = ''
+if test_plugins.contains('dotnet')
+  subdir('dotnet')
+endif
+
 test_env_vars = {
   'UGLY_PLUGIN_PATH': ':'.join(plugin_dirs),
   'LUA_PATH': meson.current_source_dir() / 'lua' / '?.lua;;',
@@ -29,6 +35,7 @@ test_env_vars = {
   'UGLY_JS_PATH': meson.current_source_dir() / 'js',
   'PERL5LIB': meson.current_source_dir() / 'perl5',
   'UGLY_JAVA_CLASSPATH': java_fixture_cp,
+  'UGLY_DOTNET_PATH': dotnet_fixture_dir,
   # Modules found only through ugly_configure (binding tests).
   'UGLY_TEST_CONFIGURED': meson.current_source_dir() / 'configured',
   # The plugins built: binding tests skip what needs one that isn't.
@@ -48,9 +55,10 @@ foreach plugin : test_plugins
   env = environment(test_env_vars)
   env.set('UGLY_TEST_PLUGIN', plugin)
   foreach t : groups
-    # The JVM can't run under valgrind (it raises SIGSEGV on purpose): suite 'jvm' is left out there.
+    # The JVM and the CLR can't run under valgrind (they raise SIGSEGV on purpose): suites 'jvm' and 'clr' are left out there.
     test(t + '-' + plugin, group_exes[t], protocol: 'tap', env: env,
-      suite: ['conformance', 'conformance-' + plugin] + (plugin == 'java' ? ['jvm'] : []), depends: plugins)
+      suite: ['conformance', 'conformance-' + plugin] + (plugin == 'java' ? ['jvm'] : []) + (plugin == 'dotnet' ? ['clr'] : []),
+      depends: plugins)
   endforeach
 endforeach
 
@@ -64,7 +72,8 @@ foreach a : test_plugins
       env.set('UGLY_TEST_PLUGIN', a)
       env.set('UGLY_TEST_PEER', b)
       test('pairwise-' + a + '-' + b, pairwise, protocol: 'tap', env: env,
-        suite: ['conformance', 'pairwise'] + (a == 'java' or b == 'java' ? ['jvm'] : []), depends: plugins)
+        suite: ['conformance', 'pairwise'] + (a == 'java' or b == 'java' ? ['jvm'] : [])
+          + (a == 'dotnet' or b == 'dotnet' ? ['clr'] : []), depends: plugins)
     endif
   endforeach
 endforeach

@@ -9,9 +9,11 @@
 *.a
 
 # dotnet build in the source tree (an editor's C# extension, say; Meson builds
-# Ugly.dll in the build directory)
+# Ugly.dll and the C# fixtures in the build directory)
 /plugins/dotnet/bin/
 /plugins/dotnet/obj/
+/tests/dotnet/bin/
+/tests/dotnet/obj/
 
 # Editors
 *~

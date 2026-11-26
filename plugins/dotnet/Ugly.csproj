@@ -5,6 +5,9 @@
     <AssemblyName>Ugly</AssemblyName>
     <RootNamespace>Ugly</RootNamespace>
     <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Bridge.cs and Foreign.cs read and write the core's structs through pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- A library with its own runtimeconfig.json, which hostfxr starts the CLR from. -->
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

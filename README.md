@@ -4,8 +4,8 @@
 
 UGLY is a C library for calling between programming languages **inside one
 process**. It embeds the real interpreters (Lua, CPython, QuickJS,
-Perl 5 and the JVM) and routes every cross-language call through a small,
-language-neutral C core.
+Perl 5, the JVM and the CLR) and routes every cross-language call through a
+small, language-neutral C core.
 
 The goal is to replace pairwise bridges with a hub. N languages need
 N(N-1)/2 direct bridges. A hub needs one adapter per language, and any two
@@ -281,12 +281,12 @@ if (ugly_call(ctx, show.as.h, args, 2, UGLY_STRING, &out) == UGLY_ERR_RAISED){
   rethrown as that same object.
 - **Callbacks** are just callable handles. Calls can nest across languages,
   up to a limit, and going past the limit fails cleanly.
-- **Call options** carry what isn't an argument: keyword arguments, a Java
-  overload hint, Perl's call context. The callee's language honours each,
+- **Call options** carry what isn't an argument: keyword arguments, an
+  overload hint (Java, C#), Perl's call context. The callee's language honours each,
   or refuses the call; none is silently dropped.
 - **Threads**: a runtime belongs to the thread that created it, except
-  where its language can serve every thread (Python, through the GIL, and
-  the JVM): those are shared, so each thread of a host like HAProxy can
+  where its language can serve every thread (Python, through the GIL, the
+  JVM and the CLR): those are shared, so each thread of a host like HAProxy can
   have its own Lua and still reach the one Python in the process. Threads
   that Python or Java start get a context of their own automatically.
 
@@ -299,8 +299,11 @@ Sharing one process is the point, and it has a price.
   takes the host down, and nothing stops one language's code from doing
   anything the process can. UGLY is for code you trust. Signals belong to
   whoever installed them first: Python is started without its handlers,
-  the JVM leaves the shutdown signals to the host (`-Xrs`), and a plugin
-  restores any handler its interpreter resets while starting.
+  the JVM leaves the shutdown signals to the host (`-Xrs`), the plugin
+  puts back the host's after the CLR starts, and a plugin restores any
+  handler its interpreter resets while starting. The JVM and the CLR keep
+  the fault handlers they need, and pass on a fault outside their own code
+  to the handler installed before them, so the two work in either order.
 - **Calls are synchronous.** A call into another language is a plain C
   call: the caller waits, and Lua can't yield across it. That suits quick
   work (lookups, scoring, validation, reusing parsing or policy code). Code
@@ -331,16 +334,17 @@ fit; if you need cross-language inlining in hot loops, GraalVM is. The
 | `plugins/js/` | JavaScript on QuickJS, built from a pinned release (`subprojects/quickjs.wrap`). ES modules are loaded from `UGLY_JS_PATH`. `binding/` builds the same source as the native module `ugly.so` for `qjs`. |
 | `plugins/perl5/` | Perl 5. Modules and classes are packages; calls run in list context, unless a call asks for another. Its Perl side (proxies, ties, `use Ugly LANG => MODULE`) is `helper.pm`, embedded at build time. `binding/` builds the same source as the XS module `Ugly` (`use Ugly`). |
 | `plugins/java/` | Java through JNI. One JVM per process; classes are imported by name and their overloads chosen by how well the arguments convert. The helper classes (`ugly.Foreign`, `ugly.ForeignException`, `ugly.Kw`, `ugly.Opts`, `ugly.Bridge`) are `ugly.jar`. `binding/` builds the same source as `libugly_jni.so`, which `ugly.Foreign` loads in a plain `java` program. |
+| `plugins/dotnet/` | C# and .NET, on the CLR through its hosting API (`hostfxr`). One CLR per process; types are imported by full name from loaded assemblies or the module path, overloads are chosen as in Java, and keyword arguments bind to parameters by name. Most of it is C# (`Ugly.dll`), which calls the core through P/Invoke; `Ugly.Foreign` is a `DynamicObject`. No binding yet. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs, run as tests: Lua using Python, a C host, and HAProxy asking Python for a decision on each request (`haproxy/`). |
 | `doc/` | The contract and the design essay. |
 
 ## Status
 
-Lua (5.4 or 5.3), CPython, JavaScript (QuickJS), Perl 5 and Java pass the
-whole conformance suite, and every pair of them works in one process. Each
-one can also be the host: plain `lua`, `python3`, `qjs`, `perl` and `java`
-programs use the other languages, and so does HAProxy's built-in Lua, on
+Lua (5.4 or 5.3), CPython, JavaScript (QuickJS), Perl 5, Java and C# pass
+the whole conformance suite, and every pair of them works in one process.
+All but C# can also be the host: plain `lua`, `python3`, `qjs`, `perl` and
+`java` programs use the other languages, and so does HAProxy's built-in Lua, on
 several threads. Everything [doc/contract.md](doc/contract.md) specifies is
 built, and the current release is on the Releases page.
 
@@ -369,10 +373,12 @@ used.
 You need a C toolchain, Meson (0.61 or later) and Ninja. Each language
 plugin, and its binding, is built only if its language is found: Lua 5.4 or
 5.3 (`liblua5.4-dev`, `liblua5.3-dev`), CPython 3.10+ (`python3-dev`), Perl 5 (`libperl-dev`)
-and a JDK, 21 or later (`openjdk-21-jdk-headless`, found through `javac`).
+a JDK, 21 or later (`openjdk-21-jdk-headless`, found through `javac`), and
+a .NET 10 SDK (`dotnet-sdk-10.0`, found through `dotnet`).
 QuickJS is built from source: Meson downloads its pinned release at setup,
 and checks the checksum. `-Dlua=disabled`, `-Dpython=disabled`,
-`-Djs=disabled`, `-Dperl5=disabled` and `-Djava=disabled` skip a language;
+`-Djs=disabled`, `-Dperl5=disabled`, `-Djava=disabled` and
+`-Ddotnet=disabled` skip a language;
 `--wrap-mode=nodownload` forbids the download. The plugin uses Lua 5.4 if
 it's there, else 5.3 (`-Dlua_version=5.3` chooses), and the Lua binding is
 built for each; its tests need the matching interpreters (`lua5.4`,
@@ -429,9 +435,9 @@ process-wide state for the life of the process. `tests/valgrind.supp`
 suppresses only CPython's own memory: its live objects reported as
 "possibly lost" (from `libpython`, or from a statically linked `python3`
 host), because Python is never finalized, and the interned strings Python
-3.12 never frees when it is the host. Tests with a JVM in them (suite
-`jvm`) don't run under valgrind: its JIT and GC are beyond what memcheck can
-judge. They run with `-Xcheck:jni` instead (`UGLY_JAVA_CHECK`), where a JNI
+3.12 never frees when it is the host. Tests with a JVM or a CLR in them
+(suites `jvm` and `clr`) don't run under valgrind: their JITs and GCs are
+beyond what memcheck can judge. They run with `-Xcheck:jni` instead (`UGLY_JAVA_CHECK`), where a JNI
 warning aborts. The HAProxy tests (suite `haproxy`) are left out too:
 valgrind would wrap their runner, not HAProxy.
 
