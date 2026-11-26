@@ -80,12 +80,10 @@ All additive: none of it breaks existing plugins (contract, "Scope").
     process, and WASI capabilities are granted per runtime (`ugly_configure`).
   - Check how much of wasmtime's component API its C API covers; if too
     little, write the plugin in Rust against the C vtable.
-- [ ] **The .NET binding**: a .NET program using the other languages. The
-  plugin's C# side already calls `libugly` through P/Invoke, and
-  `Ugly.Foreign` is a `DynamicObject` (`((dynamic)json).dumps(x, indent: 2)`),
-  so the binding is mostly attach mode: `Ugly.dll` loaded by the program,
-  registering the plugin (`ugly_lang_register`) and attaching to the running
-  CLR, with teardown at `ProcessExit`. Then NuGet packages on the module path.
+- [ ] **NuGet packages for .NET modules.** A .NET program has its packages
+  already; C# reached from another language finds assemblies on the module
+  path only. Resolving a package's dependencies (`*.deps.json`) would let
+  `ugly.module("dotnet", ...)` use NuGet libraries directly.
 - [ ] **.NET's lazy signal handlers.** Starting the CLR leaves the host's
   signals alone, but C# code that uses `Console` or `Process` makes .NET's
   System.Native install terminal and child-process handlers (SIGCHLD,
@@ -157,7 +155,8 @@ contract and in the pull requests.
 - **Languages:** QuickJS, Perl 5 (with namespace import and complete ties),
   Java through JNI (with a binding, and any thread), Lua 5.3 beside 5.4,
   C# on the CLR through `hostfxr` (any thread, keyword arguments as named
-  arguments, hints).
+  arguments, hints), and its binding (`Ugly.dll` in any .NET program,
+  through `dynamic`).
 - **Hosts:** HAProxy, in `lua-load-per-thread` and `lua-load` on several
   threads; options for runtimes created on demand (`ugly_configure`).
 - **Threads:** `UGLY_CAP_ANY_THREAD` (Python, Java), runtimes shared between

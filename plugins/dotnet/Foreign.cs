@@ -41,9 +41,23 @@ public sealed unsafe class Foreign : DynamicObject {
         return f;
     }
 
-    public object? Call(params object?[] args) => Ops.Call(Handle, null, args, null);
+    int traits = -1;     // cached by IsClass
+
+    // A class that can be instantiated but not called: calling it constructs it, as calling a class does in C#'s neighbours.
+    bool IsClass {
+        get {
+            if (traits < 0) traits = (int)Ops.Traits(Handle);
+            return ((traits & Protocol.INSTANTIABLE) != 0) && ((traits & Protocol.CALLABLE) == 0);
+        }
+    }
+
+    internal object? CallWith(object?[] args, Kw? kw) => IsClass ? Ops.New(Handle, args, kw) : Ops.Call(Handle, null, args, kw);
+
+    /** Calls it (or constructs it, for a class that can only be instantiated); an Interop.Kw or Interop.Opts last gives call options. */
+    public object? Call(params object?[] args) => CallWith(args, null);
+
+    /** Invokes a method, with the foreign language's receiver rules; an Interop.Kw or Interop.Opts last gives call options. */
     public object? Invoke(string method, params object?[] args) => Ops.Call(Handle, method, args, null);
-    internal object? CallKw(object?[] args, Kw? kw) => Ops.Call(Handle, null, args, kw);
 
     /** Instantiates it (a class), with the foreign language's rules. */
     public object? New(params object?[] args) => Ops.New(Handle, args, null);
@@ -89,7 +103,7 @@ public sealed unsafe class Foreign : DynamicObject {
 
     public override bool TryInvoke(InvokeBinder binder, object?[]? args, out object? result) {
         Kw? kw = Named(binder.CallInfo, args ?? [], out object?[] a);
-        result = Ops.Call(Handle, null, a, kw);
+        result = CallWith(a, kw);
         return true;
     }
 
@@ -141,34 +155,6 @@ public sealed class ForeignException : Exception {
     ~ForeignException() {
         nint e = Interlocked.Exchange(ref err, 0);
         if (e != 0) Core.ugly_error_free(e);
-    }
-}
-
-
-/** UGLY from C#: other languages' modules, and what C# code needs to know about foreign values. */
-public static unsafe class Interop {
-    public static bool IsForeign(object? o) => Conv.ForeignOf(o) != null;
-
-    /** Module 'name' of language 'lang' ("python", "json"), in this thread's runtime of it. */
-    public static object? Module(string lang, string name) {
-        nint ctx = Ops.Ctx();
-        nint rt = Ops.Runtime(ctx, lang);
-        ulong h;
-        Status st;
-        fixed (byte* n = Errors.Z(name)) st = Core.ugly_rt_import(ctx, rt, n, &h);
-        if (st != Status.Ok) Errors.Throw(ctx, st);
-        return Foreign.Of(h);
-    }
-
-    /** Evaluates code in language 'lang' (if it can). */
-    public static object? Eval(string lang, string code) {
-        nint ctx = Ops.Ctx();
-        nint rt = Ops.Runtime(ctx, lang);
-        byte[] c = System.Text.Encoding.UTF8.GetBytes(code);
-        Val o;
-        Status st;
-        fixed (byte* p = c) st = Core.ugly_rt_eval(ctx, rt, p, (nuint)c.Length, Kind.Any, &o);
-        return Ops.Result(ctx, st, &o);
     }
 }
 
@@ -243,31 +229,70 @@ static unsafe class Ops {
         }
     }
 
-    static Opts MakeOpts(Kwarg* k, int n) => new() { Size = (uint)sizeof(Opts), Kwargs = k, NKwargs = (nuint)n };
+    /*
+     * The call options at the end of args (an Interop.Kw, an Interop.Opts,
+     * in either order), with 'named' (a dynamic call's named arguments)
+     * after the Kw's. Returns the positional arguments.
+     */
+    static object?[] Split(object?[] args, ref Kw? named, out CallOptions? opts) {
+        Kw? kw = null;
+        opts = null;
+        int n = args.Length;
+        for (int k = 0; (k < 2) && (n > 0); k++) {
+            if ((kw == null) && (args[n - 1] is Kw x)) { kw = x; n--; }
+            else if ((opts == null) && (args[n - 1] is CallOptions o)) { opts = o; n--; }
+            else break;
+        }
+        if (kw != null) named = kw.With(named);
+        return n == args.Length ? args : args[..n];
+    }
+
+    // The native options for a call: kwargs from 'a', hint and context as UTF-8 (freed by the caller).
+    static Opts MakeOpts(Kwarg* k, int n, CallOptions? o, out nint hint, out nint context) {
+        hint = o?.Hint != null ? Marshal.StringToCoTaskMemUTF8(o.Hint) : 0;
+        context = o?.Context != null ? Marshal.StringToCoTaskMemUTF8(o.Context) : 0;
+        return new() { Size = (uint)sizeof(Opts), Kwargs = k, NKwargs = (nuint)n, Hint = (byte*)hint, Context = (byte*)context };
+    }
 
     public static object? Call(ulong h, string? method, object?[] args, Kw? kw) {
+        args = Split(args, ref kw, out CallOptions? co);
         nint ctx = Ctx();
         using var a = new Args(ctx, args, kw);
         Val o;
         Status st;
-        fixed (Val* v = a.Vals)
-        fixed (Kwarg* k = a.Kw) {
-            Opts opts = MakeOpts(k, kw?.Names.Length ?? 0);
-            if (method == null) st = Core.ugly_call_opts(ctx, h, v, (nuint)args.Length, &opts, Kind.Any, &o);
-            else fixed (byte* m = Errors.Z(method)) st = Core.ugly_invoke_opts(ctx, h, m, v, (nuint)args.Length, &opts, Kind.Any, &o);
+        nint hint = 0, context = 0;
+        try {
+            fixed (Val* v = a.Vals)
+            fixed (Kwarg* k = a.Kw) {
+                Opts opts = MakeOpts(k, kw?.Names.Length ?? 0, co, out hint, out context);
+                if (method == null) st = Core.ugly_call_opts(ctx, h, v, (nuint)args.Length, &opts, Kind.Any, &o);
+                else fixed (byte* m = Errors.Z(method)) st = Core.ugly_invoke_opts(ctx, h, m, v, (nuint)args.Length, &opts, Kind.Any, &o);
+            }
+        }
+        finally {
+            Marshal.FreeCoTaskMem(hint);
+            Marshal.FreeCoTaskMem(context);
         }
         return Result(ctx, st, &o);
     }
 
     public static object? New(ulong h, object?[] args, Kw? kw) {
+        args = Split(args, ref kw, out CallOptions? co);
         nint ctx = Ctx();
         using var a = new Args(ctx, args, kw);
         ulong r;
         Status st;
-        fixed (Val* v = a.Vals)
-        fixed (Kwarg* k = a.Kw) {
-            Opts opts = MakeOpts(k, kw?.Names.Length ?? 0);
-            st = Core.ugly_new_opts(ctx, h, v, (nuint)args.Length, &opts, &r);
+        nint hint = 0, context = 0;
+        try {
+            fixed (Val* v = a.Vals)
+            fixed (Kwarg* k = a.Kw) {
+                Opts opts = MakeOpts(k, kw?.Names.Length ?? 0, co, out hint, out context);
+                st = Core.ugly_new_opts(ctx, h, v, (nuint)args.Length, &opts, &r);
+            }
+        }
+        finally {
+            Marshal.FreeCoTaskMem(hint);
+            Marshal.FreeCoTaskMem(context);
         }
         if (st != Status.Ok) Errors.Throw(ctx, st);
         return Foreign.Of(r);

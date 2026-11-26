@@ -9,3 +9,5 @@ conformance_dll = custom_target('conformance.dll',
 )
 plugins += conformance_dll
 dotnet_fixture_dir = meson.current_build_dir()
+
+subdir('binding')

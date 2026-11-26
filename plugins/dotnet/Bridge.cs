@@ -30,16 +30,13 @@ public static unsafe class Bridge {
     // The runtime: the CLR, from any thread. One at a time (no UGLY_CAP_MULTI_RUNTIME).
     internal static nint Rt;
 
-    static nint libugly;
-
     // Called once, from the plugin's init, with libugly's dlopen handle. 0 if all is well.
     [UnmanagedCallersOnly]
     public static int Init(int abi, nint lib) {
         if (abi != Abi) return -1;
         try {
-            libugly = lib;
-            NativeLibrary.SetDllImportResolver(typeof(Bridge).Assembly,
-                (name, asm, path) => name == "ugly" ? libugly : IntPtr.Zero);
+            Binding.Embedded = true;
+            Binding.UseLibrary(lib);
             Loader.Init();
             return 0;
         }
@@ -51,6 +48,14 @@ public static unsafe class Bridge {
 
     [UnmanagedCallersOnly]
     public static int RtNew(nint ctx, nint rt, nint* native) {
+        *native = 0;
+        Rt = rt;
+        return (int)Status.Ok;
+    }
+
+    // The binding: this CLR, already running (Binding.Ensure).
+    [UnmanagedCallersOnly]
+    public static int RtAttach(nint ctx, nint rt, nint existing, nint* native) {
         *native = 0;
         Rt = rt;
         return (int)Status.Ok;

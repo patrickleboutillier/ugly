@@ -6,12 +6,55 @@ C# (and any .NET language) on the CLR, started through its hosting API
 [the contract's §10](../contract.md#10-the-languages); this page is the
 practical side.
 
-## No binding yet
+## From C#: the binding
 
-C# can't host UGLY yet: a .NET program can't `using Ugly` and import Python.
-The plugin is there, so other languages (and C) use .NET, and C# code they
-call can use the other languages. The binding is in
-[TODO.md](../../TODO.md).
+A .NET program references `Ugly.dll` (from the plugin directory, or
+`build/plugins/dotnet/`) like any assembly; that's the whole binding. It
+finds libugly by itself: `UGLY_LIBRARY` (a path), else `libugly.so.2`
+through the system's search (`LD_LIBRARY_PATH`, the installed libdir), else
+beside `Ugly.dll`. The other languages' plugins come from `UGLY_PLUGIN_PATH`
+or the installed plugin directory.
+
+```xml
+<ItemGroup>
+  <Reference Include="Ugly"><HintPath>/usr/local/lib/x86_64-linux-gnu/ugly/plugins/Ugly.dll</HintPath></Reference>
+</ItemGroup>
+```
+
+```csharp
+using Ugly;
+
+dynamic json = Interop.Module("python", "json");             // a module of another language
+dynamic data = json.loads("{\"scores\": [3, 1, 4]}");
+Console.WriteLine(data["scores"][0]);                          // 3
+Console.WriteLine(json.dumps(data, indent: 2));               // named arguments are keyword arguments
+
+var functools = Interop.Module("python", "functools");      // a Foreign
+Func<object?, object?, object?> times = (a, b) => (long)a! * (long)b!;
+functools.Invoke("reduce", times, new List<object> { 1L, 2L, 3L });   // 6: Python calls a C# lambda
+
+Interop.Shutdown();                                           // on this thread, before the program ends
+```
+
+| `Ugly.Interop` | What it does |
+|---|---|
+| `Module(lang, name)` | imports a module of `lang` in this thread's runtime of it, as a `Foreign` |
+| `Eval(lang, code)` | evaluates code in a language that can (`UGLY_CAP_EVAL`): a `Foreign`, or a plain value |
+| `Configure(lang, key, values...)` | options for a language that hasn't started ([Configuring](#configuring)) |
+| `Kw("name", value, ...)`, `Kw(dictionary)` | keyword arguments, passed last (or named arguments, through `dynamic`) |
+| `Opts(hint: ..., context: ...)` | other call options, passed last (beside a `Kw`, in either order) |
+| `IsForeign(x)` | whether a value is foreign |
+| `Shutdown()` | tears UGLY down: see below |
+
+The binding attaches on the first use of `Interop`, on that thread. Code in
+other languages that asks for `"dotnet"` (`ugly.module("dotnet", ...)` in
+Python) reaches this program's own CLR.
+
+**Teardown is explicit.** Call `Interop.Shutdown()` on the thread that first
+used UGLY: it deletes this program's runtime and the other languages'
+runtimes that thread got, so their finalizers run (Lua's `__gc`, Perl's
+`DESTROY`, JS's finalizers). .NET runs `ProcessExit` on another thread,
+which can't do it. Without `Shutdown`, the process just ends.
 
 ## Using .NET from another language
 
@@ -60,7 +103,8 @@ g.Apply(lambda x: x * 2, 21)                        # 42: a Python function as a
 
 C# code that receives foreign values sees them as `Ugly.Foreign`
 (reference `Ugly.dll`, next to the plugin, with `<Private>false</Private>`:
-it's already loaded). A `Foreign` is a `DynamicObject`:
+when another language started the CLR, it's already loaded). A `Foreign` is
+a `DynamicObject`:
 
 ```csharp
 using Ugly;
@@ -73,13 +117,12 @@ public static object? Dumps(object data) {
 
 | `Ugly.Foreign` | |
 |---|---|
-| `Call(args...)`, `Invoke("m", args...)`, `New(args...)` | call it; invoke a method with its language's receiver rules; instantiate it |
+| `Call(args...)`, `Invoke("m", args...)`, `New(args...)` | call it (a class that can only be instantiated constructs); invoke a method with its language's receiver rules; instantiate it |
 | `Get("x")`, `Set("x", v)`, `this[i]`, `Length` | members; elements, 0-based |
 | `Names`, `Traits` | member names; `UGLY_TRAIT_*` bits |
 | through `dynamic` | `f.x`, `f.m(a, name: b)`, `f(a)`, `f[i]`, `f["k"]` |
 
-`Interop.Module(lang, name)`, `Interop.Eval(lang, code)` and
-`Interop.IsForeign(x)` are the rest of the API.
+`Interop` (above) is the rest of the API, embedded or not.
 
 A foreign value passed for a delegate type (`Func<...>`, `Action<...>`,
 your own) becomes a delegate that calls it, and for an interface a
@@ -134,6 +177,13 @@ Key: `path` (directories of assemblies), ahead of `UGLY_DOTNET_PATH`.
 
 ## Pitfalls
 
+- **`Interop.Shutdown()` belongs on the thread that first used UGLY**, and
+  a program that never calls it skips the other languages' finalizers.
+- **`dynamic` and `Foreign`'s own methods.** Through `dynamic`, `Foreign`'s
+  own members win: a foreign member named `Call`, `Invoke`, `New`, `Get`,
+  `Set`, `Length`, `Names`, `Traits`, `Equals` or `ToString` needs
+  `f.Invoke("Call", ...)` or `f.Get("Length")`. Members are case-sensitive,
+  so Python's `get` or Java's `size` are fine.
 - **One CLR per process, for good.** The CLR can't be unloaded or started
   again, so configure first.
 - **Type names, not namespaces.** `ugly.module("dotnet", "System.IO")` fails:
