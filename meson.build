@@ -43,6 +43,7 @@ subdir('plugins/python')
 subdir('plugins/js')
 subdir('plugins/perl5')
 subdir('plugins/java')
+subdir('plugins/dotnet')
 subdir('tests')
 subdir('examples')
 
@@ -60,7 +61,7 @@ subdir('examples')
 # reported as "possibly lost" (Python is never finalized); see that file. The
 # JVM can't run under valgrind (it uses SIGSEGV on purpose), so suite 'jvm'
 # (anything that starts it) is left out; the Java plugin's checks are -Xcheck:jni
-# (UGLY_JAVA_CHECK) and the JVM's own.
+# (UGLY_JAVA_CHECK) and the JVM's own. The same goes for the CLR, suite 'clr'.
 valgrind = find_program('valgrind', required: false)
 if valgrind.found()
   add_test_setup('valgrind',
@@ -73,13 +74,13 @@ if valgrind.found()
       '--keep-debuginfo=yes',
       '--suppressions=' + (meson.project_source_root() / 'tests' / 'valgrind.supp'),
     ],
-    exclude_suites: ['jvm', 'haproxy'],
+    exclude_suites: ['jvm', 'clr', 'haproxy'],
     timeout_multiplier: 10,
   )
   # Data races, on the threads group: meson test --setup helgrind threads-mock threads-lua ...
   add_test_setup('helgrind',
     exe_wrapper: [valgrind, '--tool=helgrind', '--error-exitcode=99', '--num-callers=30'],
-    exclude_suites: ['jvm', 'haproxy'],
+    exclude_suites: ['jvm', 'clr', 'haproxy'],
     timeout_multiplier: 10,
   )
 endif
