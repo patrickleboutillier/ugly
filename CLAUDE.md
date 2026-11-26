@@ -104,7 +104,7 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - **Process:** work on a branch, open a PR, wait for CI, rebase-merge it, then delete the local branch. A PR touching only documentation (`*.md`, `doc/`, `LICENSE`, `.gitignore`) gets no CI run (`paths-ignore`), so merge it without waiting. GitHub deletes the remote branch on merge ("automatically delete head branches" is on since 2026-11-25). Check that the merge happened (`gh pr view N --json state`) before relying on it: a failed merge once closed a PR when its branch was deleted by hand. The author lets Claude push and merge at will.
 - **Done, beyond the original plan:** Java and its binding; Perl's namespace import and ties; `ugly_configure`; threads (any-thread runtimes, runtimes the host serializes); Lua 5.3; foreign functions as Lua functions; call options (keyword arguments, Perl's context, Java's hints); CI; source releases; the HAProxy proof of concept, in both of HAProxy's Lua modes on several threads; the C# plugin (the CLR through `hostfxr`) and its binding.
 - **Decision 6** (Latin-1 decoding) was **revised** so that bytes round-trip; it's flagged to the author in the contract.
-- **Next:** whatever the author picks from `TODO.md` (open items first, done ones at the end): a plugin author's guide (`doc/plugin-guide.md`, the lessons of the benchmarks among them: the author asked for it), Java's call cost, LuaJIT, Python started before a fork, iterators, Ruby or Node.js, packages. Keep it current.
+- **Next:** whatever the author picks from `TODO.md` (open items first, done ones at the end): Java's call cost, LuaJIT, Python started before a fork, iterators, Ruby or Node.js, packages. Keep it current.
 
 ## Landscape (2026)
 
@@ -125,4 +125,5 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 - `doc/design-essay.md` is in the author's first-person voice; the author verified its Inline::Java claims on 2026-11-24. It describes the 2013 design historically.
 - `doc/contract.md` is the v2 spec. It is kept current: record any change to the contract in it, and in the headers.
 - `doc/languages/<lang>.md` are the user guides, one per language (binding API, values both ways, options, errors, threads, configuring, pitfalls). They link to contract §10 rather than copy it. Keep them current with any change to a plugin or binding; their examples were run when written.
+- `doc/plugin-guide.md` is for plugin authors: the order of work, the rules that are easy to get wrong, threads, lifecycle, bindings, performance and testing, each with the plugin that taught it. Add to it when a plugin teaches something new (the author asked for it, 2026-11-26).
 - `Directory.Build.props` sends C# builds made outside Meson (the editor's C# extension, a plain `dotnet build`) to `.artifacts/`; Meson's pass their own `--artifacts-path`.

@@ -385,7 +385,7 @@ laptop (i7-1365U):
 | `plugins/dotnet/` | C# and .NET, on the CLR through its hosting API (`hostfxr`). One CLR per process; types are imported by full name from loaded assemblies or the module path, overloads are chosen as in Java, and keyword arguments bind to parameters by name. Most of it is C# (`Ugly.dll`), which calls the core through P/Invoke; `Ugly.Foreign` is a `DynamicObject`. `Ugly.dll` is also the binding: a .NET program that references it uses the other languages through `Ugly.Interop`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs, run as tests: Lua using Python, a C host, and HAProxy asking Python for a decision on each request (`haproxy/`). |
-| `doc/` | The contract, the design essay, a guide per language (`doc/languages/`), and the benchmarks. |
+| `doc/` | The contract, the design essay, a guide per language (`doc/languages/`), the benchmarks, and a guide to writing a plugin (`plugin-guide.md`). |
 
 ## Status
 
