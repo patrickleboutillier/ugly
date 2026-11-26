@@ -119,11 +119,17 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 
 ## Engineering
 
-- [ ] **Benchmarks.** No numbers yet: the README says calls are cheap but
-  can't say how cheap. Measure a call for each ordered pair (reusing
-  `pairwise.c`'s harness), against the same call made natively, and
-  handle-table contention with many threads (one lock covers it). Publish
-  the numbers in the README with the machine they came from.
+- [ ] **Java's call cost.** About 600 ns per call into Java, against 60 to
+  150 ns for the other languages (doc/benchmarks.md): each call crosses JNI
+  several times (a local frame, an argument array, boxing, reflection, the
+  result's `IsInstanceOf` checks). Profile it (perf), then cut crossings:
+  convert simple arguments and results on the Java side in one call, keep
+  a cached `Method` per callee.
+- [ ] **Python called from many threads.** Every call takes the GIL, which
+  changes hands on every call when several threads call at once (about
+  8 µs per call with 4 threads). Nothing UGLY can do short of a
+  free-threaded CPython (3.13t), but a binding could offer a batch call
+  (many calls under one GIL hold).
 - [ ] **Packages**: `.deb` per Ubuntu LTS (binaries are valid per distro
   release), then a LuaRocks rock or a Python wheel per binding, if anyone
   wants them. Releases are source tarballs today.
@@ -165,6 +171,9 @@ contract and in the pull requests.
   hints; §11), `ugly_splice` and `ugly_delete_member`, foreign functions as
   real Lua functions, classes that construct when called.
 - **Engineering:** CI (two Ubuntu releases, valgrind, helgrind, a build
-  without each language, Lua 5.3), source releases from a tag.
+  without each language, Lua 5.3), source releases from a tag. Benchmarks
+  (`tests/bench.c`, doc/benchmarks.md), which found the core's lock
+  serializing every call (now a lock-free lookup), and uncached reflection
+  in .NET and Java, and a closure per call in Perl.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).

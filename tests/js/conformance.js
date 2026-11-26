@@ -53,6 +53,9 @@ export function kind_of(x) {
 }
 
 export function make_counter() { return new counter(); }
+// Benchmarks (tests/bench.c): f(i) n times, and our own echo n times.
+export function bench(f, n) { for (let i = 0; i < n; i++) f(i); return n; }
+export function bench_self(n) { for (let i = 0; i < n; i++) echo(i); return n; }
 export function apply(f, x) { return f(x); }
 export function call_twice(f, x) { return f(f(x)); }
 export function raise_error(msg) { throw new ConformanceError(msg); }

@@ -211,7 +211,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 	ugly_lang *l ;
 	for (l = langs ; l != NULL ; l = l->next){
 		if (strcmp(l->name, name) == 0){
-			l->loads++ ;
+			__atomic_add_fetch(&l->loads, 1, __ATOMIC_RELAXED) ;
 			*out = l ;
 			pthread_mutex_unlock(&langs_lock) ;
 			return UGLY_OK ;
@@ -285,7 +285,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 	l->dir = dir ;
 	l->dl = dl ;
 	l->plugin = plugin ;
-	l->loads = 1 ;
+	__atomic_store_n(&l->loads, 1, __ATOMIC_RELAXED) ;
 	l->initialized = 1 ;
 	l->next = langs ;
 	langs = l ;
@@ -315,7 +315,7 @@ ugly_status ugly_lang_unload(ugly_ctx *ctx, ugly_lang *lang){
 	}
 	if (lang->loads > 1){
 		/* Another load still holds the language. */
-		lang->loads-- ;
+		__atomic_sub_fetch(&lang->loads, 1, __ATOMIC_RELAXED) ;
 		pthread_mutex_unlock(&langs_lock) ;
 		return UGLY_OK ;
 	}
@@ -324,7 +324,7 @@ ugly_status ugly_lang_unload(ugly_ctx *ctx, ugly_lang *lang){
 		return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "can't unload %s: %d runtime(s) still alive",
 			lang->name, lang->runtimes) ;
 	}
-	lang->loads = 0 ;
+	__atomic_store_n(&lang->loads, 0, __ATOMIC_RELAXED) ;
 
 	/*
 	 * A restartable plugin is torn down and unmapped. Any other plugin keeps
@@ -491,7 +491,7 @@ ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_la
 				return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "another plugin for %s is already loaded",
 					plugin->name) ;
 			}
-			l->loads++ ;
+			__atomic_add_fetch(&l->loads, 1, __ATOMIC_RELAXED) ;
 			*out = l ;
 			pthread_mutex_unlock(&langs_lock) ;
 			return UGLY_OK ;
@@ -519,7 +519,7 @@ ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_la
 	l->name = xstrdup(plugin->name) ;
 	l->dir = xstrdup("") ;
 	l->plugin = plugin ;
-	l->loads = 1 ;
+	__atomic_store_n(&l->loads, 1, __ATOMIC_RELAXED) ;
 	l->initialized = 1 ;
 	l->next = langs ;
 	langs = l ;

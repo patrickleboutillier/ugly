@@ -71,6 +71,18 @@ public final class conformance {
 		return x.getClass().getSimpleName();
 	}
 
+	/* Benchmarks (tests/bench.c): f(i) n times, and our own echo n times (keeping the results, so the JIT can't drop the calls). */
+	public static long bench(Function<Object, Object> f, long n){
+		long kept = 0;
+		for (long i = 0 ; i < n ; i++) if (f.apply(i) != null) kept++;
+		return kept;
+	}
+	public static long bench_self(long n){
+		long kept = 0;
+		for (long i = 0 ; i < n ; i++) if (echo(i) != null) kept++;
+		return kept;
+	}
+
 	public static Object make_counter(){ return new counter(); }
 	public static Object apply(Function<Object, Object> f, Object x){ return f.apply(x); }
 	public static Object call_twice(Function<Object, Object> f, Object x){ return f.apply(f.apply(x)); }

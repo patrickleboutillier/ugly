@@ -43,7 +43,7 @@ struct ugly_lang {
 	char *dir ;
 	void *dl ;                   /* dlopen handle, NULL for built-in languages */
 	const ugly_plugin *plugin ;
-	int loads ;                  /* outstanding ugly_lang_load calls */
+	int loads ;                  /* outstanding ugly_lang_load calls (under langs_lock; written atomically, since ugly_rt_new reads it without) */
 	int runtimes ;               /* live runtimes */
 	int initialized ;
 	ugly_rt *rts ;               /* live runtimes, linked through ugly_rt.lang_next (langs lock) */
@@ -71,7 +71,8 @@ struct ugly_rt {
 	int destroyed ;
 
 	/* Native refs whose last handle reference was dropped on another thread
-	 * (protected by the handle table's lock). */
+	 * (protected by the handle table's lock; h_drain reads npending without
+	 * it, atomically, so writers store it atomically). */
 	void **pending ;
 	size_t npending, pending_cap ;
 } ;

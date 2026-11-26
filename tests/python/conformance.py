@@ -72,6 +72,19 @@ def make_counter():
     return counter()
 
 
+# Benchmarks (tests/bench.c): f(i) n times, and our own echo n times.
+def bench(f, n):
+    for i in range(n):
+        f(i)
+    return n
+
+
+def bench_self(n):
+    for i in range(n):
+        echo(i)
+    return n
+
+
 def apply(f, x):
     return f(x)
 

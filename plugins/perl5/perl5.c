@@ -986,6 +986,28 @@ XS(xs_proxy_release){
 }
 
 
+/*
+ * Ugly::Proxy::_held($proxy): another proxy for the same value, owning its
+ * own reference and outside the cache. The code ref &{$proxy} gives closes
+ * over it, so it can be cached without keeping $proxy alive, and outlive it.
+ */
+XS(xs_proxy_held){
+	dXSARGS ;
+	if ((items < 1)||(! IS_PROXY(ST(0)))){
+		croak("Ugly::Proxy::_held: not a proxy") ;
+	}
+	ugly_ctx *ctx = ugly_current_ctx() ;
+	ugly_handle h ;
+	if ((ctx == NULL)||(ugly_dup(ctx, PROXY_HANDLE(ST(0)), &h) != UGLY_OK)){
+		croak("Ugly::Proxy::_held: stale proxy") ;
+	}
+	SV *rv = newRV_noinc(newSVuv((UV)h)) ;
+	sv_bless(rv, gv_stashpv("Ugly::Proxy", GV_ADD)) ;
+	ST(0) = sv_2mortal(rv) ;
+	XSRETURN(1) ;
+}
+
+
 /* Ugly::Error::_free($error): from DESTROY, for an error that never escaped. */
 XS(xs_error_free){
 	dXSARGS ;
@@ -1081,6 +1103,7 @@ static void register_xs(pTHX){
 	newXS("Ugly::Proxy::_traits", xs_proxy_traits, file) ;
 	newXS("Ugly::Proxy::_same", xs_proxy_same, file) ;
 	newXS("Ugly::Proxy::_release", xs_proxy_release, file) ;
+	newXS("Ugly::Proxy::_held", xs_proxy_held, file) ;
 	newXS("Ugly::Error::_free", xs_error_free, file) ;
 	newXS("Ugly::module", xs_module, file) ;
 	newXS("Ugly::eval", xs_eval, file) ;

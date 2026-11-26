@@ -241,8 +241,8 @@ static class Protocol {
             case MethodRef r:
                 return InvokeOn(r.Cls, r.Target, r.Name, args, kw);
             case Delegate d: {
-                MethodInfo m = d.GetType().GetMethod("Invoke")!;
-                (MethodBase best, object?[] a) = Choose([m], args, kw, d.GetType().Name);
+                Overloads o = invokers.GetOrAdd(d.GetType(), t => new Overloads([t.GetMethod("Invoke")!]));
+                (MethodBase best, object?[] a) = Choose(o, args, kw, d.GetType().Name);
                 return best.Invoke(d, NoWrap, null, a, null);
             }
             case Foreign x:
@@ -258,9 +258,10 @@ static class Protocol {
         o is Type t ? InvokeOn(t, null, name, args, kw) : InvokeOn(o.GetType(), o, name, args, kw);
 
     static object? InvokeOn(Type t, object? target, string name, object?[] args, Kw? kw) {
-        BindingFlags flags = target == null ? Static : Instance;
-        var cands = t.GetMethods(flags).Where(m => (m.Name == name) && !m.IsSpecialName).ToList<MethodBase>();
-        if (cands.Count == 0) {
+        bool isStatic = target == null;
+        Overloads cands = methods.GetOrAdd((t, name, isStatic), k => new Overloads(
+            k.Item1.GetMethods(k.Item3 ? Static : Instance).Where(m => (m.Name == k.Item2) && !m.IsSpecialName).ToArray<MethodBase>()));
+        if (cands.Methods.Length == 0) {
             // A callable member that isn't a method (a delegate in a field or a dictionary): call it.
             object? member = GetMember((object?)target ?? t, name);
             if ((member is Delegate) || (member is MethodRef) || (member is Foreign)) return Call(member, args, kw);
@@ -273,8 +274,8 @@ static class Protocol {
     public static object New(object cls, object?[] args, Kw? kw) {
         if (cls is not Type t) throw Fail.NotCapable("not a class");
         if (!Instantiable(t)) throw Fail.NotCapable($"{t.Name} can't be instantiated");
-        var ctors = t.GetConstructors().ToList<MethodBase>();
-        if ((ctors.Count == 0) || (t.IsValueType && (args.Length == 0) && (kw == null))) {
+        Overloads ctors = constructors.GetOrAdd(t, k => new Overloads(k.GetConstructors().ToArray<MethodBase>()));
+        if ((ctors.Methods.Length == 0) || (t.IsValueType && (args.Length == 0) && (kw == null))) {
             return Activator.CreateInstance(t)!;     // a struct's default value
         }
         (MethodBase best, object?[] a) = Choose(ctors, args, kw, t.Name);
@@ -287,6 +288,42 @@ static class Protocol {
 
     const int NO = int.MaxValue;
 
+    /*
+     * Resolution is cached: the candidates of each (type, name, static) with
+     * their parameters, and, for positional calls of up to 4 arguments, the
+     * overload chosen for each signature: the arguments' types, and for an
+     * integer which types it fits, for a string whether it could be a char
+     * (what Score looks at besides types).
+     */
+    sealed class Overloads(MethodBase[] methods) {
+        public readonly MethodBase[] Methods = methods;
+        public readonly ParameterInfo[][] Params = methods.Select(m => m.GetParameters()).ToArray();
+        public readonly ConcurrentDictionary<Sig, (int Best, int[] Slots)> Chosen = new();
+    }
+
+    readonly record struct Sig(int N, Type? T0, int E0, Type? T1, int E1, Type? T2, int E2, Type? T3, int E3);
+
+    static readonly ConcurrentDictionary<(Type, string, bool), Overloads> methods = new();
+    static readonly ConcurrentDictionary<Type, Overloads> constructors = new();
+    static readonly ConcurrentDictionary<Type, Overloads> invokers = new();
+
+    static (Type?, int) ArgSig(object? a) => a switch {
+        null => (null, 0),
+        long v => (typeof(long), (Fits(v, typeof(int)) ? 1 : 0) | (Fits(v, typeof(short)) ? 2 : 0) | (Fits(v, typeof(sbyte)) ? 4 : 0)
+            | (Fits(v, typeof(byte)) ? 8 : 0) | (Fits(v, typeof(ushort)) ? 16 : 0) | (Fits(v, typeof(uint)) ? 32 : 0) | (v >= 0 ? 64 : 0)),
+        string s => (typeof(string), s.Length == 1 ? 1 : 0),
+        _ => (a.GetType(), 0),
+    };
+
+    static Sig? SigOf(object?[] args) {
+        if (args.Length > 4) return null;
+        (Type? t0, int e0) = args.Length > 0 ? ArgSig(args[0]) : (null, 0);
+        (Type? t1, int e1) = args.Length > 1 ? ArgSig(args[1]) : (null, 0);
+        (Type? t2, int e2) = args.Length > 2 ? ArgSig(args[2]) : (null, 0);
+        (Type? t3, int e3) = args.Length > 3 ? ArgSig(args[3]) : (null, 0);
+        return new Sig(args.Length, t0, e0, t1, e1, t2, e2, t3, e3);
+    }
+
     static readonly Dictionary<Type, string> aliases = new() {
         [typeof(bool)] = "bool", [typeof(byte)] = "byte", [typeof(sbyte)] = "sbyte", [typeof(short)] = "short",
         [typeof(ushort)] = "ushort", [typeof(int)] = "int", [typeof(uint)] = "uint", [typeof(long)] = "long",
@@ -298,8 +335,7 @@ static class Protocol {
     static bool Named(Type t, string name) =>
         (t.FullName == name) || (aliases.TryGetValue(t, out string? a) && (a == name));
 
-    static bool Matches(MethodBase m, string[] hint) {
-        ParameterInfo[] ps = m.GetParameters();
+    static bool Matches(ParameterInfo[] ps, string[] hint) {
         if (ps.Length != hint.Length) return false;
         for (int i = 0; i < ps.Length; i++) if (!Named(ps[i].ParameterType, hint[i])) return false;
         return true;
@@ -310,8 +346,7 @@ static class Protocol {
      * args (positional, then keyword values after them) or -1 for a
      * default. The score, or NO if the arguments don't fit.
      */
-    static int Bind(MethodBase m, object?[] args, Kw? kw, out int[] slots) {
-        ParameterInfo[] ps = m.GetParameters();
+    static int Bind(MethodBase m, ParameterInfo[] ps, object?[] args, Kw? kw, out int[] slots) {
         slots = new int[ps.Length];
         Array.Fill(slots, -1);
         if (m.ContainsGenericParameters || (args.Length > ps.Length)) return NO;
@@ -339,8 +374,7 @@ static class Protocol {
         return score;
     }
 
-    static object?[] Convert(MethodBase m, object?[] args, Kw? kw, int[] slots) {
-        ParameterInfo[] ps = m.GetParameters();
+    static object?[] Convert(ParameterInfo[] ps, object?[] args, Kw? kw, int[] slots) {
         var a = new object?[ps.Length];
         for (int j = 0; j < ps.Length; j++) {
             int k = slots[j];
@@ -350,32 +384,37 @@ static class Protocol {
         return a;
     }
 
-    static (MethodBase, object?[]) Choose(List<MethodBase> cands, object?[] args, Kw? kw, string what) {
+    static (MethodBase, object?[]) Choose(Overloads o, object?[] args, Kw? kw, string what) {
         string? hint = Hint;
         Hint = null;
         int n = args.Length + (kw?.Names.Length ?? 0);
         int[]? slots;
         if (hint != null) {
             string[] want = hint.Replace(" ", "").Split(',', StringSplitOptions.RemoveEmptyEntries);
-            foreach (MethodBase m in cands) {
-                if (!Matches(m, want)) continue;
-                if (Bind(m, args, kw, out slots) == NO) throw Fail.Type($"the arguments don't fit {what}({hint})");
-                return (m, Convert(m, args, kw, slots));
+            for (int i = 0; i < o.Methods.Length; i++) {
+                if (!Matches(o.Params[i], want)) continue;
+                if (Bind(o.Methods[i], o.Params[i], args, kw, out slots) == NO) throw Fail.Type($"the arguments don't fit {what}({hint})");
+                return (o.Methods[i], Convert(o.Params[i], args, kw, slots));
             }
             throw Fail.NotFound($"no overload {what}({hint})");
         }
-        MethodBase? best = null;
+        Sig? sig = kw == null ? SigOf(args) : null;
+        if ((sig != null) && o.Chosen.TryGetValue(sig.Value, out var chosen)) {
+            return (o.Methods[chosen.Best], Convert(o.Params[chosen.Best], args, null, chosen.Slots));
+        }
+        int best = -1;
         int[]? bestSlots = null;
         int bestScore = NO, ties = 0;
-        foreach (MethodBase m in cands) {
-            int s = Bind(m, args, kw, out slots);
+        for (int i = 0; i < o.Methods.Length; i++) {
+            int s = Bind(o.Methods[i], o.Params[i], args, kw, out slots);
             if (s == NO) continue;
-            if (s < bestScore) { best = m; bestSlots = slots; bestScore = s; ties = 0; }
+            if (s < bestScore) { best = i; bestSlots = slots; bestScore = s; ties = 0; }
             else if (s == bestScore) ties++;
         }
-        if (best == null) throw Fail.Type($"no overload of {what} takes these {n} argument(s)");
+        if (best < 0) throw Fail.Type($"no overload of {what} takes these {n} argument(s)");
         if (ties > 0) throw Fail.Type($"ambiguous call to {what}: {ties + 1} overloads fit equally well");
-        return (best, Convert(best, args, kw, bestSlots!));
+        if (sig != null) o.Chosen.TryAdd(sig.Value, (best, bestSlots!));
+        return (o.Methods[best], Convert(o.Params[best], args, kw, bestSlots!));
     }
 
     static bool Fits(long v, Type t) =>
