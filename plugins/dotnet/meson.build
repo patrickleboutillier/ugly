@@ -6,6 +6,19 @@
 dotnet = find_program('dotnet', required: get_option('dotnet'))
 dotnet_ok = false
 
+# A dotnet without a .NET 10 SDK (an older one preinstalled, say) can't build
+# Ugly.dll: skip the plugin, unless it was asked for.
+if dotnet.found()
+  sdks = run_command(dotnet, '--list-sdks', check: false,
+    env: {'DOTNET_CLI_TELEMETRY_OPTOUT': '1', 'DOTNET_NOLOGO': '1'}).stdout()
+  if not sdks.startswith('10.') and not sdks.contains('\n10.')
+    if get_option('dotnet').enabled()
+      error('dotnet: no .NET 10 SDK (dotnet --list-sdks)')
+    endif
+    dotnet = disabler()
+  endif
+endif
+
 if dotnet.found()
   # nethost: in the SDK's apphost pack, <dotnet root>/packs/Microsoft.NETCore.App.Host.<rid>/<version>/runtimes/<rid>/native.
   nethost_dir = run_command('sh', '-c',

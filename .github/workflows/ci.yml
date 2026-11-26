@@ -1,5 +1,5 @@
 # Builds UGLY and runs its tests: the conformance suite, pairwise and binding
-# tests, valgrind (memcheck) over everything but the JVM, and helgrind on the
+# tests, valgrind (memcheck) over everything but the JVM and the CLR, and helgrind on the
 # threads group. Then builds with each optional language left out, and with
 # none at all (the core and the mock plugin).
 #
@@ -51,6 +51,12 @@ jobs:
           echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
           echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
 
+      # The runners' preinstalled .NET may be older than the plugin's 10.
+      - name: Use .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Cache the QuickJS download
         uses: actions/cache@v6
         with:
@@ -61,6 +67,7 @@ jobs:
         run: >-
           meson setup build -Dwerror=true
           -Dlua=enabled -Dpython=enabled -Djs=enabled -Dperl5=enabled -Djava=enabled
+          -Ddotnet=enabled
 
       - name: Build
         run: meson compile -C build
@@ -68,7 +75,7 @@ jobs:
       - name: Test
         run: meson test -C build --print-errorlogs
 
-      - name: Valgrind (memcheck, all but the JVM)
+      - name: Valgrind (memcheck, all but the JVM and the CLR)
         run: meson test -C build --setup valgrind --print-errorlogs
 
       - name: Helgrind (threads group)
@@ -110,7 +117,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [lua, python, js, perl5, java]
+        language: [lua, python, js, perl5, java, dotnet]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -122,6 +129,10 @@ jobs:
         run: |
           echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
           echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+      - name: Use .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
       - uses: actions/cache@v6
         with:
           path: subprojects/packagecache
@@ -142,6 +153,7 @@ jobs:
       - run: >-
           meson setup build -Dwerror=true
           -Dlua=disabled -Dpython=disabled -Djs=disabled -Dperl5=disabled -Djava=disabled
+          -Ddotnet=disabled
       - run: meson compile -C build
       - run: meson test -C build --print-errorlogs
       - run: meson test -C build --setup valgrind --print-errorlogs
