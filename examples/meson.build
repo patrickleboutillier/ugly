@@ -33,8 +33,9 @@ if haproxy.found() and test_plugins.contains('python')
   if haproxy_lua_version != '' and binding_dirs.has_key('lua' + haproxy_lua_version)
     env = environment(test_env_vars)
     env.set('LUA_CPATH', binding_dirs['lua' + haproxy_lua_version] / '?.so;;')
-    foreach mode : [['1', 'lua-load'], ['4', 'lua-load-per-thread'], ['4', 'lua-load']]
-      test('haproxy-poc-' + mode[1] + '-' + mode[0], pyinst, args: [files('haproxy' / 'run_poc.py'), haproxy.full_path(), mode[0], mode[1]],
+    foreach mode : [['1', 'lua-load', ''], ['4', 'lua-load-per-thread', ''], ['4', 'lua-load', ''], ['4', 'lua-load', 'at-load']]
+      test('haproxy-poc-' + mode[1] + '-' + mode[0] + (mode[2] != '' ? '-' + mode[2] : ''), pyinst,
+        args: [files('haproxy' / 'run_poc.py'), haproxy.full_path(), mode[0], mode[1]] + (mode[2] != '' ? [mode[2]] : []),
         protocol: 'tap', env: env, suite: ['examples', 'haproxy'], depends: plugins + bindings, is_parallel: false)
     endforeach
   endif

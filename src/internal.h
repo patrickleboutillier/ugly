@@ -101,6 +101,12 @@ ugly_status h_same(ugly_handle a, ugly_handle b, int *out) ;
 void h_invalidate(ugly_rt *rt, void ***refs, size_t *nrefs) ;
 /* Releases the native refs queued for rt by other threads. Call on rt's thread. */
 void h_drain(ugly_rt *rt) ;
+/* Holds the handle table's lock across a fork (lang.c's handlers), so no child inherits it locked. */
+void h_fork_lock(void) ;
+void h_fork_unlock(void) ;
+
+/* lang.c: the core's fork handlers (pthread_atfork), registered once by ugly_ctx_new. */
+void lang_fork_safety(void) ;
 
 /* rt.c */
 ugly_status rt_create(ugly_ctx *ctx, ugly_lang *lang, void *existing, int attach, ugly_rt **out) ;

@@ -14,6 +14,19 @@
 
 
 static pthread_mutex_t langs_lock = PTHREAD_MUTEX_INITIALIZER ;
+
+/* Whether this thread holds langs_lock: a fork from inside (a plugin's init) mustn't take it again. */
+static _Thread_local int langs_held ;
+
+static void langs_take(void){
+	pthread_mutex_lock(&langs_lock) ;
+	langs_held = 1 ;
+}
+
+static void langs_give(void){
+	langs_held = 0 ;
+	pthread_mutex_unlock(&langs_lock) ;
+}
 static ugly_lang *langs ;
 
 /* The built-in "c" language: home of host callables, lists and maps. Never unloaded. */
@@ -89,11 +102,11 @@ ugly_status ugly_configure(ugly_ctx *ctx, const char *lang, const char *key, con
 	if (strcmp(lang, c_lang.name) == 0){
 		return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "the built-in c language takes no options") ;
 	}
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_lang *l ;
 	for (l = langs ; l != NULL ; l = l->next){
 		if (strcmp(l->name, lang) == 0){
-			pthread_mutex_unlock(&langs_lock) ;
+			langs_give() ;
 			return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "%s has already started: configure it before its first use",
 				lang) ;
 		}
@@ -135,7 +148,7 @@ ugly_status ugly_configure(ugly_ctx *ctx, const char *lang, const char *key, con
 		}
 	}
 	pthread_mutex_unlock(&opts_lock) ;
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	return st ;
 }
 
@@ -207,13 +220,13 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "invalid language name '%s'", name ? name : "(null)") ;
 	}
 
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_lang *l ;
 	for (l = langs ; l != NULL ; l = l->next){
 		if (strcmp(l->name, name) == 0){
 			__atomic_add_fetch(&l->loads, 1, __ATOMIC_RELAXED) ;
 			*out = l ;
-			pthread_mutex_unlock(&langs_lock) ;
+			langs_give() ;
 			return UGLY_OK ;
 		}
 	}
@@ -221,7 +234,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 	char *dir = NULL ;
 	char *path = find_plugin(name, &dir) ;
 	if (path == NULL){
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return ctx_fail(ctx, UGLY_ERR_NOT_FOUND, "core", "", "no plugin ugly_%s.so in UGLY_PLUGIN_PATH or %s",
 			name, UGLY_PLUGIN_DIR) ;
 	}
@@ -232,7 +245,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 		st = ctx_fail(ctx, UGLY_ERR_NOT_FOUND, "core", "", "can't load %s: %s", path, dlerror()) ;
 		free(path) ;
 		free(dir) ;
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return st ;
 	}
 
@@ -247,7 +260,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 		dlclose(dl) ;
 		free(path) ;
 		free(dir) ;
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return st ;
 	}
 	free(path) ;
@@ -255,7 +268,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 	if ((st = check_options(ctx, plugin)) != UGLY_OK){
 		dlclose(dl) ;
 		free(dir) ;
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return st ;
 	}
 	if (plugin->init != NULL){
@@ -266,7 +279,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 			}
 			dlclose(dl) ;
 			free(dir) ;
-			pthread_mutex_unlock(&langs_lock) ;
+			langs_give() ;
 			return st ;
 		}
 	}
@@ -278,7 +291,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 		}
 		dlclose(dl) ;
 		free(dir) ;
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return ctx_fail(ctx, UGLY_ERR_NOMEM, "core", "", "out of memory") ;
 	}
 	l->name = xstrdup(name) ;
@@ -289,7 +302,7 @@ ugly_status ugly_lang_load(ugly_ctx *ctx, const char *name, ugly_lang **out){
 	l->initialized = 1 ;
 	l->next = langs ;
 	langs = l ;
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 
 	*out = l ;
 	return UGLY_OK ;
@@ -308,19 +321,19 @@ ugly_status ugly_lang_unload(ugly_ctx *ctx, ugly_lang *lang){
 		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "the built-in c language can't be unloaded") ;
 	}
 
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	if (lang->loads <= 0){
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "language %s is not loaded", lang->name) ;
 	}
 	if (lang->loads > 1){
 		/* Another load still holds the language. */
 		__atomic_sub_fetch(&lang->loads, 1, __ATOMIC_RELAXED) ;
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return UGLY_OK ;
 	}
 	if (__atomic_load_n(&lang->runtimes, __ATOMIC_SEQ_CST) > 0){
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "can't unload %s: %d runtime(s) still alive",
 			lang->name, lang->runtimes) ;
 	}
@@ -347,7 +360,7 @@ ugly_status ugly_lang_unload(ugly_ctx *ctx, ugly_lang *lang){
 		free(lang->dir) ;
 		free(lang) ;
 	}
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	return UGLY_OK ;
 }
 
@@ -367,19 +380,19 @@ uint32_t ugly_lang_caps(const ugly_lang *lang){
 /* ---------------------------------------------------------------- */
 
 void lang_add_rt(ugly_lang *lang, ugly_rt *rt){
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_rt **p = &lang->rts ;          /* appended: the oldest runtime comes first */
 	while (*p != NULL){
 		p = &(*p)->lang_next ;
 	}
 	rt->lang_next = NULL ;
 	*p = rt ;
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 }
 
 
 void lang_remove_rt(ugly_lang *lang, ugly_rt *rt){
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_rt **p ;
 	for (p = &lang->rts ; *p != NULL ; p = &(*p)->lang_next){
 		if (*p == rt){
@@ -387,7 +400,7 @@ void lang_remove_rt(ugly_lang *lang, ugly_rt *rt){
 			break ;
 		}
 	}
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 }
 
 
@@ -399,55 +412,55 @@ static int rt_live(ugly_rt *rt){
 
 
 ugly_rt *lang_share_rt(ugly_lang *lang){
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_rt *rt ;
 	for (rt = lang->rts ; (rt != NULL)&&(! rt_live(rt)) ; rt = rt->lang_next){
 	}
 	if (rt != NULL){
 		rt->shares++ ;
 	}
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	return rt ;
 }
 
 
 void lang_rt_shares(ugly_rt *rt, int delta, int auto_created){
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	rt->shares += delta ;
 	rt->auto_created |= auto_created ;
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 }
 
 
 int lang_rt_unshare(ugly_rt *rt){
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	int what = RT_KEEP ;
 	if (--rt->shares == 0){
 		what = (rt->destroyed ? RT_FREE : (rt->auto_created ? RT_DESTROY : RT_KEEP)) ;
 	}
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	return what ;
 }
 
 
 int lang_rt_mark_destroyed(ugly_rt *rt){
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	rt->destroyed = 1 ;
 	int free_now = (rt->shares == 0) ;
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	return free_now ;
 }
 
 
 ugly_rt *lang_find_rt_on_thread(ugly_lang *lang){
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_rt *rt ;
 	for (rt = lang->rts ; rt != NULL ; rt = rt->lang_next){
 		if (on_thread(rt->thread)&&rt_live(rt)){
 			break ;
 		}
 	}
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	return rt ;
 }
 
@@ -456,14 +469,14 @@ ugly_lang *lang_find(const char *name){
 	if (name == NULL){
 		return NULL ;
 	}
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_lang *l ;
 	for (l = langs ; l != NULL ; l = l->next){
 		if ((l->loads > 0)&&(strcmp(l->name, name) == 0)){
 			break ;
 		}
 	}
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	return l ;
 }
 
@@ -482,29 +495,29 @@ ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_la
 		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_lang_register: invalid plugin") ;
 	}
 	*out = NULL ;
-	pthread_mutex_lock(&langs_lock) ;
+	langs_take() ;
 	ugly_lang *l ;
 	for (l = langs ; l != NULL ; l = l->next){
 		if (strcmp(l->name, plugin->name) == 0){
 			if (l->plugin != plugin){
-				pthread_mutex_unlock(&langs_lock) ;
+				langs_give() ;
 				return ctx_fail(ctx, UGLY_ERR_IN_USE, "core", "", "another plugin for %s is already loaded",
 					plugin->name) ;
 			}
 			__atomic_add_fetch(&l->loads, 1, __ATOMIC_RELAXED) ;
 			*out = l ;
-			pthread_mutex_unlock(&langs_lock) ;
+			langs_give() ;
 			return UGLY_OK ;
 		}
 	}
 	if ((st = check_options(ctx, plugin)) != UGLY_OK){
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return st ;
 	}
 	if (plugin->init != NULL){
 		st = plugin->init(ctx, "") ;
 		if (st != UGLY_OK){
-			pthread_mutex_unlock(&langs_lock) ;
+			langs_give() ;
 			if (ctx->error == NULL){
 				ctx_fail(ctx, st, plugin->name, "", "plugin initialization failed") ;
 			}
@@ -513,7 +526,7 @@ ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_la
 	}
 	l = calloc(1, sizeof(ugly_lang)) ;
 	if (l == NULL){
-		pthread_mutex_unlock(&langs_lock) ;
+		langs_give() ;
 		return ctx_fail(ctx, UGLY_ERR_NOMEM, "core", "", "out of memory") ;
 	}
 	l->name = xstrdup(plugin->name) ;
@@ -523,7 +536,51 @@ ugly_status ugly_lang_register(ugly_ctx *ctx, const ugly_plugin *plugin, ugly_la
 	l->initialized = 1 ;
 	l->next = langs ;
 	langs = l ;
-	pthread_mutex_unlock(&langs_lock) ;
+	langs_give() ;
 	*out = l ;
 	return UGLY_OK ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Fork                                                             */
+/* ---------------------------------------------------------------- */
+
+/*
+ * A process that forks (HAProxy's master starting its workers) copies only
+ * the forking thread. A lock another thread held at that moment would stay
+ * held in the child forever, so the core's locks are taken before a fork,
+ * in their usual order (langs_lock, opts_lock, the handle table's), and
+ * released after it in both processes.
+ */
+static _Thread_local int fork_took_langs ;
+
+static void fork_prepare(void){
+	fork_took_langs = ! langs_held ;     /* a plugin's init forking holds it already */
+	if (fork_took_langs){
+		pthread_mutex_lock(&langs_lock) ;
+	}
+	pthread_mutex_lock(&opts_lock) ;
+	h_fork_lock() ;
+}
+
+
+static void fork_done(void){
+	h_fork_unlock() ;
+	pthread_mutex_unlock(&opts_lock) ;
+	if (fork_took_langs){
+		pthread_mutex_unlock(&langs_lock) ;
+	}
+}
+
+
+static pthread_once_t fork_once = PTHREAD_ONCE_INIT ;
+
+static void fork_register(void){
+	pthread_atfork(fork_prepare, fork_done, fork_done) ;
+}
+
+
+void lang_fork_safety(void){
+	pthread_once(&fork_once, fork_register) ;
 }

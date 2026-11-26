@@ -548,3 +548,13 @@ void h_drain(ugly_rt *rt){
 	}
 	free(pending) ;
 }
+
+
+void h_fork_lock(void){
+	pthread_mutex_lock(&lock) ;
+}
+
+
+void h_fork_unlock(void){
+	pthread_mutex_unlock(&lock) ;
+}

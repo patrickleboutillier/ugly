@@ -15,11 +15,6 @@ already written in Python. HAProxy works, in both of its Lua modes
   than 5.3 was (no integers, `lua_pcall` and registry differences,
   `luaL_setfuncs`), but it reaches the most embedded Luas. One Lua per
   process: it would be another `-Dlua_version`, and another binding.
-- [ ] **Python started before a fork.** Python starts on its first use, so a
-  script that uses `ugly` only inside actions (as `examples/haproxy/` does)
-  starts it in each worker. One that uses it at load time starts it in
-  HAProxy's master, and every worker inherits a forked interpreter. Detect
-  it, and refuse or warn (or call `PyOS_AfterFork_Child`).
 
 ## The contract
 
@@ -165,7 +160,10 @@ contract and in the pull requests.
   arguments, hints), and its binding (`Ugly.dll` in any .NET program,
   through `dynamic`).
 - **Hosts:** HAProxy, in `lua-load-per-thread` and `lua-load` on several
-  threads; options for runtimes created on demand (`ugly_configure`).
+  threads, and in master-worker mode with Python started in the master;
+  options for runtimes created on demand (`ugly_configure`). Forking after
+  Python started: the plugin brackets every fork like `os.fork()`, and the
+  core holds its locks across it.
 - **Threads:** `UGLY_CAP_ANY_THREAD` (Python, Java), runtimes shared between
   threads, `ugly_ctx_thread`, and host-serialized runtimes (contract §6).
 - **Contract:** call options (keyword arguments, Perl's context, Java's

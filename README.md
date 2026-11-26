@@ -92,8 +92,11 @@ threads, all sharing the one Python: `lua-load-per-thread`, where each worker
 thread has its own Lua state, and `lua-load`, where every thread takes its
 turn in one state (HAProxy serializes it; the script declares it with
 `ugly.shared_by_threads()`). Use `ugly` inside actions, not when the file
-loads: HAProxy loads Lua on its main thread, and in its master process
-before forking. The Python call runs synchronously in the action, so it
+loads: HAProxy loads Lua on its main thread, and with `lua-load-per-thread`
+the state that attached there would belong to the wrong thread. (With
+`lua-load`, Python can be started when the file loads, in HAProxy's master:
+the worker it forks inherits a working interpreter, which the tests check
+with `-W`.) The Python call runs synchronously in the action, so it
 suits quick decisions, not I/O.
 
 ### From Python

@@ -109,6 +109,13 @@ lines of C, with no interpreter in the way: read it first.
 - **Paths are absolute.** The plugin directory passed to `init` may be
   relative (`UGLY_PLUGIN_PATH=build/...`); the CLR loads assemblies by
   absolute path only.
+- **Fork.** The host may fork at any time, and the child has only the
+  forking thread. If your interpreter must be told (CPython: `os.fork()`
+  calls `PyOS_BeforeFork` and `PyOS_AfterFork_*`), register `pthread_atfork`
+  handlers that do the same for a fork from C, and stay out of the way when
+  the interpreter forks itself (an `os.register_at_fork` callback marks
+  it). The core already holds its own locks across a fork. Test it with a
+  second thread busy in your interpreter: the deadlock only shows then.
 - **Load your helper code where later code sees it.** The CLR's isolated
   load context (`load_assembly_and_get_function_pointer`) would have given
   fixture assemblies a second copy of the `Ugly` types; the default context
@@ -178,6 +185,13 @@ found these, now fixed:
   `1 / x` into a comparison even at `-O0`, so `1 / 0` returned 0 and the
   `dotnet-signals` test passed on GCC 11 but not on Ubuntu 24.04. Make both
   operands `volatile`.
+- **Prove the test fails without the fix.** Disable the fix, run the test,
+  put it back. The fork fix's HAProxy test passed without it (HAProxy's
+  master has one thread); the C test with a busy Python thread failed 20
+  out of 20.
+- **Children under valgrind**: a forked child that exits is leak-checked on
+  the heap it inherited, which says nothing. Have it report through a pipe
+  and end with `SIGKILL`.
 - **Fault tests in a child process.** Jumping out of a signal handler that
   another VM's handler called leaves that VM's state half done; let the
   child exit from the handler instead.

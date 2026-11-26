@@ -64,6 +64,14 @@ extern "C" {
  *     JNIEnv per thread). It must not hold a lock of its own while calling
  *     out through the core: another thread may be calling back in (Python
  *     releases the GIL around calls out).
+ *  9. Fork: the host may fork() at any time (HAProxy's master starting its
+ *     workers), and the child has only the forking thread. The core holds
+ *     its own locks across a fork. A plugin whose interpreter must be told
+ *     (CPython: PyOS_BeforeFork and PyOS_AfterFork_*) registers
+ *     pthread_atfork handlers that do it, and stays out of the way when the
+ *     interpreter forks itself (os.fork()). A VM whose threads can't be lost
+ *     (the JVM, the CLR) can't be forked once started: that's the host's to
+ *     avoid.
  */
 
 
