@@ -7,6 +7,8 @@
 *.so
 *.so.*
 *.a
+# ghc's foreign-export stubs, when a module library is built without -stubdir
+*_stub.h
 
 # C# builds outside Meson (an editor's C# extension, a plain dotnet build):
 # Directory.Build.props sends them here. Meson builds Ugly.dll and the C#
