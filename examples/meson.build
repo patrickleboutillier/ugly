@@ -16,6 +16,11 @@ if binding_dirs.has_key('lua') and test_plugins.contains('python')
   endif
 endif
 
+# music-diatonic, a Haskell library, from Python and from Lua (examples/haskell/).
+if test_plugins.contains('haskell')
+  subdir('haskell')
+endif
+
 # HAProxy asks Python for a decision on each request (examples/haproxy/), when
 # haproxy is installed and its Lua has a binding here: lua-load on one and on
 # four threads (one state, the threads taking turns), and lua-load-per-thread

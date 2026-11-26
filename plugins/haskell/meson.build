@@ -71,15 +71,19 @@ if haskell_ok
   test_plugins += 'haskell'
 
   # The package 'ugly' in a package database in the build tree: module
-  # libraries are built against it with ghc_module (below). Not installed yet.
+  # libraries are built against it with ghc_module (below). Installed, it's
+  # <libdir>/ugly/haskell/package.db, with the interfaces beside it.
   ghc_pkg = find_program('ghc-pkg-' + ghc_version, 'ghc-pkg')
+  package_py = find_program('package.py')
   ugly_package_db = meson.current_build_dir() / 'package.db'
   ugly_package = custom_target('ugly.conf',
     output: 'ugly.conf',
-    command: [find_program('package.py'), ghc_pkg, ugly_package_db, '@OUTPUT@', meson.project_version(),
+    command: [package_py, 'build', ghc_pkg, ugly_package_db, '@OUTPUT@', meson.project_version(),
       meson.current_build_dir() / 'libugly_hs.so.p', meson.current_build_dir()],
     depends: ugly_hs,
   )
+  meson.add_install_script(package_py, 'install', ghc_pkg.full_path(), meson.current_build_dir() / 'libugly_hs.so.p',
+    get_option('prefix') / get_option('libdir') / 'ugly' / 'haskell', ugly_plugin_dir, meson.project_version())
 
   # A module library: a custom_target's command, its input the export
   # modules (uglyModule) and the modules they need, its output <Name>.so,

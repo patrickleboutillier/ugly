@@ -114,6 +114,13 @@ int main(void){
 	ugly_val_release(ctx, &v) ;
 	ok((call("count", (ugly_val[]){ ugly_hval(list) }, 1, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, 3),
 		"count list: a foreign sequence as [Value], 3") ;
+	ugly_handle ints ;
+	ugly_list_new(ctx, (ugly_val[]){ ugly_int(1), ugly_int(2), ugly_int(3) }, 3, &ints) ;
+	ok((call("total", (ugly_val[]){ ugly_hval(ints) }, 1, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, 6),
+		"total [1, 2, 3]: a foreign sequence as [Int], element by element, 6") ;
+	ugly_release(ctx, ints) ;
+	ok(error_from(call("total", (ugly_val[]){ ugly_hval(list) }, 1, UGLY_ANY, &v), UGLY_ERR_RAISED, "haskell", "TypeError",
+		"isn't an Int"), "total [10, \"x\", null]: an element that isn't an Int, a TypeError when the call runs") ;
 	ok((call("sizeOf", (ugly_val[]){ ugly_hval(list) }, 1, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, 3),
 		"Ugly.size list: 3") ;
 	ok((call("fieldOf", (ugly_val[]){ ugly_hval(map), ugly_str("k", 1) }, 2, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, 5),

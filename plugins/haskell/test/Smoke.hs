@@ -102,6 +102,7 @@ entries =
   , ("applyIO", toUgly ((\f x -> f x) :: (Int -> IO Int) -> Int -> IO Int))
   , ("mapped", toUgly ((\f -> map f [1, 2, 3]) :: (Int -> Int) -> [Int]))
   , ("count", toUgly (length :: [Value] -> Int))
+  , ("total", toUgly (sum :: [Int] -> Int))
   , ("fieldOf", toUgly (Ugly.get :: Foreign -> String -> IO Value))
   , ("sizeOf", toUgly Ugly.size)
   , ("typeOf", toUgly Ugly.typeOf)

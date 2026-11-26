@@ -523,7 +523,15 @@ instance FromUgly a => FromUgly (Maybe a) where
     Right r -> Right r
     Left _ -> fmap (fmap (fmap Just)) (fromUgly arg)
 
-instance {-# OVERLAPPABLE #-} Typeable a => FromUgly [a]
+-- | A list: a Haskell list coming home, or a foreign sequence, converted
+-- element by element when the call runs (its length, then each element:
+-- one that doesn't convert is a TypeError). At cost 3, below [Value]'s 4.
+instance {-# OVERLAPPABLE #-} FromUgly a => FromUgly [a] where
+  fromUgly (AForeign take') = Right (3, do
+    f <- take'
+    n <- foreignLength f
+    mapM (\i -> foreignIndex f i >>= fromValue) [0 .. n - 1])
+  fromUgly arg = home arg
 
 -- | [Value] (what an unconstrained [a] becomes) takes any sequence that
 -- comes home, read lazily through its elements, and any foreign value,
