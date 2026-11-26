@@ -4,6 +4,7 @@
 -- Ugly.Marshal the conversions to and from C).
 module Ugly.Types
   ( Value (..), Box (..), Info (..), Members (..), Elems (..), Arg (..), Conv
+  , Want (..), Call (..), Refused (..), plainCall
   , Foreign (..), ForeignError (..)
   , info
   ) where
@@ -40,7 +41,7 @@ data Info = Info
   , infoShow :: Maybe String        -- ^ its text, for want = string (lazy: forced when asked)
   , infoMembers :: Maybe Members    -- ^ MEMBERS
   , infoElems :: Maybe Elems        -- ^ ELEMENTS
-  , infoCall :: Maybe ([Arg] -> Conv (IO Value))   -- ^ CALLABLE: match the arguments, then run
+  , infoCall :: Maybe (Call -> [Arg] -> Either Refused (Int, IO Value))   -- ^ CALLABLE: match, then run
   , infoMethods :: Maybe (String -> Maybe Value)   -- ^ for invoke: functions taking this value last
   }
 
@@ -77,6 +78,26 @@ data Arg
 -- | A conversion: why not, or its cost (0 is exact) and how. The "how" runs
 -- only for the overload that's chosen.
 type Conv a = Either String (Int, a)
+
+-- | The kind the caller wants (ugly_kind).
+data Want = WantAny | WantNull | WantBool | WantInt | WantDouble | WantString | WantBytes | WantHandle
+  deriving (Eq, Show)
+
+-- | What a call asks besides its arguments: the kind it wants back, which
+-- ranks a polymorphic function's instantiations by their result, and the
+-- hint, type arguments as TypeApplications gives them ("_" for any), which
+-- picks among them.
+data Call = Call
+  { callWant :: Want
+  , callHint :: Maybe [String]
+  }
+
+plainCall :: Call
+plainCall = Call WantAny Nothing
+
+-- | Why a call can't be made: its arguments (or the result wanted) don't
+-- fit (UGLY_ERR_TYPE), or the hint names no instantiation (UGLY_ERR_NOT_FOUND).
+data Refused = Refused String | NoInstance String
 
 -- | A value from another language: an owned handle, released by a
 -- finalizer once Haskell drops it (on a finalizer thread: the core defers

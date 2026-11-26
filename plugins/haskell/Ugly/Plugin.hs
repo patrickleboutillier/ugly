@@ -38,7 +38,7 @@ import Ugly.Value
 
 -- | haskell.c's BRIDGE_ABI: the two sides must come from the same build.
 bridgeAbi :: CInt
-bridgeAbi = 4
+bridgeAbi = 5
 
 -- | A runtime. Modules are libraries, loaded once per process (haskell.c),
 -- so a runtime has no state yet.
@@ -121,35 +121,48 @@ decodeArgs :: Ptr Ctx -> Ptr Rt -> Ptr Val -> CSize -> IO (Either String [Arg])
 decodeArgs ctx rt argv nargs =
   sequence <$> mapM (\i -> c_arg argv (fromIntegral i) >>= readArg ctx rt) [0 .. fromIntegral nargs - 1 :: Int]   -- nargs is unsigned: 0 - 1 wraps
 
+-- | The call's want, and its hint (the hint call option; NULL for none).
+callOf :: Kind -> CString -> IO Call
+callOf want chint = do
+  hint <- if chint == nullPtr then return Nothing else Just . parseHint <$> peekUtf8 chint
+  return (Call (wantOf want) hint)
+  where
+    wantOf k = maybe WantAny id (lookup k
+      [ (kNull, WantNull), (kBool, WantBool), (kInt, WantInt), (kDouble, WantDouble)
+      , (kString, WantString), (kBytes, WantBytes), (kHandle, WantHandle) ])
+
 -- | Calls what v is, with these arguments.
-callValue :: Ptr Ctx -> Ptr Rt -> String -> Value -> [Arg] -> Kind -> Ptr Val -> IO Status
-callValue ctx rt name v args want out = case v of
-  VBox (Box _ i) | Just f <- infoCall i -> case f args of
-    Left why -> failWith ctx rt errType "TypeError" (name ++ ": " ++ why)
+callValue :: Ptr Ctx -> Ptr Rt -> String -> Value -> [Arg] -> Call -> Kind -> Ptr Val -> IO Status
+callValue ctx rt name v args call want out = case v of
+  VBox (Box _ i) | Just f <- infoCall i -> case f call args of
+    Left (Refused why) -> failWith ctx rt errType "TypeError" (name ++ ": " ++ why)
+    Left (NoInstance why) -> failWith ctx rt errNotFound "TypeError" (name ++ ": " ++ why)
     Right (_, run) -> run >>= \r -> put ctx rt want r out
   _ -> failWith ctx rt errNotCapable "TypeError" (name ++ " isn't a function")
 
-hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status
-hsCall ctx rt ref argv nargs want out = guarded ctx rt $ do
+hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status
+hsCall ctx rt ref argv nargs hint want out = guarded ctx rt $ do
   b@(Box _ i) <- deref ref
   decoded <- decodeArgs ctx rt argv nargs
+  call <- callOf want hint
   case decoded of
     Left why -> failWith ctx rt errType "TypeError" why
-    Right args -> callValue ctx rt ("a value of type " ++ infoType i) (VBox b) args want out
+    Right args -> callValue ctx rt ("a value of type " ++ infoType i) (VBox b) args call want out
 
 -- | A method call. On a module (anything with members), its function, with
 -- no receiver. On any other box, a function from the module that exported
 -- its type, with the receiver last: x.m(a, b) is m a b x.
-hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status
-hsInvoke ctx rt ref cname argv nargs want out = guarded ctx rt $ do
+hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status
+hsInvoke ctx rt ref cname argv nargs hint want out = guarded ctx rt $ do
   b@(Box _ i) <- deref ref
   name <- peekUtf8 cname
   decoded <- decodeArgs ctx rt argv nargs
+  call <- callOf want hint
   case decoded of
     Left why -> failWith ctx rt errType "TypeError" why
     Right args -> case (infoMembers i >>= (`memberGet` name), infoMethods i >>= ($ name)) of
-      (Just f, _) -> callValue ctx rt name f args want out
-      (_, Just f) -> callValue ctx rt name f (args ++ [AHome b]) want out
+      (Just f, _) -> callValue ctx rt name f args call want out
+      (_, Just f) -> callValue ctx rt name f (args ++ [AHome b]) call want out
       _ -> failWith ctx rt errNotFound "NotInScope" ("Variable not in scope: " ++ name ++ " (for a value of type " ++ infoType i ++ ")")
 
 -- | Called on any thread, possibly in the middle of a call: freeing a
@@ -177,5 +190,5 @@ foreign export ccall "ugly_hs_get_index" hsGetIndex :: Ptr Ctx -> Ptr Rt -> Ptr 
 foreign export ccall "ugly_hs_release" hsRelease :: Ptr Rt -> Ptr () -> IO ()
 foreign export ccall "ugly_hs_live_refs" hsLiveRefs :: IO CInt
 foreign export ccall "ugly_hs_live_foreign" hsLiveForeign :: IO CInt
-foreign export ccall "ugly_hs_call" hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status
-foreign export ccall "ugly_hs_invoke" hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status
+foreign export ccall "ugly_hs_call" hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status
+foreign export ccall "ugly_hs_invoke" hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status

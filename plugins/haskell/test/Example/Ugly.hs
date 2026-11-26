@@ -11,4 +11,6 @@ import Ugly.Export
 uglyModule "Example"
   [ ''Shape, ''Pt
   , 'Circle, 'Square, 'Pt, 'origin
-  , 'area, 'scale, 'unit, 'largest, 'firstOf, 'label, 'mapPt ]
+  , 'area, 'scale, 'unit, 'largest, 'firstOf, 'label, 'mapPt
+    -- polymorphic in the result alone: chosen by want, or a hint
+  , 'read, 'minBound ]

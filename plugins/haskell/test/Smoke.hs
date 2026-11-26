@@ -112,12 +112,12 @@ entries =
   , ("settle", toUgly settle)
     -- overloaded: one instantiation per type, chosen by the arguments
   , ("size", overloaded "size :: Sized a => a -> Int"
-      [ toUgly (length :: [Int] -> Int)
-      , toUgly (length :: String -> Int)
-      , toUgly (const 1 :: Color -> Int) ])
+      [ instantiation ["[Int]"] (length :: [Int] -> Int)
+      , instantiation ["[Char]"] (length :: String -> Int)
+      , instantiation ["Color"] (const 1 :: Color -> Int) ])
   , ("narrow", overloaded "narrow :: Narrow a => a -> String"
-      [ toUgly ((\x -> "Int8 " ++ show x) :: Int8 -> String)
-      , toUgly ((\x -> "Word8 " ++ show x) :: Word8 -> String) ])
+      [ instantiation ["Int8"] ((\x -> "Int8 " ++ show x) :: Int8 -> String)
+      , instantiation ["Word8"] ((\x -> "Word8 " ++ show x) :: Word8 -> String) ])
   ]
 
 uglyModuleFrom "Smoke" 'smoke

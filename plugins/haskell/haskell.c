@@ -23,7 +23,7 @@
 
 #include "ugly_plugin.h"
 
-#define BRIDGE_ABI 4     /* Ugly.Plugin.bridgeAbi */
+#define BRIDGE_ABI 5     /* Ugly.Plugin.bridgeAbi */
 
 /* libugly_rts.so */
 extern int ugly_hs_start(const char *opts) ;
@@ -40,10 +40,11 @@ extern ugly_status ugly_hs_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, u
 extern ugly_status ugly_hs_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out) ;
 extern ugly_status ugly_hs_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want,
 	ugly_val *out) ;
+/* call and invoke take the hint call option, or NULL. */
 extern ugly_status ugly_hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_kind want, ugly_val *out) ;
+	const char *hint, ugly_kind want, ugly_val *out) ;
 extern ugly_status ugly_hs_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
-	size_t nargs, ugly_kind want, ugly_val *out) ;
+	size_t nargs, const char *hint, ugly_kind want, ugly_val *out) ;
 extern void ugly_hs_release(ugly_rt *rt, void *ref) ;
 
 
@@ -258,6 +259,49 @@ static ugly_status hs_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_
 }
 
 
+/*
+ * Calls. Call options (contract §11): the hint is type arguments, as
+ * TypeApplications gives them ("Chord", "@Scale @Note", "@_ @Note"),
+ * choosing among a polymorphic function's instantiations (Ugly.Value's
+ * overloaded). Haskell has no keyword arguments and no call context: both
+ * are refused.
+ */
+static ugly_status hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs, ugly_kind want,
+	ugly_val *out){
+	return ugly_hs_call(ctx, rt, ref, args, nargs, NULL, want, out) ;
+}
+
+static ugly_status hs_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, ugly_kind want, ugly_val *out){
+	return ugly_hs_invoke(ctx, rt, ref, method, args, nargs, NULL, want, out) ;
+}
+
+/* The options Haskell can't honour, refused. */
+static ugly_status refuse_opts(ugly_ctx *ctx, ugly_rt *rt, const ugly_opts *opts){
+	if (opts->nkwargs > 0){
+		return ugly_fail(ctx, rt, UGLY_ERR_NOT_SUPPORTED, "TypeError",
+			"haskell: keyword arguments aren't supported (Haskell has none)") ;
+	}
+	if (opts->context != NULL){
+		return ugly_fail(ctx, rt, UGLY_ERR_NOT_SUPPORTED, "TypeError",
+			"haskell: a call context isn't supported (Haskell has none)") ;
+	}
+	return UGLY_OK ;
+}
+
+static ugly_status hs_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *opts, ugly_kind want, ugly_val *out){
+	ugly_status st = refuse_opts(ctx, rt, opts) ;
+	return st != UGLY_OK ? st : ugly_hs_call(ctx, rt, ref, args, nargs, opts->hint, want, out) ;
+}
+
+static ugly_status hs_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *opts, ugly_kind want, ugly_val *out){
+	ugly_status st = refuse_opts(ctx, rt, opts) ;
+	return st != UGLY_OK ? st : ugly_hs_invoke(ctx, rt, ref, method, args, nargs, opts->hint, want, out) ;
+}
+
+
 /* Haskell values are immutable. */
 #define IMMUTABLE() return ugly_fail(ctx, rt, UGLY_ERR_NOT_CAPABLE, "TypeError", "Haskell values are immutable")
 
@@ -302,13 +346,15 @@ static const ugly_plugin plugin = {
 	.length = ugly_hs_length,
 	.get_index = ugly_hs_get_index,
 	.set_index = hs_set_index,
-	.call = ugly_hs_call,
-	.invoke = ugly_hs_invoke,
+	.call = hs_call,
+	.invoke = hs_invoke,
 	.new_instance = hs_new_instance,
 	.delete_member = hs_delete_member,
 	.splice = hs_splice,
 	.release = ugly_hs_release,
 	.options = (const char *const []){ "rts", "path", NULL },
+	.call_opts = hs_call_opts,
+	.invoke_opts = hs_invoke_opts,
 } ;
 
 
