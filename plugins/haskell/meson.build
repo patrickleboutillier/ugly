@@ -11,6 +11,7 @@ if ghc.found()
   ghc_ways = run_command(ghc, '--info', check: true).stdout()
   if ghc_version.version_compare('>=8.8') and ghc_ways.contains('thr_dyn')
     haskell_ok = true
+    message('haskell: GHC ' + ghc_version)
   elif get_option('haskell').enabled()
     error('haskell: needs GHC 8.8 or later with shared libraries and the threaded RTS (found ' + ghc_version + ')')
   endif

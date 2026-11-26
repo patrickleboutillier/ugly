@@ -52,7 +52,8 @@ largest :: Ord a => [a] -> a
 largest = maximum
 
 firstOf :: [a] -> a
-firstOf = head
+firstOf (x : _) = x
+firstOf [] = error "firstOf: an empty list"
 
 label :: Show a => String -> a -> String
 label l x = l ++ ": " ++ show x
