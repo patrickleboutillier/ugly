@@ -1,0 +1,13 @@
+<!-- The C# side of the .NET plugin: Ugly.dll, loaded by dotnet.c through hostfxr. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Ugly</AssemblyName>
+    <RootNamespace>Ugly</RootNamespace>
+    <Nullable>enable</Nullable>
+    <!-- A library with its own runtimeconfig.json, which hostfxr starts the CLR from. -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>
