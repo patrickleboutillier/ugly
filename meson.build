@@ -10,7 +10,7 @@
 # each language's module path at the build and source trees.
 
 project('ugly', 'c',
-  version: '2.4.0',
+  version: '2.5.0',
   license: 'Apache-2.0',
   meson_version: '>= 0.61',
   default_options: [

@@ -37,8 +37,14 @@ jobs:
           echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
           echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
 
+      # The runners' preinstalled .NET may be older than the plugin's 10.
+      - name: Use .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Configure
-        run: meson setup build
+        run: meson setup build -Ddotnet=enabled
 
       - name: The tag matches the project version
         if: github.ref_type == 'tag'
