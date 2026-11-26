@@ -113,6 +113,23 @@ public final class Bridge {
 		return t;
 	}
 
+	/**
+	 * What a value converts to, for the plugin's to_val (one call instead of
+	 * an IsInstanceOf per type): 1 Boolean, 2 an integer that fits a long,
+	 * 3 BigInteger, 4 Double or Float, 5 Character, 6 String, 7 byte[],
+	 * 8 anything else. Keep in step with java.c's K_ enum.
+	 */
+	public static int kind(Object o){
+		if ((o instanceof Long)||(o instanceof Integer)||(o instanceof Short)||(o instanceof Byte)) return 2;
+		if (o instanceof String) return 6;
+		if ((o instanceof Double)||(o instanceof Float)) return 4;
+		if (o instanceof Boolean) return 1;
+		if (o instanceof Character) return 5;
+		if (o instanceof BigInteger) return 3;
+		if (o instanceof byte[]) return 7;
+		return 8;
+	}
+
 	public static String typeName(Object o){
 		if (o instanceof Class) return instantiable((Class<?>)o) ? "class" : "module";
 		if (o instanceof MethodRef) return "method";

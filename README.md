@@ -361,10 +361,10 @@ fit; if you need cross-language inlining in hot loops, GraalVM is. The
 laptop (i7-1365U):
 
 - A call from C into Lua, Python or JS costs 60 to 120 ns; into Perl or
-  .NET about 150 ns; into Java about 600 ns. Between two languages, 100 to
-  500 ns, and up to 1 µs into Java.
-- Calls into separate runtimes scale with threads: 68 million calls per
-  second on 6 threads into C callbacks, 38 million into a Lua runtime per
+  .NET 120 to 160 ns; into Java about 440 ns. Between two languages, 100 to
+  500 ns, and up to 900 ns into Java.
+- Calls into separate runtimes scale with threads: 63 million calls per
+  second on 6 threads into C callbacks, 35 million into a Lua runtime per
   thread.
 - Python doesn't: every call takes the GIL, and several threads calling it
   at once make each call cost microseconds.

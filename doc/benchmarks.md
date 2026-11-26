@@ -25,7 +25,7 @@ meson test -C build --benchmark --verbose
 
 ## Results
 
-2026-11-26: Intel Core i7-1365U, 6 CPUs under WSL2 (Linux 6.6), GCC 11.4,
+2026-11-26 (after the fixes below): Intel Core i7-1365U, 6 CPUs under WSL2 (Linux 6.6), GCC 11.4,
 a `debugoptimized` build (`-O2 -g`); Lua 5.4.4, CPython 3.10.12, QuickJS
 2026-06-04, Perl 5.34.0, OpenJDK 21.0.13, .NET 10.0.15.
 
@@ -33,13 +33,13 @@ a `debugoptimized` build (`-O2 -g`); Lua 5.4.4, CPython 3.10.12, QuickJS
 
 | Language | int | 16-byte string | its own object | natively, in the language |
 |---|---|---|---|---|
-| mock | 97.7 ns | 138 ns | 171 ns | 13.0 ns |
-| lua | 59.4 ns | 119 ns | 160 ns | 8.8 ns |
-| python | 115 ns | 144 ns | 194 ns | 41.5 ns |
-| js | 81.8 ns | 128 ns | 195 ns | 22.3 ns |
-| perl5 | 183 ns | 294 ns | 322 ns | 30.8 ns |
-| java | 610 ns | 697 ns | 954 ns | 0.0 ns |
-| dotnet | 145 ns | 292 ns | 302 ns | 0.1 ns |
+| mock | 96.5 ns | 137 ns | 165 ns | 13.4 ns |
+| lua | 61.0 ns | 124 ns | 163 ns | 8.4 ns |
+| python | 118 ns | 147 ns | 191 ns | 43.5 ns |
+| js | 80.7 ns | 117 ns | 169 ns | 18.7 ns |
+| perl5 | 157 ns | 255 ns | 283 ns | 28.3 ns |
+| java | 437 ns | 626 ns | 787 ns | 0.0 ns |
+| dotnet | 123 ns | 263 ns | 251 ns | 0.1 ns |
 
 The JITs inline a native `echo` away entirely, hence the zeros.
 
@@ -47,21 +47,21 @@ The JITs inline a native `echo` away entirely, hence the zeros.
 
 | Caller \ callee | mock | lua | python | js | perl5 | java | dotnet |
 |---|---|---|---|---|---|---|---|
-| mock | 19.5 ns | 143 ns | 230 ns | 169 ns | 253 ns | 698 ns | 199 ns |
-| lua | 203 ns | 9.6 ns | 268 ns | 415 ns | 384 ns | 850 ns | 291 ns |
-| python | 265 ns | 231 ns | 42.7 ns | 265 ns | 376 ns | 824 ns | 316 ns |
-| js | 188 ns | 143 ns | 221 ns | 20.9 ns | 267 ns | 723 ns | 237 ns |
-| perl5 | 391 ns | 388 ns | 504 ns | 425 ns | 31.2 ns | 1056 ns | 540 ns |
-| java | 376 ns | 379 ns | 438 ns | 569 ns | 938 ns | 68.5 ns | 445 ns |
-| dotnet | 296 ns | 255 ns | 382 ns | 298 ns | 476 ns | 938 ns | 84.3 ns |
+| mock | 20.0 ns | 141 ns | 205 ns | 169 ns | 229 ns | 466 ns | 193 ns |
+| lua | 190 ns | 9.1 ns | 262 ns | 393 ns | 324 ns | 600 ns | 260 ns |
+| python | 289 ns | 220 ns | 39.9 ns | 241 ns | 352 ns | 676 ns | 337 ns |
+| js | 231 ns | 135 ns | 211 ns | 20.9 ns | 254 ns | 540 ns | 215 ns |
+| perl5 | 421 ns | 417 ns | 502 ns | 388 ns | 31.9 ns | 880 ns | 874 ns |
+| java | 392 ns | 415 ns | 422 ns | 355 ns | 481 ns | 65.2 ns | 476 ns |
+| dotnet | 281 ns | 264 ns | 415 ns | 301 ns | 456 ns | 700 ns | 76.7 ns |
 
 ### Threads (total calls per second)
 
 | Each thread calls | 1 thread | 2 threads | 4 threads | 6 threads |
 |---|---|---|---|---|
-| a C callable (the core alone) | 23.87 M/s | 44.80 M/s | 52.44 M/s | 67.62 M/s |
-| its own Lua runtime | 13.18 M/s | 24.52 M/s | 31.13 M/s | 38.44 M/s |
-| the one Python (the GIL) | 4.87 M/s | 1.89 M/s | 0.23 M/s | 0.12 M/s |
+| a C callable (the core alone) | 20.32 M/s | 40.84 M/s | 54.31 M/s | 63.05 M/s |
+| its own Lua runtime | 12.17 M/s | 24.58 M/s | 34.10 M/s | 34.94 M/s |
+| the one Python (the GIL) | 4.91 M/s | 2.00 M/s | 0.28 M/s | 0.09 M/s |
 
 ## Reading them
 
@@ -69,9 +69,11 @@ The JITs inline a native `echo` away entirely, hence the zeros.
   interpreters (Lua, Python, JS, Perl, .NET), a few times a native call in
   the slower ones and 10 to 30 times in Lua. It suits calls that do some
   work, not a tight inner loop.
-- **Java is the slowest callee, at 600 to 1000 ns**: every call crosses JNI
-  several times (a local frame, an argument array, boxing, reflection, the
-  result's checks). Not yet profiled.
+- **Java is the slowest callee, at 450 to 900 ns**: every call still makes
+  about five JNI calls into Java (boxing the argument, the call itself,
+  classifying the result, unboxing it, the argument array), at 30 to 60 ns
+  of VM transition each. Fewer would take one Java call doing all of it, or
+  Panama's faster upcalls.
 - **Python doesn't scale with threads, and slows down.** Every call into
   Python takes the GIL, and with several threads calling at once the GIL
   changes hands on every call: about 8 µs per call with 4 or more threads.
@@ -86,12 +88,12 @@ The first run, before these fixes, measured:
 
 | | before | after |
 |---|---|---|
-| C callables, 1 → 6 threads | 13.7 → **3.6** M/s | 23.9 → **67.6** M/s |
-| Lua (a runtime per thread), 1 → 6 threads | 11.1 → **3.3** M/s | 13.2 → **38.4** M/s |
-| C → .NET, int | 358 ns | 145 ns |
-| C → Java, int (without `-Xcheck:jni`) | 1027 ns | 610 ns |
-| Perl calling another language | 730 to 1750 ns | 390 to 540 ns |
-| C → Lua, int | 84 ns | 59 ns |
+| C callables, 1 → 6 threads | 13.7 → **3.6** M/s | 20.3 → **63.1** M/s |
+| Lua (a runtime per thread), 1 → 6 threads | 11.1 → **3.3** M/s | 12.2 → **34.9** M/s |
+| C → .NET, int | 358 ns | 123 ns |
+| C → Java, int (without `-Xcheck:jni`) | 1027 ns | 437 ns |
+| Perl calling Lua, Python or JS | 730 to 1750 ns | 390 to 500 ns |
+| C → Lua, int | 84 ns | 61 ns |
 
 - **The core's lock.** Every call took the handle table's one lock twice:
   to look up the callee, and to check the runtime's queue of deferred
@@ -105,6 +107,11 @@ The first run, before these fixes, measured:
   methods of that name, their parameters, and scoring each overload. They
   now cache the candidates per (type, name) and the overload chosen per
   argument signature.
+- **Java, profiled with perf**: besides the reflection, every call looked up
+  `java.lang.Object` with `FindClass`, which walks the Java stack to find
+  its caller's class loader (12% of the call), and classified the result
+  with up to eleven `IsInstanceOf` calls (11%). The class is now looked up
+  once, and one call to `Bridge.kind` classifies a result. 610 to 437 ns.
 - **Perl made a closure for every call** of a foreign function
   (`$f->(...)`, through the `&{}` overload). The code ref is now made once
   per proxy, over a second proxy that holds its own reference, so it
