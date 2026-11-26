@@ -37,13 +37,15 @@ if dotnet_ok
     link_args: [nethost_dir / 'libnethost.a', '-lstdc++', '-ldl'],
   )
 
+  dotnet_env = {'DOTNET_CLI_TELEMETRY_OPTOUT': '1', 'DOTNET_NOLOGO': '1', 'DOTNET_SKIP_FIRST_TIME_EXPERIENCE': '1'}
+
   # dotnet build, out of the source tree: intermediate files in the private dir.
   ugly_dll = custom_target('Ugly.dll',
-    input: ['Ugly.csproj', 'Bridge.cs'],
+    input: ['Ugly.csproj', 'Bridge.cs', 'Foreign.cs', 'Native.cs', 'Protocol.cs'],
     output: ['Ugly.dll', 'Ugly.runtimeconfig.json'],
     command: [dotnet, 'build', '@INPUT0@', '--nologo', '-v', 'quiet', '-c', 'Release',
       '--artifacts-path', '@PRIVATE_DIR@', '-o', '@OUTDIR@'],
-    env: {'DOTNET_CLI_TELEMETRY_OPTOUT': '1', 'DOTNET_NOLOGO': '1', 'DOTNET_SKIP_FIRST_TIME_EXPERIENCE': '1'},
+    env: dotnet_env,
     install: true,
     install_dir: ugly_plugin_dir,
   )
@@ -58,8 +60,10 @@ if dotnet_ok
   plugins += [ugly_dotnet, ugly_dll]
   plugin_dirs += meson.current_build_dir()
 
-  # Not in the conformance suite yet ('test_plugins'): a smoke test instead.
-  test('dotnet-smoke', executable('dotnet_smoke', 'smoke.c', dependencies: ugly_dep),
+  test_plugins += 'dotnet'
+
+  # Starting the CLR leaves the host's signals alone; faults in C still reach the host's handlers.
+  test('dotnet-signals', executable('dotnet_signals', 'signals.c', dependencies: ugly_dep),
     env: {'UGLY_PLUGIN_PATH': meson.current_build_dir()},
     depends: [ugly_dotnet, ugly_dll],
     protocol: 'tap',

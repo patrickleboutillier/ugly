@@ -1,17 +1,31 @@
 /*
  * The .NET plugin, language "dotnet": the CLR through the official hosting
- * API. nethost finds hostfxr, which starts the CLR from Ugly.runtimeconfig.json
- * next to this plugin; the C# side (Ugly.dll, Bridge.cs) is reached through
- * [UnmanagedCallersOnly] entry points.
+ * API. nethost finds hostfxr, which starts the CLR from
+ * Ugly.runtimeconfig.json next to this plugin. The plugin's C# side, Ugly.dll
+ * (Bridge.cs, Protocol.cs, Foreign.cs), is loaded into the default load
+ * context, so the assemblies it loads later (modules, fixtures) see the same
+ * Ugly types; and its [UnmanagedCallersOnly] entry points fill this plugin's
+ * vtable, so the core calls C# directly. C# calls the core back through
+ * P/Invoke, on the libugly this plugin was linked against.
  *
- * Skeleton: init starts the CLR and checks that the two sides agree; runtimes
- * can be created and deleted; every operation is refused. The CLR is one-way
- * (it can't be unloaded or started again), so there's no 'term' and no
- * UGLY_CAP_RESTARTABLE.
+ * The CLR is one per process and one-way (it can't be unloaded or started
+ * again), so there's no 'term', no UGLY_CAP_RESTARTABLE and no
+ * UGLY_CAP_MULTI_RUNTIME. It is multi-threaded: UGLY_CAP_ANY_THREAD.
+ *
+ * Signals: the CLR installs handlers for the faults it turns into exceptions
+ * (SIGSEGV, SIGFPE, SIGILL, SIGBUS, SIGTRAP) and for suspending threads
+ * (SIGRTMIN), and needs them. For a fault outside managed code they call the
+ * handler that was there before, as the JVM's do, so the two VMs coexist in
+ * either order. Its other handlers (SIGINT, SIGQUIT, SIGTERM, SIGPIPE,
+ * SIGABRT) are for Ctrl-C events, ProcessExit and crash dumps, which belong
+ * to the host: init puts back what was there, as -Xrs does for the JVM.
  */
+#define _GNU_SOURCE
 #include <dlfcn.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "ugly_plugin.h"
 
@@ -20,10 +34,7 @@ struct hostfxr_dotnet_environment_info ;     /* hostfxr.h declares it inside a p
 #include <hostfxr.h>
 #include <coreclr_delegates.h>
 
-#define BRIDGE_ABI 1     /* Bridge.Abi */
-
-static load_assembly_and_get_function_pointer_fn load_fn ;
-static char assembly[PATH_MAX] ;
+#define BRIDGE_ABI 2     /* Bridge.Abi */
 
 
 static void diag(const char *what, int rc){
@@ -31,15 +42,68 @@ static void diag(const char *what, int rc){
 }
 
 
-/* An [UnmanagedCallersOnly] method of Ugly.Bridge. */
-static int bridge_fn(const char *method, void **out){
-	return load_fn(assembly, "Ugly.Bridge, Ugly", method, UNMANAGEDCALLERSONLY_METHOD, NULL, out) ;
+static ugly_plugin plugin ;     /* filled by dn_init */
+
+/* The host's signals: what the CLR installs for them is undone once it has started. */
+static const int host_signals[] = { SIGINT, SIGQUIT, SIGTERM, SIGPIPE, SIGABRT } ;
+#define NHOST (sizeof(host_signals) / sizeof(host_signals[0]))
+
+static void host_handlers(struct sigaction *saved, int restore){
+	size_t i ;
+	for (i = 0 ; i < NHOST ; i++){
+		sigaction(host_signals[i], restore ? &saved[i] : NULL, restore ? NULL : &saved[i]) ;
+	}
+}
+
+/* The vtable's entries, by the name of their C# entry point in Ugly.Bridge. */
+static const struct { const char *method ; void **slot ; } entries[] = {
+	{ "RtNew", (void **)&plugin.rt_new },
+	{ "RtDelete", (void **)&plugin.rt_delete },
+	{ "Import", (void **)&plugin.import },
+	{ "Describe", (void **)&plugin.describe },
+	{ "GetMember", (void **)&plugin.get_member },
+	{ "SetMember", (void **)&plugin.set_member },
+	{ "DeleteMember", (void **)&plugin.delete_member },
+	{ "MemberNames", (void **)&plugin.member_names },
+	{ "Length", (void **)&plugin.length },
+	{ "GetIndex", (void **)&plugin.get_index },
+	{ "SetIndex", (void **)&plugin.set_index },
+	{ "Splice", (void **)&plugin.splice },
+	{ "Call", (void **)&plugin.call },
+	{ "Invoke", (void **)&plugin.invoke },
+	{ "New", (void **)&plugin.new_instance },
+	{ "CallOpts", (void **)&plugin.call_opts },
+	{ "InvokeOpts", (void **)&plugin.invoke_opts },
+	{ "NewOpts", (void **)&plugin.new_opts },
+	{ "Release", (void **)&plugin.release },
+} ;
+
+
+/* libugly's dlopen handle, for C#'s P/Invoke: the one this plugin is linked against. */
+static void *libugly(void){
+	Dl_info info ;
+	if (dladdr((void *)ugly_export, &info) == 0){
+		return NULL ;
+	}
+	return dlopen(info.dli_fname, RTLD_LAZY | RTLD_NOLOAD) ;     /* never closed, like the CLR */
 }
 
 
+static ugly_status start(const char *dir) ;
+
 static ugly_status dn_init(ugly_ctx *ctx, const char *dir){
 	(void)ctx ;
-	char fxr[PATH_MAX], config[PATH_MAX] ;
+	struct sigaction saved[NHOST] ;
+	host_handlers(saved, 0) ;
+	ugly_status st = start(dir) ;
+	host_handlers(saved, 1) ;
+	return st ;
+}
+
+
+/* Starts the CLR, loads Ugly.dll and fills the vtable. */
+static ugly_status start(const char *dir){
+	char fxr[PATH_MAX], config[PATH_MAX + 32], assembly[PATH_MAX + 16] ;
 	size_t size = sizeof fxr ;
 	int rc = get_hostfxr_path(fxr, &size, NULL) ;
 	if (rc != 0){
@@ -61,8 +125,13 @@ static ugly_status dn_init(ugly_ctx *ctx, const char *dir){
 		return UGLY_ERR_INTERNAL ;
 	}
 
-	snprintf(config, sizeof config, "%s/Ugly.runtimeconfig.json", dir) ;
-	snprintf(assembly, sizeof assembly, "%s/Ugly.dll", dir) ;
+	char where[PATH_MAX] ;
+	if (realpath(dir, where) == NULL){     /* the CLR loads assemblies by absolute path only */
+		fprintf(stderr, "ugly dotnet: %s: %m\n", dir) ;
+		return UGLY_ERR_INTERNAL ;
+	}
+	snprintf(config, sizeof config, "%s/Ugly.runtimeconfig.json", where) ;
+	snprintf(assembly, sizeof assembly, "%s/Ugly.dll", where) ;
 	hostfxr_handle h = NULL ;
 	rc = init_fn(config, NULL, &h) ;     /* < 0: failure; 0, 1, 2: success */
 	if ((rc < 0)||(h == NULL)){
@@ -72,117 +141,52 @@ static ugly_status dn_init(ugly_ctx *ctx, const char *dir){
 		}
 		return UGLY_ERR_INTERNAL ;
 	}
-	rc = delegate_fn(h, hdt_load_assembly_and_get_function_pointer, (void **)&load_fn) ;
+	load_assembly_fn load = NULL ;
+	get_function_pointer_fn get_fn = NULL ;
+	rc = delegate_fn(h, hdt_load_assembly, (void **)&load) ;
+	if (rc >= 0){
+		rc = delegate_fn(h, hdt_get_function_pointer, (void **)&get_fn) ;
+	}
 	close_fn(h) ;
 	if (rc < 0){
-		diag("no load_assembly_and_get_function_pointer", rc) ;
+		diag("no load_assembly or get_function_pointer (.NET 8 or later is needed)", rc) ;
+		return UGLY_ERR_INTERNAL ;
+	}
+	rc = load(assembly, NULL, NULL) ;     /* into the default load context */
+	if (rc != 0){
+		diag("can't load Ugly.dll", rc) ;
 		return UGLY_ERR_INTERNAL ;
 	}
 
-	int (*bridge_init)(int) = NULL ;
-	rc = bridge_fn("Init", (void **)&bridge_init) ;
+	int (*bridge_init)(int, void *) = NULL ;
+	rc = get_fn("Ugly.Bridge, Ugly", "Init", UNMANAGEDCALLERSONLY_METHOD, NULL, NULL, (void **)&bridge_init) ;
 	if (rc != 0){
-		diag("can't load Ugly.Bridge.Init from Ugly.dll", rc) ;
+		diag("no Ugly.Bridge.Init in Ugly.dll", rc) ;
 		return UGLY_ERR_INTERNAL ;
 	}
-	if (bridge_init(BRIDGE_ABI) != 0){
+	void *core = libugly() ;
+	if ((core == NULL)||(bridge_init(BRIDGE_ABI, core) != 0)){
 		diag("Ugly.dll doesn't match this plugin", BRIDGE_ABI) ;
 		return UGLY_ERR_INTERNAL ;
 	}
+	size_t i ;
+	for (i = 0 ; i < sizeof(entries) / sizeof(entries[0]) ; i++){
+		rc = get_fn("Ugly.Bridge, Ugly", entries[i].method, UNMANAGEDCALLERSONLY_METHOD, NULL, NULL, entries[i].slot) ;
+		if (rc != 0){
+			fprintf(stderr, "ugly dotnet: no Ugly.Bridge.%s in Ugly.dll (0x%x)\n", entries[i].method, (unsigned)rc) ;
+			return UGLY_ERR_INTERNAL ;
+		}
+	}
 	return UGLY_OK ;
 }
 
 
-static ugly_status dn_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
-	*native = NULL ;
-	return UGLY_OK ;
-}
-
-
-static ugly_status dn_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
-	return UGLY_OK ;
-}
-
-
-/* Not yet: every operation is refused. */
-#define TODO(op) return ugly_fail(ctx, rt, UGLY_ERR_NOT_SUPPORTED, "", "dotnet: " op " isn't implemented yet")
-
-static ugly_status dn_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_val *out){
-	TODO("import") ;
-}
-static ugly_status dn_globals(ugly_ctx *ctx, ugly_rt *rt, ugly_val *out){
-	TODO("globals") ;
-}
-static ugly_status dn_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
-	TODO("describe") ;
-}
-static ugly_status dn_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_kind want,
-	ugly_val *out){
-	TODO("get_member") ;
-}
-static ugly_status dn_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_val v){
-	TODO("set_member") ;
-}
-static ugly_status dn_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
-	TODO("member_names") ;
-}
-static ugly_status dn_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
-	TODO("length") ;
-}
-static ugly_status dn_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want, ugly_val *out){
-	TODO("get_index") ;
-}
-static ugly_status dn_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_val v){
-	TODO("set_index") ;
-}
-static ugly_status dn_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_kind want, ugly_val *out){
-	TODO("call") ;
-}
-static ugly_status dn_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
-	size_t nargs, ugly_kind want, ugly_val *out){
-	TODO("invoke") ;
-}
-static ugly_status dn_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_handle *out){
-	TODO("new_instance") ;
-}
-static ugly_status dn_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
-	TODO("delete_member") ;
-}
-static ugly_status dn_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
-	const ugly_val *insert, size_t n){
-	TODO("splice") ;
-}
-
-
-/* No refs are handed out yet. */
-static void dn_release(ugly_rt *rt, void *ref){
-}
-
-
-static const ugly_plugin plugin = {
+static ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
-	.caps = 0,
+	.caps = UGLY_CAP_ANY_THREAD,     /* the CLR is multi-threaded; a thread new to it is attached on entry */
 	.name = "dotnet",
 	.init = dn_init,
-	.rt_new = dn_rt_new,
-	.rt_delete = dn_rt_delete,
-	.import = dn_import,
-	.globals = dn_globals,
-	.describe = dn_describe,
-	.get_member = dn_get_member,
-	.set_member = dn_set_member,
-	.member_names = dn_member_names,
-	.length = dn_length,
-	.get_index = dn_get_index,
-	.set_index = dn_set_index,
-	.call = dn_call,
-	.invoke = dn_invoke,
-	.new_instance = dn_new_instance,
-	.delete_member = dn_delete_member,
-	.splice = dn_splice,
-	.release = dn_release,
+	.options = (const char *const []){ "path", NULL },
 } ;
 
 

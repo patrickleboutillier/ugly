@@ -70,7 +70,7 @@ extern "C" {
 typedef struct ugly_plugin {
 	uint32_t abi ;           /* UGLY_PLUGIN_ABI */
 	uint32_t caps ;          /* UGLY_CAP_* */
-	const char *name ;       /* "lua", "python", "js", "perl5", "java" */
+	const char *name ;       /* "lua", "python", "js", "perl5", "java", "dotnet" */
 
 	/*
 	 * Process-wide setup, once per process (or again after 'term'). 'dir' is
@@ -82,8 +82,12 @@ typedef struct ugly_plugin {
 	 * Signals: 'init' and 'rt_new' must leave alone any handler another
 	 * runtime installed before them (the JVM's SIGSEGV, SIGFPE... carry its
 	 * implicit null and divide checks). If the interpreter resets one while
-	 * starting, the plugin restores it (perl ignores SIGFPE). An interpreter's
-	 * own diagnostics go to stderr, never stdout, which belongs to the host.
+	 * starting, the plugin restores it (perl ignores SIGFPE). A VM that
+	 * needs fault handlers of its own (the JVM, the CLR) may install them
+	 * only if they call the previous handler for a fault outside its code;
+	 * the host's process-level signals (SIGINT, SIGTERM, SIGPIPE...) are put
+	 * back (the CLR's). An interpreter's own diagnostics go to stderr, never
+	 * stdout, which belongs to the host.
 	 */
 	ugly_status (*init)(ugly_ctx *ctx, const char *dir) ;
 	void (*term)(void) ;

@@ -80,14 +80,12 @@ All additive: none of it breaks existing plugins (contract, "Scope").
     process, and WASI capabilities are granted per runtime (`ugly_configure`).
   - Check how much of wasmtime's component API its C API covers; if too
     little, write the plugin in Rust against the C vtable.
-- [ ] **C# / .NET**: the CLR, through the official hosting API (`nethost`
-  and `hostfxr`, `load_assembly_and_get_function_pointer`), or Mono's
-  embedding API. In shape it's the JVM again: one runtime per process,
-  multi-threaded (`UGLY_CAP_ANY_THREAD`), a GC, reflection, overloads (the
-  `hint` call option applies), exceptions; so the Java plugin is the
-  template. The binding is easier than Java's: a .NET program calls
-  `libugly` directly through P/Invoke. It brings NuGet, and the many
-  enterprise codebases written in C#.
+- [ ] **The .NET binding**: a .NET program using the other languages. The
+  plugin's C# side already calls `libugly` through P/Invoke, and
+  `Ugly.Foreign` is a `DynamicObject` (`((dynamic)json).dumps(x, indent: 2)`),
+  so the binding is mostly attach mode: `Ugly.dll` loaded by the program,
+  registering the plugin (`ugly_lang_register`) and attaching to the running
+  CLR, with teardown at `ProcessExit`. Then NuGet packages on the module path.
 - [ ] **Java through Panama FFM** for the helper side, once JDK 22+ is the
   baseline. Creating the JVM still needs the JNI invocation API.
 - [ ] **R** (`Rf_initEmbeddedR`): the data-science ecosystem. Everything is a
@@ -151,7 +149,9 @@ Released as 2.2.0 (the first release), 2.3.0 and 2.4.0; details in the
 contract and in the pull requests.
 
 - **Languages:** QuickJS, Perl 5 (with namespace import and complete ties),
-  Java through JNI (with a binding, and any thread), Lua 5.3 beside 5.4.
+  Java through JNI (with a binding, and any thread), Lua 5.3 beside 5.4,
+  C# on the CLR through `hostfxr` (any thread, keyword arguments as named
+  arguments, hints).
 - **Hosts:** HAProxy, in `lua-load-per-thread` and `lua-load` on several
   threads; options for runtimes created on demand (`ugly_configure`).
 - **Threads:** `UGLY_CAP_ANY_THREAD` (Python, Java), runtimes shared between

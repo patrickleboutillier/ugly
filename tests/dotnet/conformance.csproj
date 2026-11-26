@@ -1,0 +1,19 @@
+<!-- The C# conformance fixtures: conformance.dll, against the plugin's Ugly.dll (-p:UglyDll=...). -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>conformance</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The fixtures' names are the contract's: counter, list, kw... (CS8981: lower-case type names). -->
+    <NoWarn>CS8981</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The plugin's own Ugly.dll, already in the process: not copied. -->
+    <Reference Include="Ugly">
+      <HintPath>$(UglyDll)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

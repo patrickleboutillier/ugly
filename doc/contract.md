@@ -373,6 +373,7 @@ beforehand:
 | JS | `path` (module directories) | `UGLY_JS_PATH` |
 | Perl | `path` (`@INC`) | `PERL5LIB` |
 | Java | `classpath`, `options` (JVM options: `-Xmx512m`, `-Dk=v`...) | `UGLY_JAVA_CLASSPATH`, `CLASSPATH` |
+| C# | `path` (directories of assemblies) | `UGLY_DOTNET_PATH` |
 
 Every binding has `configure`: `ugly.configure("java", options=["-Xmx512m"])`
 in Python, `ugly.configure("python", { path = "./py" })` in Lua and JS,
@@ -539,23 +540,23 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 
 ## 10. The languages
 
-How each language maps onto the contract: the four planned ones, and Java,
-added after the plan was complete. "Proxy finalizer" is where a proxy
+How each language maps onto the contract: the four planned ones, and Java
+and C#, added after the plan was complete. "Proxy finalizer" is where a proxy
 releases its handle reference.
 
-| | Lua 5.4 or 5.3 | CPython 3.10+ | QuickJS (`js`) | Perl 5 | Java (JDK 21) |
-|---|---|---|---|---|---|
-| null | `nil` | `None` | `null`, `undefined` (NULL goes in as `null`) | `undef` | `null` |
-| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IOK → INT, NOK → DOUBLE, POK → STRING; booleans by `SvIsBOOL` (5.36+) or `PL_sv_yes`/`PL_sv_no`'s signature; an explicit `want` numifies only what `looks_like_number` | boxed integers and `BigInteger` (if it fits) → INT, `Double`/`Float` → DOUBLE; INT goes in as `Long`, and narrows to `int`/`short`/`byte` parameters when it fits; integers widen to DOUBLE |
-| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag on → STRING; off → STRING if valid UTF-8, else BYTES; `want = STRING` decodes unflagged strings as Latin-1 (see decision 6) | `String`/`Character` / `byte[]`; strings are converted from UTF-16 by the plugin, not with JNI's modified UTF-8 |
-| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | a hash's keys, then an object's methods; a package's subs and nested packages. Modules and classes are packages (`Ugly::Package`); `new` instantiates | public fields and methods, then bean getters (`getX`, `isX`); a `Map`'s keys. Classes are imported by name; a class with a public constructor is INSTANTIABLE (`class`), else `module` |
-| elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays | arrays and `List`s |
-| `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant for an object; none for a package's function | the object for an instance method; none for a class's static method. Overloads are chosen by scoring how well the arguments convert |
-| proxy finalizer | userdata `__gc` (a foreign function is a C closure over that userdata, so Lua's C library takes it) | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` | a `Cleaner` on `ugly.Foreign`; a foreign value passed where an interface is expected becomes a dynamic proxy (the single abstract method calls it) |
-| foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | | `f.invoke("m", x)` on `ugly.Foreign`, or through the interface it was passed as |
-| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT` on every entry; `G_EVAL`; calls run in list context and collapse (none → null, one → it, more → array) | a JNI local frame per operation; exceptions are checked after every JNI call; deep recursion ends in `StackOverflowError` (about 200 alternating levels here) |
-| restartable | yes | no | yes | no | no (`DestroyJavaVM` is one-way) |
-| multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY); `PERL_SYS_INIT3` once per process, never `PERL_SYS_TERM` | no: one JVM per process, created at plugin load, or the one already running |
+| | Lua 5.4 or 5.3 | CPython 3.10+ | QuickJS (`js`) | Perl 5 | Java (JDK 21) | C# (.NET 10, `dotnet`) |
+|---|---|---|---|---|---|---|
+| null | `nil` | `None` | `null`, `undefined` (NULL goes in as `null`) | `undef` | `null` | `null` |
+| int / double | integer / float subtypes | `int` (`TYPE` beyond int64) / `float`; no implicit str↔number or float→int | number: INT if integral and within ±2^53, else DOUBLE; INT beyond 2^53 goes in as `BigInt`, and a `BigInt` comes out as INT if it fits | IOK → INT, NOK → DOUBLE, POK → STRING; booleans by `SvIsBOOL` (5.36+) or `PL_sv_yes`/`PL_sv_no`'s signature; an explicit `want` numifies only what `looks_like_number` | boxed integers and `BigInteger` (if it fits) → INT, `Double`/`Float` → DOUBLE; INT goes in as `Long`, and narrows to `int`/`short`/`byte` parameters when it fits; integers widen to DOUBLE | integers (`long`, `int`...; `ulong`, `BigInteger`, `Int128` if they fit) → INT, `double`/`float` → DOUBLE; INT goes in as `long`, and narrows to `int`, `short`... parameters when it fits; integers widen to DOUBLE; `decimal` is a handle |
+| string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag on → STRING; off → STRING if valid UTF-8, else BYTES; `want = STRING` decodes unflagged strings as Latin-1 (see decision 6) | `String`/`Character` / `byte[]`; strings are converted from UTF-16 by the plugin, not with JNI's modified UTF-8 | `string`/`char` / `byte[]`; converted strictly: invalid UTF-8 going in, or a lone surrogate coming out, is `TYPE` |
+| members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | a hash's keys, then an object's methods; a package's subs and nested packages. Modules and classes are packages (`Ugly::Package`); `new` instantiates | public fields and methods, then bean getters (`getX`, `isX`); a `Map`'s keys. Classes are imported by name; a class with a public constructor is INSTANTIABLE (`class`), else `module` | public fields, properties and methods; a dictionary's string keys (`IDictionary`, `ExpandoObject`). Types are imported by full name, from loaded assemblies or the module path; a static class is a `module`, a type with a public constructor a `class` (INSTANTIABLE) |
+| elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays | arrays and `List`s | arrays and `IList`s |
+| `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant for an object; none for a package's function | the object for an instance method; none for a class's static method. Overloads are chosen by scoring how well the arguments convert | the object for an instance method; none for a type's static method. Overloads are chosen by score, as in Java; a member holding a delegate is called |
+| proxy finalizer | userdata `__gc` (a foreign function is a C closure over that userdata, so Lua's C library takes it) | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` | a `Cleaner` on `ugly.Foreign`; a foreign value passed where an interface is expected becomes a dynamic proxy (the single abstract method calls it) | the finalizer of `Ugly.Foreign`; a foreign value passed for a delegate type becomes a delegate (compiled once per delegate type), and for an interface a `DispatchProxy` |
+| foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | | `f.invoke("m", x)` on `ugly.Foreign`, or through the interface it was passed as | `f.Invoke("m", x)`, or `((dynamic)f).m(x, name: y)`: `Ugly.Foreign` is a `DynamicObject`, and named arguments are keyword arguments |
+| re-entry | `lua_pcall` at every boundary; Lua allows about 200 nested C calls, so a call costs one | GIL with `PyGILState_*` | one context per runtime; pending jobs run when the outermost call returns; QuickJS's own stack limit (about 340 levels here) | `PERL_SET_CONTEXT` on every entry; `G_EVAL`; calls run in list context and collapse (none → null, one → it, more → array) | a JNI local frame per operation; exceptions are checked after every JNI call; deep recursion ends in `StackOverflowError` (about 200 alternating levels here) | the CLR attaches any thread that enters; every entry checks the stack (`EnsureSufficientExecutionStack`), since .NET can't catch a stack overflow |
+| restartable | yes | no | yes | no | no (`DestroyJavaVM` is one-way) | no (the CLR can't be unloaded) |
+| multiple runtimes | yes | no in v2.0 (subinterpreters later); initialized once per process, never finalized | yes | yes (MULTIPLICITY); `PERL_SYS_INIT3` once per process, never `PERL_SYS_TERM` | no: one JVM per process, created at plugin load, or the one already running | no: one CLR per process, started at plugin load through `hostfxr` |
 
 ## 11. Call options
 
@@ -591,6 +592,7 @@ ugly_status ugly_new_opts(ctx, cls, args, nargs, opts, out) ;
 | Python | `f(*args, **kwargs)`; an unknown name is Python's own `TypeError` | refused | refused |
 | Perl | appended as `name => value` pairs, in the order given | refused | `list` (default, collapsing as in decision 9), `scalar`, `void` |
 | Java | refused | the overload's parameter types, `"int,java.lang.String"` | refused |
+| C# | bound to parameters by name, as C#'s named arguments; parameters left out keep their defaults | the overload's parameter types, by C# alias or full name: `"int,string"`, `"System.Int32,System.String"` | refused |
 | Lua, JS | refused | refused | refused |
 | mock | appended as pairs, like Perl | refused | refused |
 
@@ -802,6 +804,40 @@ All of them are in the headers and covered by the conformance suite.
   upvalue (rule 5). Classes stay userdata, and so does a class reached as
   a member, which used to become a method closure and hide its members
   (`datetime.date.today()`).
+- **C# / .NET** (2026-11-26) needed no change to the protocol, and refined
+  the rule about signals.
+  - The CLR, through the official hosting API (nethost, hostfxr), started
+    from `Ugly.runtimeconfig.json`. One per process and one-way, so the
+    plugin is neither MULTI_RUNTIME nor RESTARTABLE; it is ANY_THREAD (the
+    CLR attaches a native thread on its first entry). No binding yet.
+  - Most of the plugin is C#. `Ugly.dll` is loaded into the *default* load
+    context (`hdt_load_assembly`, .NET 8 and later), and its
+    `[UnmanagedCallersOnly]` methods are the vtable's entries; C# calls the
+    core back through P/Invoke, on the libugly that `dladdr` finds. The
+    isolated context of `load_assembly_and_get_function_pointer` would give
+    the assemblies loaded later (modules, fixtures) a second copy of the
+    `Ugly` types. The C file only starts the CLR.
+  - A native ref is a `GCHandle`, one per object and counted; its address
+    is also the object's identity.
+  - Keyword arguments are honoured: they bind to parameters by name, as C#'s
+    named arguments do, and optional parameters keep their defaults. Hints
+    name the overload's parameter types; `options.c` checks them from a table
+    per language (Java's names and C#'s for the same three overloads).
+  - **A VM may keep the fault handlers it needs, if it chains.** The CLR
+    installs SIGSEGV, SIGFPE, SIGILL, SIGBUS and SIGTRAP (faults it turns
+    into exceptions) and SIGRTMIN (suspending threads), and calls the
+    previous handler for a fault outside managed code, as the JVM does.
+    Tested in both load orders: 20000 Java NPEs from implicit null checks
+    and C# `NullReferenceException`s, each VM's handlers under the other's.
+    The CLR's SIGINT, SIGQUIT, SIGTERM, SIGPIPE and SIGABRT handlers serve
+    only process-level features (Ctrl-C events, `ProcessExit`, crash dumps),
+    so the plugin puts the host's back once the CLR has started, as `-Xrs`
+    does for the JVM. Test `dotnet-signals`; rule in `ugly_plugin.h`.
+  - Types are found by full name: in loaded assemblies, then in the
+    assembly named by the longest prefix of the name, on the module path or
+    among the framework's, then in any assembly on the module path.
+  - The CLR is kept out of valgrind and helgrind (suite `clr`), like the
+    JVM.
 - **Rule 7, completed** (found by the bindings). When an error returns to
   the language its payload came from, that language raises the original
   value or exception object, not a wrapper. A Python exception that crosses

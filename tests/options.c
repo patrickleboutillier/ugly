@@ -104,19 +104,27 @@ int main(void){
 		is_status(ctx, st, UGLY_ERR_NOT_SUPPORTED, "a call context: refused (UGLY_ERR_NOT_SUPPORTED)") ;
 	}
 
-	/* An overload hint: Java's picks the overload (over(int), over(long), over(Object)); others refuse it. */
+	/*
+	 * An overload hint: Java and C# pick the overload (over(int), over(long),
+	 * over(Object)), by their own names for the parameter types; others refuse it.
+	 */
+	static const char *const java_hints[][2] = {
+		{ NULL, "long" }, { "int", "int" }, { "long", "long" }, { "java.lang.Object", "java.lang.Object" }, { NULL, NULL },
+	} ;
+	static const char *const dotnet_hints[][2] = {
+		{ NULL, "long" }, { "int", "int" }, { "long", "long" }, { "object", "object" }, { "System.Int32", "int" }, { NULL, NULL },
+	} ;
+	const char *const (*hints)[2] = (strcmp(plugin_name(), "java") == 0 ? java_hints
+		: strcmp(plugin_name(), "dotnet") == 0 ? dotnet_hints : NULL) ;
 	ugly_opts h = UGLY_OPTS_INIT ;
 	h.hint = "int" ;
-	if (strcmp(plugin_name(), "java") != 0){
+	if (hints == NULL){
 		st = ugly_invoke_opts(ctx, f.mod, "echo", &one, 1, &h, UGLY_ANY, &v) ;
 		is_status(ctx, st, UGLY_ERR_NOT_SUPPORTED, "an overload hint: refused (UGLY_ERR_NOT_SUPPORTED)") ;
 	}
 	else {
-		static const char *const hints[][2] = {
-			{ NULL, "long" }, { "int", "int" }, { "long", "long" }, { "java.lang.Object", "java.lang.Object" },
-		} ;
 		size_t i ;
-		for (i = 0 ; i < sizeof(hints) / sizeof(hints[0]) ; i++){
+		for (i = 0 ; hints[i][1] != NULL ; i++){
 			h.hint = hints[i][0] ;
 			char what[96] ;
 			snprintf(what, sizeof(what), "over(1) with hint %s", hints[i][0] ? hints[i][0] : "(none): the best fit") ;
