@@ -1,7 +1,9 @@
--- | A module built into the plugin, for its tests, until modules load from
--- export tables: one value of each kind the protocol maps, and functions to
--- call.
-module Ugly.Smoke (smoke) where
+{-# LANGUAGE TemplateHaskell #-}
+
+-- | A module for the plugin's tests (values.c, calls.c), written by hand
+-- with Ugly.Value: one value of each kind the protocol maps, and functions
+-- to call. Module "Smoke" in the library Smoke.so (uglyModuleFrom).
+module Smoke (smoke) where
 
 import qualified Data.ByteString as B
 import Data.Int
@@ -10,6 +12,7 @@ import qualified Data.Map as M
 import Data.Word
 import System.IO.Unsafe (unsafePerformIO)
 
+import Ugly.Export (uglyModuleFrom)
 import Ugly.Value
 
 data Color = Red | Green | Blue
@@ -32,7 +35,7 @@ counter = unsafePerformIO (newIORef 0)
 {-# NOINLINE counter #-}
 
 smoke :: Box
-smoke = moduleBox "Ugly.Smoke" entries
+smoke = moduleBox "Smoke" entries
 
 entries :: [(String, Value)]
 entries =
@@ -80,3 +83,5 @@ entries =
       [ toUgly ((\x -> "Int8 " ++ show x) :: Int8 -> String)
       , toUgly ((\x -> "Word8 " ++ show x) :: Word8 -> String) ])
   ]
+
+uglyModuleFrom "Smoke" 'smoke

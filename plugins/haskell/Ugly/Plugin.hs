@@ -22,7 +22,6 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
 import Data.Int
 import Data.IORef
-import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Typeable
@@ -40,25 +39,19 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Mem.StableName
 
 import Ugly.Native
-import qualified Ugly.ExampleExports as Example
-import qualified Ugly.Smoke as Smoke
 import Ugly.Value
 
 -- | haskell.c's BRIDGE_ABI: the two sides must come from the same build.
 bridgeAbi :: CInt
-bridgeAbi = 3
+bridgeAbi = 4
 
--- | A runtime. Its loaded modules will go here.
+-- | A runtime. Modules are libraries, loaded once per process (haskell.c),
+-- so a runtime has no state yet.
 newtype Runtime = Runtime (IORef ())
 
 -- | What C holds for a value: its box, and the stable name of its identity.
 data Ref = Ref Box Named
 data Named = forall a. Named (StableName a)
-
--- | Modules built into the plugin, until modules load from export tables.
-builtins :: M.Map String Box
-builtins = M.fromList [("Ugly.Smoke", Smoke.smoke), ("Ugly.Example", Example.uglyExports)]
-
 
 -- Strings to and from C are UTF-8, whatever the locale.
 withUtf8 :: String -> (CString -> IO a) -> IO a
@@ -164,12 +157,13 @@ rtNew = newIORef () >>= newStablePtr . Runtime
 rtDelete :: StablePtr Runtime -> IO ()
 rtDelete = freeStablePtr
 
-hsImport :: Ptr Ctx -> Ptr Rt -> CString -> Ptr Val -> IO Status
-hsImport ctx rt cname out = guarded ctx rt $ do
-  name <- peekUtf8 cname
-  case M.lookup name builtins of
-    Just m -> put ctx rt kAny (VBox m) out
-    Nothing -> failWith ctx rt errNotFound "ModuleNotFound" ("Could not find module " ++ show name)
+-- | A module, from the stable pointer its library's foreign export gave
+-- (haskell.c found it: Ugly.Export.uglyModuleFrom). Taken: freed here.
+hsImport :: Ptr Ctx -> Ptr Rt -> StablePtr Box -> Ptr Val -> IO Status
+hsImport ctx rt root out = guarded ctx rt $ do
+  m <- deRefStablePtr root
+  freeStablePtr root
+  put ctx rt kAny (VBox m) out
 
 hsDescribe :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Word32 -> Ptr Val -> IO Status
 hsDescribe ctx rt ref traits typeName' = guarded ctx rt $ do
@@ -297,7 +291,7 @@ hsLiveRefs = fromIntegral <$> readIORef liveRefs
 foreign export ccall "ugly_hs_abi" hsAbi :: IO CInt
 foreign export ccall "ugly_hs_rt_new" rtNew :: IO (StablePtr Runtime)
 foreign export ccall "ugly_hs_rt_delete" rtDelete :: StablePtr Runtime -> IO ()
-foreign export ccall "ugly_hs_import" hsImport :: Ptr Ctx -> Ptr Rt -> CString -> Ptr Val -> IO Status
+foreign export ccall "ugly_hs_import" hsImport :: Ptr Ctx -> Ptr Rt -> StablePtr Box -> Ptr Val -> IO Status
 foreign export ccall "ugly_hs_describe" hsDescribe :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Word32 -> Ptr Val -> IO Status
 foreign export ccall "ugly_hs_get_member" hsGetMember :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Kind -> Ptr Val -> IO Status
 foreign export ccall "ugly_hs_member_names" hsMemberNames :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Handle -> IO Status

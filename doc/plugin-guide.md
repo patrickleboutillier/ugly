@@ -119,7 +119,20 @@ lines of C, with no interpreter in the way: read it first.
 - **Load your helper code where later code sees it.** The CLR's isolated
   load context (`load_assembly_and_get_function_pointer`) would have given
   fixture assemblies a second copy of the `Ugly` types; the default context
-  (`hdt_load_assembly`) doesn't.
+  (`hdt_load_assembly`) doesn't. Haskell's module libraries link the
+  plugin's own package (`libugly_hs.so`) for the same reason.
+- **Code loaded after the runtime starts may need declaring.** A compiled
+  library dlopen'ed into a running garbage-collected runtime isn't one the
+  runtime knows about. GHC registers foreign exports as roots only in
+  `hs_init` and in its own linker, so a top-level value in a later library
+  could be collected while its code still refers to it: start the RTS
+  with `keep_cafs`. Never close such a library, as the runtime holds
+  pointers into its code, and open it `RTLD_LOCAL`, so two of them can
+  have symbols of the same name. Haskell taught this.
+- **Let the toolchain that knows its runtime link it.** A Haskell library
+  that Template Haskell loads into ghc must not bring an RTS of its own:
+  ghc's may be another flavour. So the RTS is linked by a library of its
+  own (`libugly_rts.so`), not by the package (`libugly_hs.so`).
 
 ## Bindings
 

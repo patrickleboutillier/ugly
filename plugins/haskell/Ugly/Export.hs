@@ -22,13 +22,24 @@
 --
 -- The instances are orphans (the export module is neither the class's nor
 -- the type's), so an export module needs {-# OPTIONS_GHC -Wno-orphans #-}.
-module Ugly.Export (uglyModule) where
+--
+-- A module is found in a module library (a .so built against the package
+-- 'ugly') by a C symbol, ugly_hs_module_<the name, encoded>, a foreign
+-- export giving its box. 'uglyModule' declares it, and so does
+-- 'uglyModuleFrom', for a module whose box is written by hand.
+module Ugly.Export (uglyModule, uglyModuleFrom, moduleSymbol) where
 
 import Control.Monad (filterM, foldM, forM)
+import qualified Data.ByteString as B
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, chr)
 import Data.List (intercalate, nub)
 import qualified Data.Map as M
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Data.Typeable (Typeable)
+import Foreign.StablePtr (StablePtr, newStablePtr)
 import Language.Haskell.TH
+import Numeric (showHex)
 
 import Ugly.Value (Box, FromUgly, ToUgly (..), Value, boxWith, moduleBox, overloaded)
 
@@ -48,10 +59,39 @@ uglyModule modName names = do
   entriesDec <- valD (varP entriesName) (normalB (listE (map return entries))) []
   exportsSig <- sigD exportsName [t| Box |]
   exportsDec <- valD (varP exportsName) (normalB [| moduleBox modName $(varE entriesName) |]) []
-  return (instances ++ [entriesSig, entriesDec, exportsSig, exportsDec])
+  root <- uglyModuleFrom modName exportsName
+  return (instances ++ [entriesSig, entriesDec, exportsSig, exportsDec] ++ root)
   where
     isType (TyConI _) = True
     isType _ = False
+
+-- | Declares module modName, whose box is the top-level 'Box' named: the
+-- foreign export the plugin finds it by (moduleSymbol), giving a new stable
+-- pointer to the box each time (the plugin frees it).
+--
+-- > smoke :: Box
+-- > smoke = moduleBox "Smoke" [("answer", toUgly (42 :: Int))]
+-- > uglyModuleFrom "Smoke" 'smoke
+uglyModuleFrom :: String -> Name -> Q [Dec]
+uglyModuleFrom modName box = do
+  let root = mkName ("uglyRoot_" ++ drop (length symbolPrefix) (moduleSymbol modName))
+  ty <- [t| IO (StablePtr Box) |]
+  def <- valD (varP root) (normalB [| newStablePtr $(varE box) |]) []
+  return [SigD root ty, def, ForeignD (ExportF CCall (moduleSymbol modName) root ty)]
+
+-- | The C symbol of a module's foreign export: ugly_hs_module_, then the
+-- name's UTF-8 bytes, ASCII letters and digits as they are, any other byte
+-- as _ and two hex digits: Music.Diatonic is ugly_hs_module_Music_2eDiatonic.
+-- haskell.c encodes the same way.
+moduleSymbol :: String -> String
+moduleSymbol name = symbolPrefix ++ concatMap enc (B.unpack (TE.encodeUtf8 (T.pack name)))
+  where
+    enc b = let c = chr (fromIntegral b) in
+      if isAsciiUpper c || isAsciiLower c || isDigit c then [c] else '_' : pad (showHex b "")
+    pad h = replicate (2 - length h) '0' ++ h
+
+symbolPrefix :: String
+symbolPrefix = "ugly_hs_module_"
 
 -- | ToUgly and FromUgly for a listed type, unless it has them.
 typeInstances :: [Name] -> Name -> Q [Dec]
