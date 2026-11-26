@@ -15,6 +15,8 @@ module Ugly.Native
   , c_ugly_export, c_ugly_fail, c_ugly_raise_native
   , c_ugly_val_set_string, c_ugly_val_set_bytes
   , c_set_null, c_set_bool, c_set_int, c_set_double, c_set_handle, c_names
+  , c_ugly_resolve
+  , c_arg, c_kind, c_bool, c_int, c_double, c_ptr, c_len, c_handle
   ) where
 
 import Data.Int
@@ -75,3 +77,15 @@ foreign import ccall unsafe "ugly_hs_set_bool" c_set_bool :: Ptr Val -> CInt -> 
 foreign import ccall unsafe "ugly_hs_set_int" c_set_int :: Ptr Val -> Int64 -> IO ()
 foreign import ccall unsafe "ugly_hs_set_double" c_set_double :: Ptr Val -> Double -> IO ()
 foreign import ccall unsafe "ugly_hs_set_handle" c_set_handle :: Ptr Val -> Handle -> IO ()
+
+foreign import ccall safe "ugly_resolve"
+  c_ugly_resolve :: Ptr Ctx -> Ptr Rt -> Handle -> Ptr (Ptr ()) -> IO Status
+
+foreign import ccall unsafe "ugly_hs_arg" c_arg :: Ptr Val -> CSize -> IO (Ptr Val)
+foreign import ccall unsafe "ugly_hs_kind" c_kind :: Ptr Val -> IO Kind
+foreign import ccall unsafe "ugly_hs_bool" c_bool :: Ptr Val -> IO CInt
+foreign import ccall unsafe "ugly_hs_int" c_int :: Ptr Val -> IO Int64
+foreign import ccall unsafe "ugly_hs_double" c_double :: Ptr Val -> IO Double
+foreign import ccall unsafe "ugly_hs_ptr" c_ptr :: Ptr Val -> IO CString
+foreign import ccall unsafe "ugly_hs_len" c_len :: Ptr Val -> IO CSize
+foreign import ccall unsafe "ugly_hs_handle" c_handle :: Ptr Val -> IO Handle

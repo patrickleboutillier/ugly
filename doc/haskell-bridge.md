@@ -323,24 +323,21 @@ then boxes in that runtime, so Python can call back into the program.
 5. **music-diatonic** as an example, from Python and Lua.
 6. **The binding**, then the docs.
 
-## To decide
+## Decided (2026-11-26)
 
-These are questions about idiom and feel, for the author:
+The author's answers to the questions of idiom and feel:
 
 1. **`invoke` on a box: the receiver goes last.** Haskell puts the subject
    last, so that `x & f a b` works. So `chord.transpose(Min3rd, above)`
-   would mean `transpose Min3rd above chord`, looked up among the module's
-   exports whose last parameter takes a `Chord`. The other choice is
-   first, as Perl does.
-2. **Range checks**: refuse an int that doesn't fit (`UGLY_ERR_TYPE`), or
-   wrap as `fromInteger` does? Refusing also lets overload resolution rule
-   out an instantiation whose integer type is too small, as Java's scoring
-   does. Built that way for results (an `Integer` beyond int64 is a box of
-   its digits); arguments come with calls.
-3. **`Maybe`**: `Nothing` as null and `Just x` as `x` is idiomatic in every
-   other language, but `Just Nothing` and `Nothing` would look the same.
-   Built: flattened, except that `Just x` stays a box (one element long)
-   when `x` is itself null, so nothing is lost. The other choice is always
-   a box, a sequence of 0 or 1.
-4. **The export list**: written by hand (`uglyModule` with names), or read
-   from the module's interface file by a build helper?
+   means `transpose Min3rd above chord`, among the exports of the module
+   that exported `Chord`. On a module, `invoke` calls its function with no
+   receiver.
+2. **Integers that don't fit are refused** (`UGLY_ERR_TYPE`), never wrapped
+   as `fromInteger` would. This also lets overload resolution rule out an
+   instantiation whose integer type is too small, as Java's scoring does.
+   Going out, an `Integer` beyond int64 is a box of its digits.
+3. **`Maybe` is flattened**: `Nothing` is null, `Just x` is `x`, except that
+   `Just x` stays a box (one element long) when `x` is itself null, so
+   nothing is lost.
+4. **Export lists are written by hand** (`uglyModule` with names). A tool
+   that drafts one from the GHC API can come later.

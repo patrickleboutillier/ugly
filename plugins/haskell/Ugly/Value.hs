@@ -1,27 +1,38 @@
-{-# LANGUAGE ExistentialQuantification, FlexibleInstances, ScopedTypeVariables #-}
+{-# LANGUAGE ExistentialQuantification, FlexibleContexts, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
+-- MonoLocalBinds: without it, generalizing a local 'call' settles its
+-- Result (a -> b) constraint with the overlappable instance, too early.
+{-# LANGUAGE MonoLocalBinds #-}
 
--- | Haskell values as the protocol sees them.
+-- | Haskell values as the protocol sees them, both ways.
 --
--- A 'Value' is a primitive, which crosses by value, or a 'Box': a Haskell
--- value with the operations the protocol may ask of it, closed over it where
--- its type was static. A box needs no class dictionary at run time, and no
--- reflection: describe, show, members and elements are already closures.
+-- Out: a 'Value' is a primitive, which crosses by value, or a 'Box': a
+-- Haskell value with the operations the protocol may ask of it, closed over
+-- it where its type was static. A box needs no class dictionary at run time,
+-- and no reflection: describe, show, members, elements and calls are already
+-- closures. 'ToUgly' decides which.
 --
--- 'ToUgly' decides which: its instances are the value mapping of
--- doc/haskell-bridge.md. Two choices to confirm with the author are built in:
--- integers out of range don't wrap (an 'Integer' beyond int64 is a box, not
--- an int), and 'Maybe' is flattened ('Nothing' is null, 'Just' x is x) except
--- where that would lose information ('Just' of something null stays a box).
+-- In: an 'Arg' is what a caller passed, decoded from C. 'FromUgly' converts
+-- it to a Haskell type the way a literal of its kind would convert (an int
+-- to any integer type it fits, or to a Double; a string to String or Text),
+-- or takes a Haskell value coming home as itself. Each conversion has a
+-- cost, so that a call to an overloaded (polymorphic) function picks the
+-- instantiation its arguments fit best.
+--
+-- The choices are doc/haskell-bridge.md's "Decided": integers out of range
+-- are refused, never wrapped; Maybe is flattened unless Just x is itself
+-- null.
 module Ugly.Value
-  ( Value (..), Box (..), Info (..), Members (..), Elems (..)
-  , ToUgly (..)
-  , boxShow, boxOpaque, moduleBox, typeName, validText
+  ( Value (..), Box (..), Info (..), Members (..), Elems (..), Arg (..), Conv
+  , ToUgly (..), FromUgly (..), Result (..)
+  , info, boxShow, boxOpaque, boxWith, moduleBox, overloaded
+  , typeName, validText, describeArg, home
   ) where
 
+import Control.Exception (evaluate)
 import qualified Data.ByteString as B
 import Data.Char (ord)
 import Data.Int
-import Data.List (intercalate)
+import Data.List (intercalate, sortOn)
 import qualified Data.Map as M
 import qualified Data.Text as T
 import Data.Typeable
@@ -38,15 +49,22 @@ data Value
   | VBytes !B.ByteString
   | VBox !Box
 
--- | A Haskell value, its identity (the value itself), and what can be asked of it.
-data Box = forall a. Box a Info
+-- | A Haskell value, its identity (the value itself), and what can be asked
+-- of it. 'Typeable', so that it can be cast back when it comes home.
+data Box = forall a. Typeable a => Box a Info
 
 data Info = Info
   { infoType :: String              -- ^ describe's type name: "Note", "[Int]", "module"
   , infoShow :: Maybe String        -- ^ its text, for want = string (lazy: forced when asked)
   , infoMembers :: Maybe Members    -- ^ MEMBERS
   , infoElems :: Maybe Elems        -- ^ ELEMENTS
+  , infoCall :: Maybe ([Arg] -> Conv (IO Value))   -- ^ CALLABLE: match the arguments, then run
+  , infoMethods :: Maybe (String -> Maybe Value)   -- ^ for invoke: functions taking this value last
   }
+
+-- | A box with nothing but a type name.
+info :: String -> Info
+info ty = Info ty Nothing Nothing Nothing Nothing Nothing
 
 data Members = Members
   { memberNames :: [String]
@@ -60,7 +78,23 @@ data Elems = Elems
   , elemsIndex :: Int -> Maybe Value    -- ^ Nothing outside the elements
   }
 
--- | How a Haskell type crosses. Every type is 'Typeable', for its name.
+-- | An argument, as passed: a primitive, or a handle. A handle whose home is
+-- this runtime arrives as its box.
+data Arg
+  = ANull
+  | ABool Bool
+  | AInt Int64
+  | ADouble Double
+  | AString T.Text
+  | ABytes B.ByteString
+  | AHome Box
+  | AForeign Word64    -- ^ a borrowed handle from another runtime
+
+-- | A conversion: why not, or its cost (0 is exact) and how. The "how" runs
+-- only for the overload that's chosen.
+type Conv a = Either String (Int, a)
+
+-- | How a Haskell type crosses out. Every type is 'Typeable', for its name.
 class Typeable a => ToUgly a where
   toUgly :: a -> Value
   -- | Its text as 'show' would give it, if the type has one: what a box of
@@ -68,31 +102,81 @@ class Typeable a => ToUgly a where
   textOf :: a -> Maybe String
   textOf _ = Nothing
 
+-- | How a Haskell type is taken from an argument. The default takes only a
+-- Haskell value of exactly this type, coming home.
+class Typeable a => FromUgly a where
+  fromUgly :: Arg -> Conv (IO a)
+  fromUgly = home
+
 typeName :: forall a. Typeable a => a -> String
 typeName _ = show (typeRep (Proxy :: Proxy a))
 
+typeNameP :: forall a. Typeable a => Proxy a -> String
+typeNameP = show . typeRep
+
+-- | A Haskell value of exactly type a, coming home.
+home :: forall a. Typeable a => Arg -> Conv (IO a)
+home (AHome (Box x _)) | Just y <- cast x = Right (0, return y)
+home arg = Left (describeArg arg ++ " isn't " ++ article (typeNameP (Proxy :: Proxy a)))
+
+-- | "a Note", "an Int".
+article :: String -> String
+article t = (if take 1 t `elem` map (: []) "AEIOUaeiou" then "an " else "a ") ++ t
+
+describeArg :: Arg -> String
+describeArg a = case a of
+  ANull -> "null"
+  ABool _ -> "a bool"
+  AInt i -> "the int " ++ show i
+  ADouble d -> "the double " ++ show d
+  AString _ -> "a string"
+  ABytes _ -> "bytes"
+  AHome (Box _ i) -> article (infoType i)
+  AForeign _ -> "a foreign value"
+
 -- | A value of a type with 'Show': a box with a type name and a text.
 boxShow :: (Typeable a, Show a) => a -> Value
-boxShow x = VBox (Box x (Info (typeName x) (Just (show x)) Nothing Nothing))
+boxShow x = VBox (Box x (info (typeName x)) { infoShow = Just (show x) })
 
 -- | A value with nothing to ask but its type.
 boxOpaque :: Typeable a => a -> Value
-boxOpaque x = VBox (Box x (Info (typeName x) Nothing Nothing Nothing))
+boxOpaque x = VBox (Box x (info (typeName x)))
+
+-- | A value with a text (if any) and methods: what uglyModule gives the types it exports.
+boxWith :: Typeable a => Maybe String -> (String -> Maybe Value) -> a -> Value
+boxWith txt methods x = VBox (Box x (info (typeName x)) { infoShow = txt, infoMethods = Just methods })
 
 -- | A module: its exports as members. The list is its identity, so the same
 -- module is the same handle while one is live.
 moduleBox :: String -> [(String, Value)] -> Box
-moduleBox name entries = Box entries Info
-  { infoType = "module"
-  , infoShow = Just ("module " ++ name)
+moduleBox name entries = Box entries (info "module")
+  { infoShow = Just ("module " ++ name)
   , infoMembers = Just (Members (map fst entries) (`lookup` entries))
-  , infoElems = Nothing
   }
+
+-- | A polymorphic function, as its instantiations: a call picks the one its
+-- arguments convert to most cheaply. A tie is ambiguous, and refused.
+overloaded :: String -> [Value] -> Value
+overloaded ty candidates = VBox (Box candidates (info ty) { infoCall = Just call })
+  where
+    call args =
+      let tried = [ (infoType i, f args) | VBox (Box _ i) <- candidates, Just f <- [infoCall i] ]
+          fits = sortOn (fst . snd) [ (t, r) | (t, Right r) <- tried ]
+      in case fits of
+        [] -> Left ("no instance of " ++ ty ++ " takes these arguments:"
+                    ++ concat [ "\n  " ++ t ++ ": " ++ why | (t, Left why) <- tried ])
+        (_, best@(c, _)) : rest
+          | all ((/= c) . fst . snd) rest -> Right best
+          | otherwise -> Left ("ambiguous: these instances of " ++ ty ++ " take these arguments equally well:"
+                               ++ concat [ "\n  " ++ t | (t, (c', _)) <- fits, c' == c ])
 
 -- | Text that is valid Unicode. A Haskell 'Char' can be a lone surrogate,
 -- which UTF-8 can't encode (and Data.Text would silently replace).
 validText :: String -> Bool
 validText = all (\c -> ord c < 0xD800 || ord c > 0xDFFF)
+
+
+-- Out.
 
 -- | An integer that may not fit in an int64: a box of its digits if it doesn't.
 integral :: (Integral a, Show a, Typeable a) => a -> Value
@@ -176,7 +260,7 @@ instance ToUgly B.ByteString where
 
 -- | Lists are read-only elements. Reading element i walks i cells.
 instance {-# OVERLAPPABLE #-} ToUgly a => ToUgly [a] where
-  toUgly xs = VBox (Box xs (Info (typeName xs) (textOf xs) Nothing (Just elems)))
+  toUgly xs = VBox (Box xs (info (typeName xs)) { infoShow = textOf xs, infoElems = Just elems })
     where
       elems = Elems (length xs) at
       at i
@@ -191,7 +275,7 @@ instance {-# OVERLAPPABLE #-} ToUgly a => ToUgly [a] where
 instance ToUgly a => ToUgly (Maybe a) where
   toUgly Nothing = VNull
   toUgly m@(Just x) = case toUgly x of
-    VNull -> VBox (Box m (Info (typeName m) (textOf m) Nothing (Just (Elems 1 one))))
+    VNull -> VBox (Box m (info (typeName m)) { infoShow = textOf m, infoElems = Just (Elems 1 one) })
     v -> v
     where one i = if i == 0 then Just VNull else Nothing
   textOf Nothing = Just "Nothing"
@@ -200,19 +284,155 @@ instance ToUgly a => ToUgly (Maybe a) where
 
 -- | Tuples are read-only elements.
 instance (ToUgly a, ToUgly b) => ToUgly (a, b) where
-  toUgly p@(a, b) = VBox (Box p (Info (typeName p) (textOf p) Nothing (Just (Elems 2 at))))
+  toUgly p@(a, b) = VBox (Box p (info (typeName p)) { infoShow = textOf p, infoElems = Just (Elems 2 at) })
     where at i = lookup i [(0, toUgly a), (1, toUgly b)]
   textOf (a, b) = (\x y -> "(" ++ x ++ "," ++ y ++ ")") <$> textOf a <*> textOf b
 
 instance (ToUgly a, ToUgly b, ToUgly c) => ToUgly (a, b, c) where
-  toUgly t@(a, b, c) = VBox (Box t (Info (typeName t) (textOf t) Nothing (Just (Elems 3 at))))
+  toUgly t@(a, b, c) = VBox (Box t (info (typeName t)) { infoShow = textOf t, infoElems = Just (Elems 3 at) })
     where at i = lookup i [(0, toUgly a), (1, toUgly b), (2, toUgly c)]
   textOf (a, b, c) = (\x y z -> "(" ++ x ++ "," ++ y ++ "," ++ z ++ ")") <$> textOf a <*> textOf b <*> textOf c
 
 -- | A map with string keys: its entries are members (read-only).
 instance ToUgly v => ToUgly (M.Map String v) where
-  toUgly m = VBox (Box m (Info (typeName m) Nothing (Just members) Nothing))
+  toUgly m = VBox (Box m (info (typeName m)) { infoMembers = Just members })
     where members = Members (M.keys m) (\k -> toUgly <$> M.lookup k m)
 
 instance ToUgly Value where
   toUgly = id
+
+-- | A function is callable: arguments are matched against its parameter
+-- types, then applied. Fewer than its arity give a partial application.
+instance (Typeable a, Typeable b, FromUgly a, Result b) => ToUgly (a -> b) where
+  toUgly f = VBox (Box f (info (typeName f)) { infoCall = Just call })
+    where
+      call [] = Left "expects an argument"
+      call args = fmap (fmap ($ f)) (matchArgs args :: Conv ((a -> b) -> IO Value))
+
+-- | An action is callable with no arguments: the call runs it.
+instance ToUgly a => ToUgly (IO a) where
+  toUgly io = VBox (Box io (info (typeName io)) { infoCall = Just call })
+    where call args = fmap (fmap ($ io)) (matchArgs args :: Conv (IO a -> IO Value))
+
+
+-- Calls.
+
+-- | What a call does with its arguments, by the callee's type alone: so
+-- that matching (for overloads) never evaluates anything.
+class Typeable r => Result r where
+  matchArgs :: [Arg] -> Conv (r -> IO Value)
+
+-- | A function takes the next argument; with none left, it's a partial application.
+instance {-# OVERLAPPING #-} (Typeable a, Typeable b, FromUgly a, Result b) => Result (a -> b) where
+  matchArgs [] = Right (0, return . toUgly)
+  matchArgs (x : xs) = do
+    (c1, getA) <- fromUgly x
+    (c2, runB) <- matchArgs xs :: Conv (b -> IO Value)
+    return (c1 + c2, \f -> getA >>= runB . f)
+
+-- | An action is run when the arguments are used up.
+instance {-# OVERLAPPING #-} (Typeable a, ToUgly a) => Result (IO a) where
+  matchArgs [] = Right (0, fmap toUgly)
+  matchArgs _ = Left "too many arguments"
+
+-- | Anything else is the result, evaluated (to weak head normal form) when
+-- the arguments are used up.
+instance {-# OVERLAPPABLE #-} (Typeable r, ToUgly r) => Result r where
+  matchArgs [] = Right (0, evaluate . toUgly)
+  matchArgs _ = Left "too many arguments"
+
+
+-- In: a foreign value converts as a literal of its kind would.
+
+-- | An int, into an integer type: if it fits, at that cost.
+intoIntegral :: forall a. (Integral a, Bounded a, Typeable a) => Int -> Arg -> Conv (IO a)
+intoIntegral cost (AInt i)
+  | toInteger i >= toInteger (minBound :: a) && toInteger i <= toInteger (maxBound :: a) = Right (cost, return (fromIntegral i))
+  | otherwise = Left (show i ++ " doesn't fit in " ++ typeNameP (Proxy :: Proxy a))
+intoIntegral _ arg = home arg
+
+-- Costs: 0 for a kind's own type (int: Int, Int64; double: Double; string:
+-- String), 1 for another that holds every value (Integer, Text), 2 for a
+-- narrower one the value fits, 3 for a literal of another kind (an int as a
+-- Double), 4 for Value, which takes anything.
+instance FromUgly Int where fromUgly = intoIntegral 0
+instance FromUgly Int64 where fromUgly = intoIntegral 0
+instance FromUgly Int8 where fromUgly = intoIntegral 2
+instance FromUgly Int16 where fromUgly = intoIntegral 2
+instance FromUgly Int32 where fromUgly = intoIntegral 2
+instance FromUgly Word where fromUgly = intoIntegral 2
+instance FromUgly Word8 where fromUgly = intoIntegral 2
+instance FromUgly Word16 where fromUgly = intoIntegral 2
+instance FromUgly Word32 where fromUgly = intoIntegral 2
+instance FromUgly Word64 where fromUgly = intoIntegral 2
+
+instance FromUgly Integer where
+  fromUgly (AInt i) = Right (1, return (toInteger i))
+  fromUgly arg = home arg
+
+instance FromUgly Natural where
+  fromUgly (AInt i)
+    | i >= 0 = Right (2, return (fromIntegral i))
+    | otherwise = Left (show i ++ " isn't a Natural")
+  fromUgly arg = home arg
+
+instance FromUgly Double where
+  fromUgly (ADouble d) = Right (0, return d)
+  fromUgly (AInt i) = Right (3, return (fromIntegral i))
+  fromUgly arg = home arg
+
+instance FromUgly Float where
+  fromUgly (ADouble d) = Right (2, return (realToFrac d))
+  fromUgly (AInt i) = Right (3, return (fromIntegral i))
+  fromUgly arg = home arg
+
+instance FromUgly Bool where
+  fromUgly (ABool b) = Right (0, return b)
+  fromUgly arg = home arg
+
+instance FromUgly () where
+  fromUgly ANull = Right (0, return ())
+  fromUgly arg = home arg
+
+instance FromUgly Char where
+  fromUgly (AString t) | T.length t == 1 = Right (2, return (T.head t))
+  fromUgly arg = home arg
+
+instance {-# OVERLAPPING #-} FromUgly [Char] where
+  fromUgly (AString t) = Right (0, return (T.unpack t))
+  fromUgly arg = home arg
+
+instance FromUgly T.Text where
+  fromUgly (AString t) = Right (1, return t)
+  fromUgly arg = home arg
+
+instance FromUgly B.ByteString where
+  fromUgly (ABytes b) = Right (0, return b)
+  fromUgly arg = home arg
+
+-- | Null is Nothing; anything else that converts is Just it.
+instance FromUgly a => FromUgly (Maybe a) where
+  fromUgly ANull = Right (0, return Nothing)
+  fromUgly arg = case home arg of
+    Right r -> Right r
+    Left _ -> fmap (fmap (fmap Just)) (fromUgly arg)
+
+instance {-# OVERLAPPABLE #-} Typeable a => FromUgly [a]
+instance (Typeable a, Typeable b) => FromUgly (a, b)
+instance (Typeable a, Typeable b, Typeable c) => FromUgly (a, b, c)
+instance Typeable v => FromUgly (M.Map String v)
+-- | A function: a Haskell function coming home (foreign callables come later).
+instance (Typeable a, Typeable b) => FromUgly (a -> b)
+
+-- | Value takes anything, for a type variable with no constraint.
+instance FromUgly Value where
+  fromUgly a = case a of
+    ANull -> ok VNull
+    ABool b -> ok (VBool b)
+    AInt i -> ok (VInt i)
+    ADouble d -> ok (VDouble d)
+    AString t -> ok (VString t)
+    ABytes b -> ok (VBytes b)
+    AHome b -> ok (VBox b)
+    AForeign _ -> Left "foreign values aren't supported in Haskell yet"
+    where ok v = Right (4, return v)
