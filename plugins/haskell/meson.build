@@ -47,8 +47,10 @@ if haskell_ok
   # Interfaces are .dyn_hi, which is what ghc -dynamic looks for in a package.
   hs_sources = files('Ugly.hs', 'Ugly/Export.hs', 'Ugly/Marshal.hs', 'Ugly/Native.hs', 'Ugly/Plugin.hs',
     'Ugly/Types.hs', 'Ugly/Value.hs')
+  # binding.c is haskell.c again, in binding mode (a Haskell program as the host).
   ugly_hs = custom_target('libugly_hs.so',
-    input: ['glue.c', hs_sources],
+    input: ['glue.c', 'binding.c', hs_sources],
+    depend_files: files('haskell.c'),
     output: 'libugly_hs.so',
     command: ghc_common + ['-this-unit-id', 'ugly', '-hisuf', 'dyn_hi', '-osuf', 'dyn_o',
       '-i' + meson.current_source_dir(), '-I' + (meson.project_source_root() / 'include'),
@@ -79,11 +81,12 @@ if haskell_ok
   ugly_package = custom_target('ugly.conf',
     output: 'ugly.conf',
     command: [package_py, 'build', ghc_pkg, ugly_package_db, '@OUTPUT@', meson.project_version(),
-      meson.current_build_dir() / 'libugly_hs.so.p', meson.current_build_dir()],
+      meson.current_build_dir() / 'libugly_hs.so.p', meson.current_build_dir() + ':' + (meson.project_build_root() / 'src')],
     depends: ugly_hs,
   )
   meson.add_install_script(package_py, 'install', ghc_pkg.full_path(), meson.current_build_dir() / 'libugly_hs.so.p',
-    get_option('prefix') / get_option('libdir') / 'ugly' / 'haskell', ugly_plugin_dir, meson.project_version())
+    get_option('prefix') / get_option('libdir') / 'ugly' / 'haskell',
+    ugly_plugin_dir + ':' + (get_option('prefix') / get_option('libdir')), meson.project_version())
 
   # A module library: a custom_target's command, its input the export
   # modules (uglyModule) and the modules they need, its output <Name>.so,

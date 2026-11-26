@@ -161,6 +161,16 @@ lines of C, with no interpreter in the way: read it first.
   Python `atexit`, Perl an `END` block, Java JVMTI's VMDeath (shutdown
   hooks run on new threads). .NET's `ProcessExit` runs on another thread,
   so its teardown is an explicit `Interop.Shutdown()`.
+- **A compiled language's binding is a library the program links.**
+  Haskell's is the package `ugly` itself (`binding.c`, the plugin in
+  binding mode, inside `libugly_hs.so`), and `Ugly.withUgly` brackets the
+  program's use of it. The plugin's own library, which starts an RTS,
+  must not come along: a second runtime system in one process is as fatal
+  as a second interpreter.
+- **The host's own code runs outside your entry points.** Whatever your
+  plugin keeps as "the current runtime" for an entry (Haskell: a C
+  thread-local) needs a fallback for the host's code: the attached
+  runtime.
 
 ## Performance
 
@@ -228,6 +238,11 @@ found these, now fixed:
 - **Another Ubuntu, locally**: a failure only CI's 24.04 shows can be
   reproduced in `docker run ubuntu:24.04`, building the core and your
   plugin there.
+- **A test program Meson can't build** (a Haskell program, built by ghc
+  in a `custom_target`): Meson 0.61's `test()` takes no custom target, so
+  `env` runs it, and the memcheck setup has `--trace-children=yes` so that
+  valgrind follows the exec into it. Check first that no other test
+  execs anything under valgrind. Haskell's binding taught this.
 - **Pairwise finds what the suite can't**: two VMs' signal handlers, two
   runtimes' errors crossing. The JVM's `-Xcheck:jni` found perl resetting
   SIGFPE in `pairwise-java-perl5`.

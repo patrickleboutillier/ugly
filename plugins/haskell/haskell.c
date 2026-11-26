@@ -26,8 +26,13 @@
 
 #define BRIDGE_ABI 6     /* Ugly.Plugin.bridgeAbi */
 
+#ifndef UGLY_BINDING
 /* libugly_rts.so */
 extern int ugly_hs_start(const char *opts) ;
+#else
+/* The program's RTS (binding.c): keep the CAFs of module libraries loaded later. */
+extern void setKeepCAFs(void) ;
+#endif
 /* libugly_hs.so: Ugly.Plugin's foreign exports. */
 extern int ugly_hs_abi(void) ;
 extern void *ugly_hs_rt_new(void) ;              /* StablePtr Runtime */
@@ -56,6 +61,7 @@ extern ugly_status ugly_hs_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, c
 	ugly_handle *out) ;
 
 
+#ifndef UGLY_BINDING
 /*
  * The "rts" option: more RTS options (-N4, -M1g), each value one or more
  * words, as between +RTS and -RTS. The RTS also reads GHCRTS.
@@ -96,6 +102,28 @@ static ugly_status hs_init(ugly_ctx *ctx, const char *dir){
 	}
 	return UGLY_OK ;
 }
+#else
+/*
+ * The binding (binding.c): the RTS is the program's own, already running.
+ * It wasn't started with keep_cafs, which module libraries loaded later need
+ * (rts.c): setKeepCAFs does the same for the CAFs entered from now on.
+ */
+static ugly_status hs_init(ugly_ctx *ctx, const char *dir){
+	(void)ctx ;
+	(void)dir ;
+	setKeepCAFs() ;
+	return UGLY_OK ;
+}
+
+/* The program's own runtime: plain Haskell state, as for rt_new. */
+static ugly_status hs_rt_attach(ugly_ctx *ctx, ugly_rt *rt, void *existing, void **native){
+	(void)ctx ;
+	(void)rt ;
+	(void)existing ;
+	*native = ugly_hs_rt_new() ;
+	return UGLY_OK ;
+}
+#endif
 
 
 static ugly_status hs_rt_new(ugly_ctx *ctx, ugly_rt *rt, void **native){
@@ -376,7 +404,12 @@ static ugly_status hs_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const
 
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
+#ifndef UGLY_BINDING
 	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_ANY_THREAD,
+#else
+	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_ANY_THREAD | UGLY_CAP_ATTACH,
+	.rt_attach = hs_rt_attach,
+#endif
 	.name = "haskell",
 	.init = hs_init,
 	.rt_new = hs_rt_new,
@@ -396,12 +429,18 @@ static const ugly_plugin plugin = {
 	.delete_member = hs_delete_member,
 	.splice = ugly_hs_splice,
 	.release = ugly_hs_release,
+#ifndef UGLY_BINDING
 	.options = (const char *const []){ "rts", "path", NULL },
+#else
+	.options = (const char *const []){ "path", NULL },      /* the RTS's options are the program's */
+#endif
 	.call_opts = hs_call_opts,
 	.invoke_opts = hs_invoke_opts,
 } ;
 
 
+#ifndef UGLY_BINDING
 const ugly_plugin *ugly_plugin_haskell(void){
 	return &plugin ;
 }
+#endif

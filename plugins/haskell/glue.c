@@ -98,6 +98,17 @@ ugly_handle ugly_hs_handle(const ugly_val *v){
  */
 static _Thread_local ugly_rt *current_rt ;
 
+/*
+ * The binding's runtime (binding.c): the program's own, for its code outside
+ * any entry (its main, its threads). It's any-thread, like every Haskell
+ * runtime.
+ */
+static ugly_rt *_Atomic attached_rt ;
+
+void ugly_hs_set_attached(ugly_rt *rt){
+	attached_rt = rt ;
+}
+
 ugly_rt *ugly_hs_enter(ugly_rt *rt){
 	ugly_rt *before = current_rt ;
 	current_rt = rt ;
@@ -109,7 +120,7 @@ void ugly_hs_leave(ugly_rt *before){
 }
 
 ugly_rt *ugly_hs_current_rt(void){
-	return current_rt ;
+	return current_rt != NULL ? current_rt : attached_rt ;
 }
 
 /* This thread's ctx: the caller's, inside an entry; otherwise one of the thread's own. */

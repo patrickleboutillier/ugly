@@ -22,6 +22,8 @@ module Ugly.Marshal
     -- * Calling out
   , foreignCall, foreignInvoke, foreignGet, foreignIndex, foreignLength, foreignNames, foreignType
   , throwConv
+    -- * The binding
+  , attach, detach, moduleIn, evalIn
   ) where
 
 import Control.DeepSeq (force)
@@ -456,3 +458,46 @@ foreignType f = do
 -- | A refused conversion, thrown (Control.Exception's TypeError).
 throwConv :: String -> IO a
 throwConv = throwIO . TypeError
+
+
+
+-- The binding: a Haskell program as the host.
+
+-- | Registers the plugin and attaches to the program's runtime (once;
+-- nested uses count). A failure is thrown.
+attach :: IO ()
+attach = do
+  st <- c_binding_attach
+  when (st /= ok) $ do
+    why <- c_binding_error >>= peekUtf8
+    throwIO (ErrorCall ("ugly: can't attach: " ++ why))
+
+detach :: IO ()
+detach = c_binding_detach
+
+-- | This thread's runtime of a language (ugly_rt_get: shared, made on first use).
+runtimeOf :: Ptr Ctx -> String -> IO (Ptr Rt)
+runtimeOf ctx lang = withUtf8 lang $ \l -> alloca $ \rp -> do
+  st <- c_ugly_rt_get ctx l rp
+  if st /= ok then failed ctx st else peek rp
+
+-- | A module of a language, by name: ugly.module(lang, name).
+moduleIn :: String -> String -> IO Value
+moduleIn lang name = do
+  ctx <- currentCtx
+  rt <- runtimeOf ctx lang
+  h <- withUtf8 name $ \n -> alloca $ \hp -> do
+    st <- c_ugly_rt_import ctx rt n hp
+    if st /= ok then failed ctx st else peek hp
+  handleValue ctx h
+
+-- | Code in a language: ugly.eval(lang, code).
+evalIn :: String -> String -> IO Value
+evalIn lang code = do
+  ctx <- currentCtx
+  rt <- runtimeOf ctx lang
+  size <- fromIntegral <$> c_val_size
+  BU.unsafeUseAsCStringLen (TE.encodeUtf8 (T.pack code)) $ \(p, n) -> allocaBytes size $ \out -> do
+    c_set_null out
+    st <- c_ugly_rt_eval ctx rt p (fromIntegral n) kAny out
+    if st /= ok then failed ctx st else readResult ctx out

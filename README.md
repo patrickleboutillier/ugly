@@ -144,6 +144,16 @@ md.noteMap(lambda n: md.above(md.Perf5th, n), md.majorScale(md.D))   # a Python 
 show(md.read("Am7", ugly.opts(hint="Chord")))     # 'Am7': a hint is a type application
 ```
 
+The other way round, a Haskell program uses the other languages with
+`Ugly.withUgly` ([tests/haskell/TestBinding.hs](tests/haskell/TestBinding.hs)):
+
+```haskell
+main = Ugly.withUgly $ do
+  json <- Ugly.module_ "python" "json"
+  xs <- Ugly.invoke json "loads" [Ugly.toValue "[1, 2, 3]"] >>= Ugly.fromValue
+  print (sum xs :: Int)                             -- 6: a Python list as a [Int]
+```
+
 The plan, and how Haskell maps onto the contract, is
 [doc/haskell-bridge.md](doc/haskell-bridge.md).
 
@@ -321,7 +331,7 @@ others, and its pitfalls.
 | Perl 5 | [doc/languages/perl5.md](doc/languages/perl5.md) | yes: `perl` |
 | Java (JDK 21+) | [doc/languages/java.md](doc/languages/java.md) | yes: `java` |
 | C# / .NET 10 | [doc/languages/dotnet.md](doc/languages/dotnet.md) | yes: any .NET program |
-| Haskell (GHC 8.8+) | [doc/haskell-bridge.md](doc/haskell-bridge.md) (the plan, until its guide) | not yet |
+| Haskell (GHC 8.8+) | [doc/haskell-bridge.md](doc/haskell-bridge.md) (the plan, until its guide) | yes: a program built with `-package ugly` (`Ugly.withUgly`) |
 
 ## Concepts
 
@@ -418,8 +428,8 @@ laptop (i7-1365U):
 
 Lua (5.4 or 5.3), CPython, JavaScript (QuickJS), Perl 5, Java, C# and
 Haskell pass the whole conformance suite, and every pair of them works in
-one process. Each one but Haskell (whose binding is next) can also be the
-host: plain `lua`, `python3`, `qjs`, `perl`, `java`
+one process. Each one can also be the host (Haskell: a program built
+against the package `ugly`): plain `lua`, `python3`, `qjs`, `perl`, `java`
 and .NET programs use the other languages, and so does HAProxy's built-in Lua, on
 several threads. Everything [doc/contract.md](doc/contract.md) specifies is
 built, and the current release is on the Releases page.

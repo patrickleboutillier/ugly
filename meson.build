@@ -74,7 +74,10 @@ subdir('examples')
 # helgrind.
 valgrind = find_program('valgrind', required: false)
 if valgrind.found()
+  # --trace-children: a test whose program ghc builds runs through env
+  # (Meson 0.61's test() takes no custom target), and is checked past the exec.
   memcheck = [valgrind,
+    '--trace-children=yes',
     '--error-exitcode=99',
     '--leak-check=full',
     '--errors-for-leak-kinds=definite,indirect,possible',

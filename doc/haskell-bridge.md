@@ -3,8 +3,8 @@
 Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
 export tables and calls, module libraries, foreign values in Haskell,
 hint and want for overloads, the conformance suite (all 9 groups, and
-pairwise with every other language), and music-diatonic as an example are
-done). Once it works,
+pairwise with every other language), music-diatonic as an example, and
+the binding are done; the language guide is next). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -475,6 +475,7 @@ code), and tested by `haskell-foreign` with values whose home is the C host
 
 ### The binding: a Haskell program as host
 
+Built, and tested by `binding-haskell` (`tests/haskell/TestBinding.hs`).
 The natural Haskell user of UGLY is a Haskell program that wants Python's
 or Java's libraries. The binding is the `ugly` package itself, linked into
 that program:
@@ -484,17 +485,41 @@ import qualified Ugly
 
 main = Ugly.withUgly $ do
   json <- Ugly.module_ "python" "json"
-  s <- Ugly.invoke json "dumps" [Ugly.toValue [1, 2, 3 :: Int]]
-  putStrLn =<< Ugly.fromValue s
+  xs <- Ugly.invoke json "loads" [Ugly.toValue "[1, 2, 3]"] >>= Ugly.fromValue
+  print (sum xs :: Int)                     -- a Python list, as a [Int]
+  twice <- Ugly.eval "python" "lambda f, x: f(f(x))"
+  print =<< (Ugly.fromValue =<< Ugly.callValue twice
+    [Ugly.toValue ((+ 1) :: Int -> Int), Ugly.toValue (40 :: Int)] :: IO Int)   -- 42: Python calls back
 ```
 
-It registers the plugin (`ugly_lang_register`) and attaches to the
-program's own RTS (`UGLY_CAP_ATTACH`). Haskell values passed to Python are
-then boxes in that runtime, so Python can call back into the program.
-The program's own export modules are found in the process (linked with
-`-rdynamic`, so their root symbols are visible), with no library. The
-program's RTS wasn't started with `keep_cafs`, so attaching must call
-`setKeepCAFs()` before any module library loads.
+```
+ghc -dynamic -threaded -package-db <libdir>/ugly/haskell/package.db -package ugly Main.hs
+```
+
+- **`withUgly`** registers the plugin (`ugly_lang_register`: no
+  `ugly_haskell.so`, whose `libugly_rts.so` would start a second RTS) and
+  attaches to the program's own RTS (`UGLY_CAP_ATTACH`), then detaches at
+  the end; nested uses count. The vtable is `haskell.c` again, in binding
+  mode (`binding.c`, compiled by ghc into `libugly_hs.so`): its `init`
+  starts no RTS, and calls `setKeepCAFs()`, since the program's RTS wasn't
+  started with `keep_cafs` and module libraries may load later.
+- **`module_ lang name`** is `ugly.module` (a `Foreign`), **`eval lang
+  code`** is `ugly.eval`; then the operations on foreign values (`call`,
+  `invoke`, `get`, `callValue`...) and `toValue`/`fromValue`. Other
+  languages start on first use, on the calling thread: Lua's runtime is
+  then bound to it, Python's isn't.
+- **The current runtime outside any entry** (the program's `main`, its
+  threads) is the attached one (`glue.c`), so the program's values cross
+  as boxes in it, and the other languages can call them back.
+- **The program's own export modules** (`uglyModule` in the program) are
+  found in the process, with no library, when it's linked with `-rdynamic`:
+  Python's `ugly.module('haskell', 'TestBinding')` uses the test's own.
+- **A Haskell list passed to Python is a proxy**, not a Python list:
+  `json.dumps` refuses it, as it would any foreign object. A Python list
+  passed back converts to a Haskell list (`FromUgly [a]`).
+- The package links `libugly` too (`extra-libraries: ugly_hs ugly`): the
+  program calls the core. It must be built `-dynamic` (the package is a
+  shared library only) and `-threaded`.
 
 ## Later
 
@@ -542,7 +567,10 @@ program's RTS wasn't started with `keep_cafs`, so attaching must call
    own export list can hide what its docs describe (`findChord` is
    commented out); a foreign list as a `[Note]` needed `FromUgly [a]` for
    foreign sequences.
-7. **The binding**, then the docs.
+7. **The binding** (done: `binding.c`, `Ugly.withUgly`, test
+   `binding-haskell`), then the docs: the language guide
+   (`doc/languages/haskell.md`), Haskell's column in contract §10, and a
+   section of the plugin guide.
 
 ## Decided (2026-11-26)
 

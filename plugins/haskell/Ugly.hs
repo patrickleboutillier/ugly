@@ -1,5 +1,6 @@
--- | Foreign values, from Haskell: what an export takes as a 'Foreign' (or
--- a 'Value' holding one), and what operations on it return.
+-- | UGLY from Haskell: a Haskell program as the host ('withUgly'), and
+-- foreign values, what an export takes as a 'Foreign' (or a 'Value'
+-- holding one), and what operations on it return.
 --
 -- > describe :: Foreign -> IO String
 -- > describe obj = do
@@ -17,8 +18,10 @@
 -- Values crossing back to the caller follow the same rules as an export's
 -- arguments and results: 'toValue' (ToUgly) and 'fromValue' (FromUgly).
 module Ugly
-  ( -- * Values
-    Value (..), Foreign, ToUgly (..), FromUgly, toValue, fromValue
+  ( -- * A Haskell program as the host
+    withUgly, module_, eval
+    -- * Values
+  , Value (..), Foreign, ToUgly (..), FromUgly, toValue, fromValue
     -- * Operations on a foreign value
   , call, invoke, get, index, size, members, typeOf
     -- * Any callable value, Haskell's own or foreign
@@ -28,8 +31,39 @@ module Ugly
   , UglyException, uglyToException, uglyFromException, exceptionValue, rethrow
   ) where
 
+import Control.Exception (bracket_, throwIO, ErrorCall (..))
+
 import Ugly.Marshal
 import Ugly.Value
+
+-- | Runs a program's code with UGLY: registers the plugin, attaches to the
+-- program's own runtime, and detaches at the end (nested uses are fine).
+-- The program is built against the package 'ugly', dynamically, with the
+-- threaded RTS:
+--
+-- > ghc -dynamic -threaded -package-db <libdir>/ugly/haskell/package.db -package ugly Main.hs
+--
+-- > main = Ugly.withUgly $ do
+-- >   json <- Ugly.module_ "python" "json"
+-- >   s <- Ugly.invoke json "dumps" [Ugly.toValue [1, 2, 3 :: Int]]
+-- >   putStrLn =<< Ugly.fromValue s
+--
+-- Other languages start on first use, on the calling thread (a runtime
+-- bound to a thread, Lua's, must then be used from that one).
+withUgly :: IO a -> IO a
+withUgly = bracket_ attach detach
+
+-- | A module of another language: ugly.module(lang, name).
+module_ :: String -> String -> IO Foreign
+module_ lang name = do
+  v <- moduleIn lang name
+  case v of
+    VForeign f -> return f
+    _ -> throwIO (ErrorCall ("ugly: " ++ lang ++ " module " ++ name ++ " isn't a foreign value"))
+
+-- | Code in another language, evaluated: ugly.eval(lang, code).
+eval :: String -> String -> IO Value
+eval = evalIn
 
 toValue :: ToUgly a => a -> Value
 toValue = toUgly
