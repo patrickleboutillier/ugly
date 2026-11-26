@@ -340,8 +340,9 @@ Sharing one process is the point, and it has a price.
   call: the caller waits, and Lua can't yield across it. That suits quick
   work (lookups, scoring, validation, reusing parsing or policy code). Code
   that does I/O belongs behind the host's asynchronous mechanisms, or out
-  of process. With several threads, the GIL serializes the Python work, and
-  in HAProxy's `lua-load` mode every thread waits for the one Lua state.
+  of process. With several threads, the GIL serializes the Python work (and
+  makes each contended call cost microseconds: see Performance), and in
+  HAProxy's `lua-load` mode every thread waits for the one Lua state.
 - **Cycles across runtimes leak.** A Perl object holding a Lua proxy whose
   table holds that Perl object is invisible to both collectors (contract
   §3). A single VM such as GraalVM collects it; UGLY doesn't.
@@ -352,6 +353,21 @@ If you need isolation, a sandbox or untrusted code, the Wasm Component
 Model or an out-of-process bridge (gRPC, HAProxy's SPOE) is the better
 fit; if you need cross-language inlining in hot loops, GraalVM is. The
 [design essay](doc/design-essay.md) compares them.
+
+## Performance
+
+[doc/benchmarks.md](doc/benchmarks.md) has the numbers, from
+`meson test -C build --benchmark`, and how to read them. In short, on a
+laptop (i7-1365U):
+
+- A call from C into Lua, Python or JS costs 60 to 120 ns; into Perl or
+  .NET about 150 ns; into Java about 600 ns. Between two languages, 100 to
+  500 ns, and up to 1 µs into Java.
+- Calls into separate runtimes scale with threads: 68 million calls per
+  second on 6 threads into C callbacks, 38 million into a Lua runtime per
+  thread.
+- Python doesn't: every call takes the GIL, and several threads calling it
+  at once make each call cost microseconds.
 
 ## Layout
 
@@ -369,7 +385,7 @@ fit; if you need cross-language inlining in hot loops, GraalVM is. The
 | `plugins/dotnet/` | C# and .NET, on the CLR through its hosting API (`hostfxr`). One CLR per process; types are imported by full name from loaded assemblies or the module path, overloads are chosen as in Java, and keyword arguments bind to parameters by name. Most of it is C# (`Ugly.dll`), which calls the core through P/Invoke; `Ugly.Foreign` is a `DynamicObject`. `Ugly.dll` is also the binding: a .NET program that references it uses the other languages through `Ugly.Interop`. |
 | `tests/` | The conformance suite: the contract, as tests. Each plugin's fixtures are in `tests/<lang>/`. |
 | `examples/` | Example programs, run as tests: Lua using Python, a C host, and HAProxy asking Python for a decision on each request (`haproxy/`). |
-| `doc/` | The contract, the design essay, and a guide per language (`doc/languages/`). |
+| `doc/` | The contract, the design essay, a guide per language (`doc/languages/`), and the benchmarks. |
 
 ## Status
 

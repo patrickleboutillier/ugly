@@ -537,6 +537,8 @@ language, in `tests/<lang>/` (the mock's are built in). v1's
   gives a `point` with members `x`, `y` and a method `norm2()`.
 - `inits()` (optional) counts how often the plugin's process-wide init has
   run. The restart test uses it if it exists.
+- `bench(f, n)` calls `f(i)` n times, and `bench_self(n)` calls the
+  module's own `echo(i)` n times (for `tests/bench.c`, not the suite).
 
 Type names are whatever `describe` reports, in the language's own terms.
 Lua uses each metatable's `__name`, so the fixtures set them.

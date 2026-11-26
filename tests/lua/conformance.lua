@@ -49,6 +49,18 @@ function M.make_counter()
 	return tracked({ count = 0, items = tracked({}, "list") }, "counter", Counter)
 end
 
+-- Benchmarks (tests/bench.c): f(i) n times, and our own echo n times.
+function M.bench(f, n)
+    for i = 1, n do f(i) end
+    return n
+end
+
+function M.bench_self(n)
+    local echo = M.echo
+    for i = 1, n do echo(i) end
+    return n
+end
+
 function M.apply(f, x)
 	return f(x)
 end

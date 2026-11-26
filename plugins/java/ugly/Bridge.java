@@ -18,6 +18,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The Java side of the plugin: the handle protocol over reflection. The C
@@ -262,20 +263,70 @@ public final class Bridge {
 	public static Object newInstance(Object cls, Object[] args) throws Throwable {
 		if (! (cls instanceof Class)) throw new NotCapable("not a class");
 		Class<?> c = (Class<?>)cls;
-		List<Executable> ctors = new ArrayList<>(List.of(c.getConstructors()));
-		if (ctors.isEmpty()) throw new NotCapable(c.getName() + " has no public constructor");
-		Executable best = choose(ctors, args, c.getSimpleName());
-		Object[] a = convert(best.getParameterTypes(), args);
-		return unwrap(() -> ((Constructor<?>)best).newInstance(a));
+		Overloads ctors = constructors.computeIfAbsent(c, k -> new Overloads(List.of(k.getConstructors())));
+		if (ctors.methods.length == 0) throw new NotCapable(c.getName() + " has no public constructor");
+		int best = choose(ctors, args, c.getSimpleName());
+		Object[] a = convert(ctors.params[best], args);
+		Constructor<?> ctor = (Constructor<?>)ctors.methods[best];
+		return unwrap(() -> ctor.newInstance(a));
 	}
 
 	private static Object invokeOn(Class<?> c, Object target, String name, Object[] args) throws Throwable {
-		List<Executable> cands = new ArrayList<>(methods(c, name, target == null));
-		if (cands.isEmpty()) throw new NotFound(name);
-		Executable best = choose(cands, args, name);
-		Object[] a = convert(best.getParameterTypes(), args);
-		Method m = accessible((Method)best);
+		Overloads cands = methodCache.computeIfAbsent(new Key(c, name, target == null), k -> {
+			List<Executable> ms = new ArrayList<>();
+			for (Method m : methods(k.cls(), k.name(), k.isStatic())) ms.add(accessible(m));
+			return new Overloads(ms);
+		});
+		if (cands.methods.length == 0) throw new NotFound(name);
+		int best = choose(cands, args, name);
+		Object[] a = convert(cands.params[best], args);
+		Method m = (Method)cands.methods[best];
 		return unwrap(() -> m.invoke(target, a));
+	}
+
+	/*
+	 * Resolution is cached: the candidates of each (class, name, static),
+	 * with their parameter types, and, for calls of up to 4 arguments, the
+	 * overload chosen for each signature: the arguments' classes, and for a
+	 * Long which narrower types it fits, for a String whether it could be a
+	 * char (what score() looks at besides classes).
+	 */
+	static final class Overloads {
+		final Executable[] methods;
+		final Class<?>[][] params;
+		final ConcurrentHashMap<Sig, Integer> chosen = new ConcurrentHashMap<>();
+		Overloads(List<? extends Executable> ms){
+			methods = ms.toArray(new Executable[0]);
+			params = new Class<?>[methods.length][];
+			for (int i = 0 ; i < methods.length ; i++) params[i] = methods[i].getParameterTypes();
+		}
+	}
+
+	record Key(Class<?> cls, String name, boolean isStatic) { }
+	record Sig(int n, Class<?> c0, int e0, Class<?> c1, int e1, Class<?> c2, int e2, Class<?> c3, int e3) { }
+
+	private static final ConcurrentHashMap<Key, Overloads> methodCache = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<Class<?>, Overloads> constructors = new ConcurrentHashMap<>();
+
+	private static Class<?> sigClass(Object a){ return (a == null ? null : a.getClass()); }
+
+	private static int sigExtra(Object a){
+		if (a instanceof Long){
+			long v = (Long)a;
+			return (fits(v, Integer.class) ? 1 : 0) | (fits(v, Short.class) ? 2 : 0) | (fits(v, Byte.class) ? 4 : 0);
+		}
+		if (a instanceof String) return (((String)a).length() == 1 ? 1 : 0);
+		return 0;
+	}
+
+	private static Sig sigOf(Object[] args){
+		int n = args.length;
+		if (n > 4) return null;
+		return new Sig(n,
+			n > 0 ? sigClass(args[0]) : null, n > 0 ? sigExtra(args[0]) : 0,
+			n > 1 ? sigClass(args[1]) : null, n > 1 ? sigExtra(args[1]) : 0,
+			n > 2 ? sigClass(args[2]) : null, n > 2 ? sigExtra(args[2]) : 0,
+			n > 3 ? sigClass(args[3]) : null, n > 3 ? sigExtra(args[3]) : 0);
 	}
 
 	/* ---------------------------------------------------------------- */
@@ -296,35 +347,40 @@ public final class Bridge {
 		if (h == null) HINT.remove(); else HINT.set(h.replace(" ", ""));
 	}
 
-	private static String signature(Executable e){
+	private static String signature(Class<?>[] ps){
 		StringBuilder b = new StringBuilder();
-		for (Class<?> p : e.getParameterTypes()){
+		for (Class<?> p : ps){
 			if (b.length() > 0) b.append(',');
 			b.append(p.getName());
 		}
 		return b.toString();
 	}
 
-	private static Executable choose(List<Executable> cands, Object[] args, String what){
+	/** The index of the overload to call. */
+	private static int choose(Overloads o, Object[] args, String what){
 		String hint = HINT.get();
 		HINT.remove();
 		if (hint != null){
-			for (Executable e : cands){
-				if (signature(e).equals(hint)){
-					Class<?>[] ps = e.getParameterTypes();
+			for (int j = 0 ; j < o.methods.length ; j++){
+				Class<?>[] ps = o.params[j];
+				if (signature(ps).equals(hint)){
 					if (ps.length != args.length) throw new TypeMismatch(what + "(" + hint + ") takes " + ps.length + " argument(s)");
 					for (int i = 0 ; i < ps.length ; i++){
 						if (score(args[i], ps[i]) == NO) throw new TypeMismatch("argument " + (i + 1) + " doesn't fit " + what + "(" + hint + ")");
 					}
-					return e;
+					return j;
 				}
 			}
 			throw new NotFound("no overload " + what + "(" + hint + ")");
 		}
-		Executable best = null;
-		int bestScore = NO, ties = 0;
-		for (Executable e : cands){
-			Class<?>[] ps = e.getParameterTypes();
+		Sig sig = sigOf(args);
+		if (sig != null){
+			Integer known = o.chosen.get(sig);
+			if (known != null) return known;
+		}
+		int best = -1, bestScore = NO, ties = 0;
+		for (int j = 0 ; j < o.methods.length ; j++){
+			Class<?>[] ps = o.params[j];
 			if (ps.length != args.length) continue;
 			int s = 0;
 			for (int i = 0 ; (i < ps.length)&&(s != NO) ; i++){
@@ -332,11 +388,12 @@ public final class Bridge {
 				s = (k == NO ? NO : s + k);
 			}
 			if (s == NO) continue;
-			if (s < bestScore){ best = e ; bestScore = s ; ties = 0 ; }
+			if (s < bestScore){ best = j ; bestScore = s ; ties = 0 ; }
 			else if (s == bestScore){ ties++ ; }
 		}
-		if (best == null) throw new TypeMismatch("no overload of " + what + " takes these " + args.length + " argument(s)");
+		if (best < 0) throw new TypeMismatch("no overload of " + what + " takes these " + args.length + " argument(s)");
 		if (ties > 0) throw new TypeMismatch("ambiguous call to " + what + ": " + (ties + 1) + " overloads fit equally well");
+		if (sig != null) o.chosen.putIfAbsent(sig, best);
 		return best;
 	}
 

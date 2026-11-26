@@ -78,6 +78,14 @@ foreach a : test_plugins
   endforeach
 endforeach
 
+# Benchmarks (meson test -C build --benchmark --verbose): every language
+# built, in one process, printing Markdown tables (tests/bench.c).
+# Without -Xcheck:jni, which slows every JNI call.
+bench_env = environment(test_env_vars)
+bench_env.set('UGLY_JAVA_CHECK', '')
+benchmark('bench', executable('bench', 'bench.c', dependencies: [ugly_dep, libm, dependency('threads')]),
+  env: bench_env, timeout: 1800, depends: plugins)
+
 # Bindings: plain python3 and lua processes using each other through "ugly"
 # (attach mode, no C host). Each runs a TAP script from tests/<lang>/.
 if binding_dirs.has_key('python') and binding_dirs.has_key('lua')

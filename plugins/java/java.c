@@ -1397,7 +1397,8 @@ static ugly_status jv_init(ugly_ctx *ctx, const char *dir){
 		options[nopt++].optionString = "-Dugly.embedded=true" ;     /* ugly.Foreign: natives are registered */
 		options[nopt].optionString = "vfprintf" ;
 		options[nopt++].extraInfo = (void *)vm_print ;
-		if (getenv("UGLY_JAVA_CHECK") != NULL){
+		const char *check = getenv("UGLY_JAVA_CHECK") ;     /* set and not empty */
+		if ((check != NULL)&&(*check != '\0')){
 			options[nopt++].optionString = "-Xcheck:jni" ;
 		}
 		for (i = 0 ; i < nuser ; i++){

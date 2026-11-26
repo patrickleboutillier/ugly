@@ -55,6 +55,18 @@ public static class conformance {
         _ => x.GetType().Name,
     };
 
+    // Benchmarks (tests/bench.c): f(i) n times, and our own echo n times (keeping the results, so the JIT can't drop the calls).
+    public static long bench(Func<object?, object?> f, long n) {
+        long kept = 0;
+        for (long i = 0; i < n; i++) if (f(i) != null) kept++;
+        return kept;
+    }
+    public static long bench_self(long n) {
+        long kept = 0;
+        for (long i = 0; i < n; i++) if (echo(i) != null) kept++;
+        return kept;
+    }
+
     public static object make_counter() => new counter();
     public static object? apply(Func<object?, object?> f, object? x) => f(x);
     public static object? call_twice(Func<object?, object?> f, object? x) => f(f(x));
