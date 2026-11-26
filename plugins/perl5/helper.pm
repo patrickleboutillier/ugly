@@ -7,8 +7,14 @@
 # Ugly::Proxy: a value from another language, holding its handle.
 # ------------------------------------------------------------------
 package Ugly::Proxy ;
+
+# The code ref &{$proxy} gives, per handle: made once (a new closure on
+# every call cost more than the call), over a second proxy that holds its own
+# reference, so it neither keeps $proxy alive nor dies with it.
+my %code ;
+
 use overload
-	'&{}' => sub { my $s = shift ; sub { Ugly::Proxy::_call($s, @_) } },
+	'&{}' => sub { my $s = shift ; $code{$$s} //= do { my $held = Ugly::Proxy::_held($s) ; sub { Ugly::Proxy::_call($held, @_) } } },
 	'@{}' => sub { my @a ; tie @a, 'Ugly::Proxy::Array', $_[0] ; \@a },
 	'%{}' => sub { my %h ; tie %h, 'Ugly::Proxy::Hash', $_[0] ; \%h },
 	'==' => sub { Ugly::Proxy::_same($_[0], $_[1]) },
@@ -20,7 +26,7 @@ use overload
 our $AUTOLOAD ;
 sub AUTOLOAD { my $s = shift ; (my $m = $AUTOLOAD) =~ s/.*:// ; Ugly::Proxy::_invoke($s, $m, @_) }
 sub can { my ($s, $m) = @_ ; ref($s) ? sub { Ugly::Proxy::_invoke(shift, $m, @_) } : UNIVERSAL::can($s, $m) }
-sub DESTROY { Ugly::Proxy::_release($_[0]) }
+sub DESTROY { delete $code{${$_[0]}} ; Ugly::Proxy::_release($_[0]) }
 
 # %$proxy: the members (fields, methods, dict/hash/table entries).
 package Ugly::Proxy::Hash ;

@@ -27,6 +27,9 @@ sub kind_of {
 }
 
 sub make_counter { return counter->new() }
+# Benchmarks (tests/bench.c): f(i) n times, and our own echo n times.
+sub bench { my ($f, $n) = @_ ; $f->($_) for 1 .. $n ; return $n }
+sub bench_self { my ($n) = @_ ; echo($_) for 1 .. $n ; return $n }
 sub apply { my ($f, $x) = @_ ; return $f->($x) }
 sub call_twice { my ($f, $x) = @_ ; return $f->($f->($x)) }
 sub raise_error { die ConformanceError->new($_[0]) }

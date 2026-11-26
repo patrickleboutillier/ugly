@@ -263,7 +263,7 @@ ugly_status ugly_rt_new(ugly_ctx *ctx, ugly_lang *lang, ugly_rt **out){
 	if (st != UGLY_OK){
 		return st ;
 	}
-	if ((lang == NULL)||(out == NULL)||(lang->loads <= 0)){
+	if ((lang == NULL)||(out == NULL)||(__atomic_load_n(&lang->loads, __ATOMIC_RELAXED) <= 0)){
 		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_rt_new: invalid language or out") ;
 	}
 	*out = NULL ;
@@ -280,7 +280,7 @@ ugly_status ugly_rt_attach(ugly_ctx *ctx, ugly_lang *lang, void *native, ugly_rt
 	if (st != UGLY_OK){
 		return st ;
 	}
-	if ((lang == NULL)||(out == NULL)||(lang->loads <= 0)){
+	if ((lang == NULL)||(out == NULL)||(__atomic_load_n(&lang->loads, __ATOMIC_RELAXED) <= 0)){
 		return ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_rt_attach: invalid language or out") ;
 	}
 	*out = NULL ;

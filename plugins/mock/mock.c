@@ -435,6 +435,42 @@ static ugly_status f_call_twice(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mv
 }
 
 
+/* Benchmarks (tests/bench.c): bench(f, n) calls f(i) n times; bench_self(n) calls echo(i) n times. */
+static ugly_status f_bench(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	ARGS(2) ;
+	if (a[1].kind != UGLY_INT){
+		return raise(ctx, m, "TypeError", "bench wants a count") ;
+	}
+	int64_t i ;
+	for (i = 0 ; i < a[1].as.i ; i++){
+		mval x = mint(i), r ;
+		ugly_status st = mock_call(ctx, m, &a[0], &x, 1, &r) ;
+		if (st != UGLY_OK){
+			return st ;
+		}
+		mval_free(&r) ;
+	}
+	*ret = mint(a[1].as.i) ;
+	return UGLY_OK ;
+}
+
+
+static ugly_status f_bench_self(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	ARGS(1) ;
+	if (a[0].kind != UGLY_INT){
+		return raise(ctx, m, "TypeError", "bench_self wants a count") ;
+	}
+	int64_t i ;
+	for (i = 0 ; i < a[0].as.i ; i++){
+		mval x = mint(i), r ;
+		f_echo(ctx, m, &x, 1, &r) ;
+		mval_free(&r) ;
+	}
+	*ret = mint(a[0].as.i) ;
+	return UGLY_OK ;
+}
+
+
 static ugly_status f_raise_error(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
 	(void)ret ;
 	ARGS(1) ;
@@ -559,6 +595,8 @@ static const struct { const char *name ; mock_fn fn ; } functions[] = {
 	{ "make_counter", f_make_counter },
 	{ "apply", f_apply },
 	{ "call_twice", f_call_twice },
+	{ "bench", f_bench },
+	{ "bench_self", f_bench_self },
 	{ "raise_error", f_raise_error },
 	{ "catch_and_return", f_catch_and_return },
 	{ "rethrow", f_rethrow },
