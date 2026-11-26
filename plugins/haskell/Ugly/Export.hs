@@ -82,7 +82,7 @@ typeInstances _ t = do
 -- usable instantiation.
 entry :: [Name] -> (Name, Info) -> Q [Exp]
 entry listed (n, info) = do
-  ty <- case info of
+  ty <- unlinear <$> case info of
     VarI _ t _ -> return t
     ClassOpI _ t _ -> return t
     DataConI _ t _ -> return t
@@ -124,6 +124,18 @@ type TyVarBndr' = TyVarBndr
 tvName (PlainTV v) = v
 tvName (KindedTV v _) = v
 #endif
+
+-- | Linear arrows as ordinary ones: since GHC 9.0, TH gives a data
+-- constructor's type with them (Double %1 -> Shape), and a constructor can
+-- always be used at the ordinary type.
+unlinear :: Type -> Type
+unlinear t = case t of
+#if MIN_VERSION_template_haskell(2,16,0)
+  AppT (AppT MulArrowT _) a -> AppT ArrowT (unlinear a)
+#endif
+  AppT a b -> AppT (unlinear a) (unlinear b)
+  ForallT bs c b -> ForallT bs (map unlinear c) (unlinear b)
+  _ -> t
 
 -- | Whether v is applied to something (f a): a variable of a higher kind.
 appliedIn :: Name -> Type -> Bool
