@@ -18,6 +18,7 @@ module Ugly.Plugin () where
 
 import Control.DeepSeq (force)
 import Control.Exception
+import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
 import Data.Int
 import Data.IORef
@@ -44,7 +45,7 @@ import Ugly.Value
 
 -- | haskell.c's BRIDGE_ABI: the two sides must come from the same build.
 bridgeAbi :: CInt
-bridgeAbi = 2
+bridgeAbi = 3
 
 -- | A runtime. Its loaded modules will go here.
 newtype Runtime = Runtime (IORef ())
@@ -80,7 +81,7 @@ raise :: Ptr Ctx -> Ptr Rt -> SomeException -> IO Status
 raise ctx rt e = do
   let ty = case e of SomeException inner -> show (typeOf inner)
   msg <- evaluate (force (displayException e)) `catch` \(_ :: SomeException) -> return ty
-  (sp, key) <- newRef (Box e (Info ty (Just msg) Nothing Nothing))
+  (sp, key) <- newRef (Box e (info ty) { infoShow = Just msg })
   withUtf8 ty $ \t -> withUtf8 msg $ \m -> c_ugly_raise_native ctx rt t m sp key
 
 -- | A new ref for a box, and its identity key: the index of its value's
@@ -128,11 +129,11 @@ put ctx rt want v out = case v of
   VString t | want `elem` [kAny, kString] -> setText ctx out t
   VBytes b | want `elem` [kAny, kBytes] -> BU.unsafeUseAsCStringLen b $ \(p, n) ->
     c_ugly_val_set_bytes ctx out (castPtr p) (fromIntegral n)
-  VBox b@(Box _ info)
+  VBox b@(Box _ inf)
     | want `elem` [kAny, kHandle] -> alloca $ \hp -> do
         st <- export ctx rt b hp
         if st == ok then peek hp >>= c_set_handle out >> return ok else return st
-    | want == kString, Just s <- infoShow info, validText s -> setText ctx out (T.pack s)
+    | want == kString, Just s <- infoShow inf, validText s -> setText ctx out (T.pack s)
   _ -> failWith ctx rt errType "TypeError" ("can't convert " ++ what v ++ " to " ++ kindName want)
 
 what :: Value -> String
@@ -143,7 +144,7 @@ what v = case v of
   VDouble _ -> "a Double"
   VString _ -> "a String"
   VBytes _ -> "a ByteString"
-  VBox (Box _ info) -> "a value of type " ++ infoType info
+  VBox (Box _ inf) -> "a value of type " ++ infoType inf
 
 kindName :: Kind -> String
 kindName k = maybe "that kind" id (lookup k
@@ -171,25 +172,25 @@ hsImport ctx rt cname out = guarded ctx rt $ do
 
 hsDescribe :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Word32 -> Ptr Val -> IO Status
 hsDescribe ctx rt ref traits typeName' = guarded ctx rt $ do
-  Box _ info <- deref ref
-  let has f bit = maybe 0 (const bit) (f info)
-  poke traits (has infoMembers traitMembers + has infoElems traitElements)
-  setText ctx typeName' (T.pack (infoType info))
+  Box _ i <- deref ref
+  let has f bit = maybe 0 (const bit) (f i)
+  poke traits (has infoMembers traitMembers + has infoElems traitElements + has infoCall traitCallable)
+  setText ctx typeName' (T.pack (infoType i))
 
 -- | A box's members, or a refusal.
 withMembers :: Ptr Ctx -> Ptr Rt -> Ptr () -> (Members -> IO Status) -> IO Status
 withMembers ctx rt ref k = do
-  Box _ info <- deref ref
-  case infoMembers info of
+  Box _ inf <- deref ref
+  case infoMembers inf of
     Just ms -> k ms
-    Nothing -> failWith ctx rt errNotCapable "TypeError" ("a value of type " ++ infoType info ++ " has no members")
+    Nothing -> failWith ctx rt errNotCapable "TypeError" ("a value of type " ++ infoType inf ++ " has no members")
 
 withElems :: Ptr Ctx -> Ptr Rt -> Ptr () -> (Elems -> IO Status) -> IO Status
 withElems ctx rt ref k = do
-  Box _ info <- deref ref
-  case infoElems info of
+  Box _ inf <- deref ref
+  case infoElems inf of
     Just es -> k es
-    Nothing -> failWith ctx rt errNotCapable "TypeError" ("a value of type " ++ infoType info ++ " has no elements")
+    Nothing -> failWith ctx rt errNotCapable "TypeError" ("a value of type " ++ infoType inf ++ " has no elements")
 
 hsGetMember :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Kind -> Ptr Val -> IO Status
 hsGetMember ctx rt ref cname want out = guarded ctx rt $ withMembers ctx rt ref $ \ms -> do
@@ -222,6 +223,66 @@ hsGetIndex ctx rt ref i want out = guarded ctx rt $ withElems ctx rt ref $ \es -
     Just v -> put ctx rt want v out
     Nothing -> failWith ctx rt errNotFound "ArrayException" "index out of range"
 
+-- | The arguments, decoded. Strings and bytes are copied (they're borrowed);
+-- a handle whose home is this runtime is its box.
+decodeArgs :: Ptr Ctx -> Ptr Rt -> Ptr Val -> CSize -> IO (Either String [Arg])
+decodeArgs ctx rt argv nargs = sequence <$> mapM (decode . fromIntegral) [0 .. fromIntegral nargs - 1 :: Int]   -- nargs is unsigned: 0 - 1 wraps
+  where
+    decode i = do
+      v <- c_arg argv i
+      k <- c_kind v
+      case () of
+        _ | k == kNull -> ok' ANull
+          | k == kBool -> ok' . ABool . (/= 0) =<< c_bool v
+          | k == kInt -> ok' . AInt =<< c_int v
+          | k == kDouble -> ok' . ADouble =<< c_double v
+          | k == kString -> do
+              b <- bytes v
+              return (either (const (Left "a string argument isn't valid UTF-8")) (Right . AString) (TE.decodeUtf8' b))
+          | k == kBytes -> ok' . ABytes =<< bytes v
+          | otherwise -> do
+              h <- c_handle v
+              r <- alloca $ \rp -> do
+                st <- c_ugly_resolve ctx rt h rp
+                if st == ok then peek rp else return nullPtr
+              if r == nullPtr then ok' (AForeign h) else ok' . AHome =<< deref r
+    ok' = return . Right
+    bytes v = do
+      p <- c_ptr v
+      n <- c_len v
+      B.packCStringLen (p, fromIntegral n)
+
+-- | Calls what v is, with these arguments.
+callValue :: Ptr Ctx -> Ptr Rt -> String -> Value -> [Arg] -> Kind -> Ptr Val -> IO Status
+callValue ctx rt name v args want out = case v of
+  VBox (Box _ i) | Just f <- infoCall i -> case f args of
+    Left why -> failWith ctx rt errType "TypeError" (name ++ ": " ++ why)
+    Right (_, run) -> run >>= \r -> put ctx rt want r out
+  _ -> failWith ctx rt errNotCapable "TypeError" (name ++ " isn't a function")
+
+hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status
+hsCall ctx rt ref argv nargs want out = guarded ctx rt $ do
+  b@(Box _ i) <- deref ref
+  decoded <- decodeArgs ctx rt argv nargs
+  case decoded of
+    Left why -> failWith ctx rt errType "TypeError" why
+    Right args -> callValue ctx rt ("a value of type " ++ infoType i) (VBox b) args want out
+
+-- | A method call. On a module (anything with members), its function, with
+-- no receiver. On any other box, a function from the module that exported
+-- its type, with the receiver last: x.m(a, b) is m a b x.
+hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status
+hsInvoke ctx rt ref cname argv nargs want out = guarded ctx rt $ do
+  b@(Box _ i) <- deref ref
+  name <- peekUtf8 cname
+  decoded <- decodeArgs ctx rt argv nargs
+  case decoded of
+    Left why -> failWith ctx rt errType "TypeError" why
+    Right args -> case (infoMembers i >>= (`memberGet` name), infoMethods i >>= ($ name)) of
+      (Just f, _) -> callValue ctx rt name f args want out
+      (_, Just f) -> callValue ctx rt name f (args ++ [AHome b]) want out
+      _ -> failWith ctx rt errNotFound "NotInScope" ("Variable not in scope: " ++ name ++ " (for a value of type " ++ infoType i ++ ")")
+
 -- | Called on any thread, possibly in the middle of a call: freeing a
 -- stable pointer is safe anywhere.
 hsRelease :: Ptr Rt -> Ptr () -> IO ()
@@ -243,3 +304,5 @@ foreign export ccall "ugly_hs_length" hsLength :: Ptr Ctx -> Ptr Rt -> Ptr () ->
 foreign export ccall "ugly_hs_get_index" hsGetIndex :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Kind -> Ptr Val -> IO Status
 foreign export ccall "ugly_hs_release" hsRelease :: Ptr Rt -> Ptr () -> IO ()
 foreign export ccall "ugly_hs_live_refs" hsLiveRefs :: IO CInt
+foreign export ccall "ugly_hs_call" hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status
+foreign export ccall "ugly_hs_invoke" hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> Kind -> Ptr Val -> IO Status

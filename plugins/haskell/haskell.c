@@ -8,8 +8,8 @@
  * init starts the RTS and checks that the two sides agree; runtimes come and
  * go, from any thread. The reading operations are Haskell's (Ugly.Plugin),
  * on boxes: import (built-in modules only, for now), describe, members and
- * elements. Haskell values are immutable, so writing is refused; calls
- * aren't implemented yet. The RTS is one-way (it can't be started again once
+ * elements, calls and invoke (receiver last). Haskell values are
+ * immutable, so writing is refused. The RTS is one-way (it can't be started again once
  * stopped), so there's no 'term' and no UGLY_CAP_RESTARTABLE.
  * doc/haskell-bridge.md is the plan.
  */
@@ -19,7 +19,7 @@
 
 #include "ugly_plugin.h"
 
-#define BRIDGE_ABI 2     /* Ugly.Plugin.bridgeAbi */
+#define BRIDGE_ABI 3     /* Ugly.Plugin.bridgeAbi */
 
 /* libugly_hs.so: rts.c, and Ugly.Plugin's foreign exports. */
 extern int ugly_hs_start(const char *opts) ;
@@ -35,6 +35,10 @@ extern ugly_status ugly_hs_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, u
 extern ugly_status ugly_hs_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out) ;
 extern ugly_status ugly_hs_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want,
 	ugly_val *out) ;
+extern ugly_status ugly_hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_kind want, ugly_val *out) ;
+extern ugly_status ugly_hs_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, ugly_kind want, ugly_val *out) ;
 extern void ugly_hs_release(ugly_rt *rt, void *ref) ;
 
 
@@ -111,14 +115,6 @@ static ugly_status hs_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 static ugly_status hs_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_val v){
 	IMMUTABLE() ;
 }
-static ugly_status hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_kind want, ugly_val *out){
-	TODO("call") ;
-}
-static ugly_status hs_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
-	size_t nargs, ugly_kind want, ugly_val *out){
-	TODO("invoke") ;
-}
 static ugly_status hs_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 	ugly_handle *out){
 	TODO("new_instance") ;
@@ -148,8 +144,8 @@ static const ugly_plugin plugin = {
 	.length = ugly_hs_length,
 	.get_index = ugly_hs_get_index,
 	.set_index = hs_set_index,
-	.call = hs_call,
-	.invoke = hs_invoke,
+	.call = ugly_hs_call,
+	.invoke = ugly_hs_invoke,
 	.new_instance = hs_new_instance,
 	.delete_member = hs_delete_member,
 	.splice = hs_splice,

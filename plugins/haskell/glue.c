@@ -51,3 +51,38 @@ ugly_status ugly_hs_names(ugly_ctx *ctx, const char *const *names, const size_t 
 	free(items) ;
 	return st ;
 }
+
+
+/* Reading arguments: argument i, and its parts. */
+const ugly_val *ugly_hs_arg(const ugly_val *args, size_t i){
+	return &args[i] ;
+}
+
+int ugly_hs_kind(const ugly_val *v){
+	return (int)v->kind ;
+}
+
+int ugly_hs_bool(const ugly_val *v){
+	return v->as.b ? 1 : 0 ;
+}
+
+int64_t ugly_hs_int(const ugly_val *v){
+	return v->as.i ;
+}
+
+double ugly_hs_double(const ugly_val *v){
+	return v->as.d ;
+}
+
+/* A string's or bytes' pointer and length. */
+const char *ugly_hs_ptr(const ugly_val *v){
+	return v->kind == UGLY_BYTES ? (const char *)v->as.bytes.ptr : v->as.str.ptr ;
+}
+
+size_t ugly_hs_len(const ugly_val *v){
+	return v->kind == UGLY_BYTES ? v->as.bytes.len : v->as.str.len ;
+}
+
+ugly_handle ugly_hs_handle(const ugly_val *v){
+	return v->as.h ;
+}

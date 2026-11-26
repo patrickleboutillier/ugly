@@ -1,22 +1,41 @@
--- | A module built into the plugin, for its smoke test, until modules load
--- from export tables: one value of each kind the protocol maps.
+-- | A module built into the plugin, for its tests, until modules load from
+-- export tables: one value of each kind the protocol maps, and functions to
+-- call.
 module Ugly.Smoke (smoke) where
 
 import qualified Data.ByteString as B
+import Data.Int
+import Data.IORef
 import qualified Data.Map as M
 import Data.Word
+import System.IO.Unsafe (unsafePerformIO)
 
 import Ugly.Value
 
 data Color = Red | Green | Blue
-  deriving Show
+  deriving (Show, Eq, Enum, Bounded)
 
+-- | Its methods are this module's functions (receiver last).
 instance ToUgly Color where
-  toUgly = boxShow
+  toUgly c = boxWith (Just (show c)) (`lookup` entries) c
   textOf = Just . show
+instance FromUgly Color
+
+next :: Color -> Color
+next c = if c == maxBound then minBound else succ c
+
+mix :: Color -> Color -> String
+mix a b = show a ++ "+" ++ show b
+
+counter :: IORef Int
+counter = unsafePerformIO (newIORef 0)
+{-# NOINLINE counter #-}
 
 smoke :: Box
-smoke = moduleBox "Ugly.Smoke"
+smoke = moduleBox "Ugly.Smoke" entries
+
+entries :: [(String, Value)]
+entries =
   [ ("unit", toUgly ())
   , ("yes", toUgly True)
   , ("answer", toUgly (42 :: Int))
@@ -38,4 +57,26 @@ smoke = moduleBox "Ugly.Smoke"
   , ("boom", toUgly (error "boom" :: Int))
   , ("lazyBoom", toUgly [1, error "lazy boom", 3 :: Int])
   , ("divZero", toUgly (1 `div` (0 :: Int)))
+    -- functions
+  , ("add", toUgly ((+) :: Int -> Int -> Int))
+  , ("greet", toUgly (("hello, " ++) :: String -> String))
+  , ("halve", toUgly ((/ 2) :: Double -> Double))
+  , ("widen", toUgly (fromIntegral :: Word8 -> Int))
+  , ("safeDiv", toUgly (\a b -> if b == 0 then Nothing else Just (a `div` b) :: Maybe Int))
+  , ("orZero", toUgly (maybe 0 id :: Maybe Int -> Int))
+  , ("identity", toUgly (id :: Value -> Value))
+  , ("apply", toUgly ((\f x -> f x) :: (Int -> Int) -> Int -> Int))
+  , ("explode", toUgly ((\n -> if n > 0 then n else error "not positive") :: Int -> Int))
+  , ("tick", toUgly (atomicModifyIORef' counter (\n -> (n + 1, n + 1))))
+  , ("tickBy", toUgly (\k -> atomicModifyIORef' counter (\n -> (n + k, n + k)) :: IO Int))
+  , ("next", toUgly next)
+  , ("mix", toUgly mix)
+    -- overloaded: one instantiation per type, chosen by the arguments
+  , ("size", overloaded "size :: Sized a => a -> Int"
+      [ toUgly (length :: [Int] -> Int)
+      , toUgly (length :: String -> Int)
+      , toUgly (const 1 :: Color -> Int) ])
+  , ("narrow", overloaded "narrow :: Narrow a => a -> String"
+      [ toUgly ((\x -> "Int8 " ++ show x) :: Int8 -> String)
+      , toUgly ((\x -> "Word8 " ++ show x) :: Word8 -> String) ])
   ]

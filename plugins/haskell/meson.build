@@ -55,10 +55,10 @@ if haskell_ok
   plugins += [ugly_haskell, ugly_hs]
   plugin_dirs += meson.current_build_dir()
 
-  # Not in the conformance suite yet: the RTS and runtimes (smoke), and
-  # values and boxes, from the built-in module Ugly.Smoke (values). Suite
+  # Not in the conformance suite yet: the RTS and runtimes (smoke), values
+  # and boxes (values) and calls (calls), from the built-in module Ugly.Smoke. Suite
   # 'ghc' is anything that starts the RTS (see the valgrind setups).
-  foreach t : ['smoke', 'values']
+  foreach t : ['smoke', 'values', 'calls']
     test('haskell-' + t,
       executable('haskell_' + t, t + '.c', dependencies: [ugly_dep, dependency('threads'), cc.find_library('dl')]),
       env: {'UGLY_PLUGIN_PATH': meson.current_build_dir()},
