@@ -36,12 +36,12 @@ import Data.List (intercalate, nub)
 import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.Typeable (Typeable)
+import Data.Typeable (Proxy (..), Typeable, typeRep)
 import Foreign.StablePtr (StablePtr, newStablePtr)
 import Language.Haskell.TH
 import Numeric (showHex)
 
-import Ugly.Value (Box, FromUgly, ToUgly (..), Value, boxWith, moduleBox, overloaded)
+import Ugly.Value (Box, FromUgly, ToUgly (..), Value, boxWith, instantiation, moduleBox, overloaded)
 
 type Subst = M.Map Name Type
 
@@ -137,16 +137,19 @@ entry listed (n, info) = do
       substs <- foldM (\ss c -> concat <$> mapM (`extend` c) ss) [M.empty] ctx
       let close s = M.union s (M.fromList [ (v, ConT ''Value) | v <- vars ])
       satisfied <- filterM (\s -> and <$> mapM (holds listed . apply (close s)) ctx) substs
-      let candidates = nub [ apply (close s) body | s <- satisfied ]
-      usable <- filterM (usableType listed) candidates
+      -- Each instantiation: its type arguments, in the variables' order, and its type.
+      let candidates = nub [ (map (apply (close s) . VarT) vars, apply (close s) body) | s <- satisfied ]
+      usable <- filterM (usableType listed . snd) candidates
       case usable of
         [] -> failWith "no usable instantiation (a type without ToUgly/FromUgly, or an unsatisfied context)"
-        [mono] | null vars -> one [| toUgly $(return ref) |]
-               | otherwise -> one [| toUgly ($(return ref) :: $(return mono)) |]
+        _ | null vars -> one [| toUgly $(return ref) |]
+        -- Even one instantiation is overloaded: a hint names it, and want checks its result.
         _ -> one [| overloaded $(stringE (nameBase n ++ " :: " ++ pretty ty))
-                      $(listE [ [| toUgly ($(return ref) :: $(return m)) |] | m <- usable ]) |]
+                      $(listE [ [| instantiation $(listE (map typeArg targs)) ($(return ref) :: $(return m)) |]
+                              | (targs, m) <- usable ]) |]
   where
     one e = (: []) <$> [| ($(stringE (nameBase n)), $e) |]
+    typeArg t = [| show (typeRep (Proxy :: Proxy $(return t))) |]
     failWith msg = fail ("uglyModule: " ++ nameBase n ++ ": " ++ msg)
 
 -- | forall vars. context => body

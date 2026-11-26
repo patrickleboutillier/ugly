@@ -16,6 +16,16 @@ static ugly_status call(ugly_handle m, const char *name, const ugly_val *args, s
 	return ugly_invoke(ctx, m, name, args, nargs, want, out) ;
 }
 
+/* Invokes 'name' on h with a hint and a context (NULL for none). */
+static ugly_status with_opts(ugly_handle h, const char *name, const ugly_val *args, size_t nargs, const char *hint,
+	const char *context, ugly_kind want, ugly_val *out){
+	ugly_opts opts = UGLY_OPTS_INIT ;
+	opts.hint = hint ;
+	opts.context = context ;
+	*out = ugly_null() ;
+	return ugly_invoke_opts(ctx, h, name, args, nargs, &opts, want, out) ;
+}
+
 /* The text of h (want STRING, through Smoke.identity) is s. */
 static int text_is(ugly_handle h, const char *s){
 	ugly_val t = ugly_null() ;
@@ -40,8 +50,8 @@ int main(void){
 	int64_t len ;
 	ugly_rt_import(ctx, rt, "Smoke", &smoke) ;
 
-	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 11),
-		"uglyModule: the 11 values listed (types aren't members)") ;
+	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 13),
+		"uglyModule: the 13 values listed (types aren't members)") ;
 	ugly_release(ctx, h) ;
 
 	/* Listed types get instances: a box, its show, its methods. */
@@ -113,6 +123,67 @@ int main(void){
 	ok((call(mod, "firstOf", &w, 1, UGLY_STRING, &v) == UGLY_OK)&&is_string(v, "Red"), "firstOf colors: Red") ;
 	ugly_val_release(ctx, &v) ;
 	ugly_val_release(ctx, &w) ;
+
+	/* Hints (type arguments, as TypeApplications) and want choose among instantiations. */
+	ok((with_opts(mod, "area", (ugly_val[]){ ugly_hval(circle) }, 1, "Shape", NULL, UGLY_ANY, &v) == UGLY_OK)
+		&&(v.as.d > 12.56), "area(circle, hint Shape): the Shape instance") ;
+	ok(error_is(with_opts(mod, "area", (ugly_val[]){ ugly_hval(circle) }, 1, "@Pt", NULL, UGLY_ANY, &v), UGLY_ERR_TYPE,
+		"TypeError", "isn't a Pt"), "area(circle, hint @Pt): TYPE, a Shape isn't a Pt") ;
+	ok(error_is(with_opts(mod, "area", (ugly_val[]){ ugly_hval(circle) }, 1, "Note", NULL, UGLY_ANY, &v),
+		UGLY_ERR_NOT_FOUND, "TypeError", "no instance of area :: HasArea a => a -> Double at @Note"),
+		"area(circle, hint Note): NOT_FOUND, no such instance") ;
+	ok((with_opts(mod, "label", (ugly_val[]){ ugly_str("n", 1), ugly_int(5) }, 2, "Double", NULL, UGLY_ANY, &v) == UGLY_OK)
+		&&is_string(v, "n: 5.0"), "label(\"n\", 5, hint Double): the Double instance, not Int's") ;
+	ugly_val_release(ctx, &v) ;
+	ok((with_opts(mod, "label", (ugly_val[]){ ugly_str("s", 1), ugly_str("x", 1) }, 2, "Text", NULL, UGLY_ANY, &v) == UGLY_OK)
+		&&is_string(v, "s: \"x\""), "label(\"s\", \"x\", hint Text)") ;
+	ugly_val_release(ctx, &v) ;
+	ok(error_is(with_opts(mod, "label", (ugly_val[]){ ugly_str("s", 1), ugly_str("x", 1) }, 2, "String", NULL, UGLY_ANY, &v),
+		UGLY_ERR_NOT_FOUND, "TypeError", "@Text"), "label(\"s\", \"x\", hint String): NOT_FOUND, listing the instances "
+		"(Show [a] has a variable in its head, so it isn't expanded)") ;
+	ugly_val_release(ctx, &v) ;
+	ok((with_opts(pt, "label", (ugly_val[]){ ugly_str("p", 1) }, 1, "@Pt", NULL, UGLY_ANY, &v) == UGLY_OK)
+		&&is_string(v, "p: Pt 3 4"), "pt.label(\"p\", hint @Pt): invoke, the receiver last") ;
+	ugly_val_release(ctx, &v) ;
+	ok((with_opts(mod, "unit", (ugly_val[]){ ugly_hval(pt) }, 1, "@Pt @Int", NULL, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, 3),
+		"unit(pt, hint @Pt @Int): both variables") ;
+	ok((with_opts(mod, "unit", (ugly_val[]){ ugly_hval(circle) }, 1, "@_ @String", NULL, UGLY_ANY, &v) == UGLY_OK)
+		&&is_string(v, "m2"), "unit(circle, hint @_ @String): the first left open") ;
+	ugly_val_release(ctx, &v) ;
+	ok(error_is(with_opts(mod, "Pt", (ugly_val[]){ ugly_int(1), ugly_int(2) }, 2, "Int", NULL, UGLY_ANY, &v),
+		UGLY_ERR_NOT_FOUND, "TypeError", "no type variables"), "Pt(1, 2, hint Int): NOT_FOUND, Pt isn't polymorphic") ;
+
+	/* Polymorphic in the result alone: want, or a hint, decides. */
+	ok(error_is(call(mod, "read", (ugly_val[]){ ugly_str("42", 2) }, 1, UGLY_ANY, &v), UGLY_ERR_TYPE, "TypeError",
+		"ambiguous"), "read(\"42\"): TYPE, ambiguous (every Read instance takes a string)") ;
+	ok((call(mod, "read", (ugly_val[]){ ugly_str("42", 2) }, 1, UGLY_INT, &v) == UGLY_OK)&&is_int(v, 42),
+		"read(\"42\") wanting an int: read @Int, 42") ;
+	ok((call(mod, "read", (ugly_val[]){ ugly_str("42", 2) }, 1, UGLY_DOUBLE, &v) == UGLY_OK)&&(v.kind == UGLY_DOUBLE)
+		&&(v.as.d == 42.0), "read(\"42\") wanting a double: read @Double, 42.0") ;
+	ok((call(mod, "read", (ugly_val[]){ ugly_str("True", 4) }, 1, UGLY_BOOL, &v) == UGLY_OK)&&(v.kind == UGLY_BOOL)&&v.as.b,
+		"read(\"True\") wanting a bool: True") ;
+	ok((with_opts(mod, "read", (ugly_val[]){ ugly_str("Circle 2.0", 10) }, 1, "Shape", NULL, UGLY_ANY, &v) == UGLY_OK)
+		&&(v.kind == UGLY_HANDLE)&&type_is(v.as.h, 0, "Shape")&&text_is(v.as.h, "Circle 2.0"),
+		"read(\"Circle 2.0\", hint Shape): a Shape") ;
+	ugly_val_release(ctx, &v) ;
+	ok(error_is(with_opts(mod, "read", (ugly_val[]){ ugly_str("x", 1) }, 1, "Shape", NULL, UGLY_ANY, &v), UGLY_ERR_RAISED,
+		"ErrorCall", "no parse"), "read(\"x\", hint Shape): Prelude.read: no parse, raised") ;
+	ok((with_opts(mod, "minBound", NULL, 0, "Int", NULL, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, INT64_MIN),
+		"minBound(hint Int): a polymorphic value, called with no arguments") ;
+	ok((call(mod, "minBound", NULL, 0, UGLY_BOOL, &v) == UGLY_OK)&&(v.kind == UGLY_BOOL)&&! v.as.b,
+		"minBound() wanting a bool: False") ;
+	ok(error_is(call(mod, "Pt", (ugly_val[]){ ugly_int(1), ugly_int(2) }, 2, UGLY_INT, &v), UGLY_ERR_TYPE, "TypeError",
+		"can't be an int"), "Pt(1, 2) wanting an int: TYPE before it runs, its result can't be one") ;
+
+	/* The other call options: Haskell has none of them. */
+	ugly_kwarg kw = { "x", ugly_int(1) } ;
+	ugly_opts opts = UGLY_OPTS_INIT ;
+	opts.kwargs = &kw ;
+	opts.nkwargs = 1 ;
+	ok(error_is(ugly_invoke_opts(ctx, mod, "area", (ugly_val[]){ ugly_hval(circle) }, 1, &opts, UGLY_ANY, &v),
+		UGLY_ERR_NOT_SUPPORTED, "TypeError", "keyword arguments"), "keyword arguments: NOT_SUPPORTED") ;
+	ok(error_is(with_opts(mod, "area", (ugly_val[]){ ugly_hval(circle) }, 1, NULL, "scalar", UGLY_ANY, &v),
+		UGLY_ERR_NOT_SUPPORTED, "TypeError", "context"), "a call context: NOT_SUPPORTED") ;
 
 	ugly_release(ctx, primes) ;
 	ugly_release(ctx, circle) ;

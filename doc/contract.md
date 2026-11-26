@@ -616,6 +616,7 @@ ugly_status ugly_new_opts(ctx, cls, args, nargs, opts, out) ;
 | Perl | appended as `name => value` pairs, in the order given | refused | `list` (default, collapsing as in decision 9), `scalar`, `void` |
 | Java | refused | the overload's parameter types, `"int,java.lang.String"` | refused |
 | C# | bound to parameters by name, as C#'s named arguments; parameters left out keep their defaults | the overload's parameter types, by C# alias or full name: `"int,string"`, `"System.Int32,System.String"` | refused |
+| Haskell | refused | type arguments of a polymorphic function, as TypeApplications: `"Chord"`, `"@Scale @Note"`, `"@_ @Note"`; with `want`, it chooses the instantiation | refused |
 | Lua, JS | refused | refused | refused |
 | mock | appended as pairs, like Perl | refused | refused |
 

@@ -1,8 +1,8 @@
 # The Haskell bridge: a plan
 
 Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
-export tables and calls, module libraries, and foreign values in Haskell
-are done). Once it works,
+export tables and calls, module libraries, foreign values in Haskell, and
+hint and want for overloads are done). Once it works,
 this becomes the language guide (`doc/languages/haskell.md`), Haskell's
 column in contract §10, and a section of the plugin guide. Until then it's
 the place to argue about the design.
@@ -269,14 +269,45 @@ cost (built):
    primitive matches every parameter type it converts to. The cheapest
    instantiation is called; a tie is refused as ambiguous (`UGLY_ERR_TYPE`,
    listing them), as is a call no instantiation takes.
-2. **The `hint` call option** will name the type when arguments don't
-   decide: `transpose(Min3rd, above, x, opts(hint="Chord"))`. Not yet.
-3. **`want` will pick the result type** for functions polymorphic in their
-   result alone (`read`, `fromInteger`, `minBound`): `read("C#")` with a
-   hint of `Note` gives a `Note`. This is the essay's "types flow from the
+2. **The `hint` call option** names the type when arguments don't decide
+   (built): `transpose(Min3rd, above, x, opts(hint="Chord"))`. A hint is
+   type arguments, as `TypeApplications` writes them: `"Chord"` (or
+   `"@Chord"`) fixes the first type variable, `"@Scale @Note"` the first
+   two, and `"@_ @Note"` leaves the first open. Variables are in the order
+   of the type's `forall` (a class method's class variable first). Types
+   compare as `Typeable` shows them, ignoring spaces and outer parentheses,
+   with `String` as `[Char]`. Only the instantiations the hint names are
+   considered; arguments that don't fit them are `UGLY_ERR_TYPE`, and a
+   hint that names none is `UGLY_ERR_NOT_FOUND`, listing the hints that
+   would (as Java's hint naming no overload). A hint on a function with no
+   type variables is `UGLY_ERR_NOT_FOUND` too. Every polymorphic export is
+   overloaded, even with one instantiation, so a hint always applies.
+3. **`want` ranks instantiations by their result** (built), for functions
+   polymorphic in their result alone (`read`, `minBound`): `read("42")`
+   wanting an int is `read @Int`, wanting a double `read @Double`, and
+   `read("C#")` with a hint of `Note` gives a `Note`. Each result type has
+   a cost as each kind (`ToUgly`'s `wantCost`), mirroring the argument
+   costs: an int is `Int` (0), `Int64` or `Integer` (1), a narrower type
+   (2), or a widened integer as a double (3); a box is a handle, or a
+   string (2) if it has a text. This is the essay's "types flow from the
    static side", where the caller is the static side, and it's the one
    place in UGLY where `want` chooses the function as well as the
-   conversion. Not yet.
+   conversion. With want `ANY`, `read("42")` is ambiguous, and the message
+   lists every instantiation with the hint that picks it.
+
+A result that can't be the kind wanted is refused before anything runs,
+monomorphic or not (`Pt(1, 2)` wanting an int is `UGLY_ERR_TYPE`, its
+result can't be one). A polymorphic value (`minBound`) is overloaded too,
+called with no arguments: `minBound()` wanting a bool is `False`.
+
+Keyword arguments and a call context are refused (`UGLY_ERR_NOT_SUPPORTED`):
+Haskell has neither.
+
+**Limit**: instances whose heads have type variables of their own (`Show
+[a]`, `Read (Maybe a)`) aren't expanded, so `label` has no `String`
+instantiation (its `String` argument goes to the `Text` one). Expanding
+them one level, over the types in scope, is the natural next step if a
+real library needs it.
 
 A type variable with no constraint becomes `Value`, which takes anything:
 `id` works on any value, and `[Value]` takes any sequence that comes home,
@@ -440,8 +471,8 @@ program's RTS wasn't started with `keep_cafs`, so attaching must call
 4. **Module libraries** (done): building one against the `ugly` package (a
    package database in the build tree), and `import` from the module path,
    replacing the built-in modules. Then foreign values in Haskell (done:
-   foreign values, callbacks, foreign errors). Next: `hint` and `want`
-   for overloads.
+   foreign values, callbacks, foreign errors), and `hint` and `want` for
+   overloads (done).
 5. **The fixture** (`tests/haskell/Conformance.hs`), then the protocol until
    the suite and pairwise pass.
 6. **music-diatonic** as an example, from Python and Lua.

@@ -28,14 +28,16 @@
 -- null.
 module Ugly.Value
   ( Value (..), Box (..), Info (..), Members (..), Elems (..), Arg (..), Conv
-  , Foreign, ForeignError (..)
+  , Foreign, ForeignError (..), Want (..), Call (..), Refused (..), plainCall
   , ToUgly (..), FromUgly (..), Result (..), Collect (..)
-  , info, boxShow, boxOpaque, boxWith, moduleBox, overloaded
+  , Instance, instantiation, overloaded, parseHint
+  , info, boxShow, boxOpaque, boxWith, moduleBox
   , typeName, validText, describeArg, home, fromValue
   ) where
 
 import Control.Exception (evaluate)
 import qualified Data.ByteString as B
+import Data.Char (isAlphaNum, isSpace)
 import Data.Int
 import Data.List (intercalate, sortOn)
 import qualified Data.Map as M
@@ -55,6 +57,36 @@ class Typeable a => ToUgly a where
   -- it, or a list of them, shows as.
   textOf :: a -> Maybe String
   textOf _ = Nothing
+  -- | What its values cost as the kind a caller wants, if they can be that
+  -- kind: what ranks a polymorphic function's instantiations by their
+  -- result (read("42") wanting an int is read @Int). By default, a box: a
+  -- handle, or its text.
+  wantCost :: Proxy a -> Want -> Maybe Int
+  wantCost _ = boxWant
+
+-- | A box is a handle, or a string if its type has a text.
+boxWant :: Want -> Maybe Int
+boxWant w = lookup w [(WantAny, 0), (WantHandle, 0), (WantString, 2)]
+
+-- | A primitive: these kinds, at these costs (any for WantAny).
+prim :: [(Want, Int)] -> Proxy a -> Want -> Maybe Int
+prim _ _ WantAny = Just 0
+prim costs _ w = lookup w costs
+
+-- | An integer type: an int at this cost, a double (widened) at 3.
+intWant :: Int -> Proxy a -> Want -> Maybe Int
+intWant c = prim [(WantInt, c), (WantDouble, 3)]
+
+wantName :: Want -> String
+wantName w = case w of
+  WantAny -> "anything"
+  WantNull -> "null"
+  WantBool -> "a bool"
+  WantInt -> "an int"
+  WantDouble -> "a double"
+  WantString -> "a string"
+  WantBytes -> "bytes"
+  WantHandle -> "a handle"
 
 -- | How a Haskell type is taken from an argument. The default takes only a
 -- Haskell value of exactly this type, coming home.
@@ -108,22 +140,86 @@ moduleBox name entries = Box entries (info "module")
   , infoMembers = Just (Members (map fst entries) (`lookup` entries))
   }
 
--- | A polymorphic function, as its instantiations: a call picks the one its
--- arguments convert to most cheaply. A tie is ambiguous, and refused.
-overloaded :: String -> [Value] -> Value
-overloaded ty candidates = VBox (Box candidates (info ty) { infoCall = Just call })
-  where
-    call args =
-      let tried = [ (infoType i, f args) | VBox (Box _ i) <- candidates, Just f <- [infoCall i] ]
-          fits = sortOn (fst . snd) [ (t, r) | (t, Right r) <- tried ]
-      in case fits of
-        [] -> Left ("no instance of " ++ ty ++ " takes these arguments:"
-                    ++ concat [ "\n  " ++ t ++ ": " ++ why | (t, Left why) <- tried ])
-        (_, best@(c, _)) : rest
-          | all ((/= c) . fst . snd) rest -> Right best
-          | otherwise -> Left ("ambiguous: these instances of " ++ ty ++ " take these arguments equally well:"
-                               ++ concat [ "\n  " ++ t | (t, (c', _)) <- fits, c' == c ])
+-- | One instantiation of a polymorphic export: its type arguments (as
+-- Typeable shows them, in the order of the type's variables), its type,
+-- and how to call it.
+data Instance = Instance
+  { instArgs :: [String]
+  , instType :: String
+  , instMatch :: Want -> [Arg] -> Conv (IO Value)
+  }
 
+-- | An instantiation: what TH writes for transpose @Chord.
+instantiation :: forall r. Result r => [String] -> r -> Instance
+instantiation targs x = Instance targs (typeName x) (\w args -> fmap (fmap ($ x)) (matchArgs w args))
+
+-- | A polymorphic function (or value: minBound), as its instantiations. A
+-- call's hint keeps those whose type arguments it names; then the cheapest
+-- is called, by its arguments' conversions and, if the caller wants a
+-- kind, its result's. A tie is ambiguous, and refused; a hint naming no
+-- instantiation is NoInstance.
+overloaded :: String -> [Instance] -> Value
+overloaded ty insts = VBox (Box insts (info ty) { infoCall = Just call })
+  where
+    call c args =
+      let named = maybe insts (\h -> filter (applies h . instArgs) insts) (callHint c)
+          tried = [ (instType i ++ "  (" ++ unwords (map ('@' :) (instArgs i)) ++ ")", instMatch i (callWant c) args)
+                  | i <- named ]
+          fits = sortOn (fst . snd) [ (t, r) | (t, Right r) <- tried ]
+      in case (callHint c, fits) of
+        (Just h, _) | null named -> Left (NoInstance ("no instance of " ++ ty ++ " at " ++ unwords (map ('@' :) h)
+                                    ++ "; its instances are at:" ++ concat [ "\n  " ++ unwords (map ('@' :) (instArgs i)) | i <- insts ]))
+        (_, []) -> Left (Refused ("no instance of " ++ ty ++ " takes these arguments" ++ wanting c ++ ":"
+                    ++ concat [ "\n  " ++ t ++ ": " ++ why | (t, Left why) <- tried ]))
+        (_, (_, best@(cost, _)) : rest)
+          | all ((/= cost) . fst . snd) rest -> Right best
+          | otherwise -> Left (Refused ("ambiguous: these instances of " ++ ty ++ " take these arguments"
+                               ++ wanting c ++ " equally well (a hint picks one):"
+                               ++ concat [ "\n  " ++ t | (t, (c', _)) <- fits, c' == cost ]))
+    wanting c = if callWant c == WantAny then "" else " (returning " ++ wantName (callWant c) ++ ")"
+    applies h targs = length h <= length targs && and (zipWith sameType h targs)
+    sameType "_" _ = True
+    sameType a b = normType a == normType b
+
+-- | A hint's type arguments: "@Scale @Note", or one type alone ("Chord").
+-- "_" leaves a variable open.
+parseHint :: String -> [String]
+parseHint h
+  | '@' `elem` h = filter (not . null) (map trim (splitOn h))
+  | otherwise = [trim h]
+  where
+    splitOn str = case break (== '@') str of
+      (a, []) -> [a]
+      (a, _ : rest) -> a : splitOn rest
+    trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
+
+-- | A type as compared: without spaces or enclosing parentheses, String as
+-- Typeable shows it ([Char]).
+normType :: String -> String
+normType = unparen . concatMap token . tokens
+  where
+    tokens [] = []
+    tokens str@(c : cs)
+      | isSpace c = tokens cs
+      | isAlphaNum c || c == '.' || c == '_' || c == '\'' = let (w, rest) = span (\x -> isAlphaNum x || x `elem` "._'") str in w : tokens rest
+      | otherwise = [c] : tokens cs
+    token "String" = "[Char]"
+    token t = t
+    unparen t@('(' : rest)
+      | not (null rest), last rest == ')', balanced (init rest), ',' `notElem` topLevel (init rest) = unparen (init rest)
+      | otherwise = t
+    unparen t = t
+    balanced = go (0 :: Int)
+      where go n [] = n == 0
+            go n (x : xs) | x == '(' = go (n + 1) xs
+                          | x == ')' = n > 0 && go (n - 1) xs
+                          | otherwise = go n xs
+    topLevel = go (0 :: Int)
+      where go _ [] = []
+            go n (x : xs) | x == '(' || x == '[' = go (n + 1) xs
+                          | x == ')' || x == ']' = go (n - 1) xs
+                          | n == 0 = x : go n xs
+                          | otherwise = go n xs
 
 
 -- Out.
@@ -139,55 +235,72 @@ shown :: Show a => a -> Maybe String
 shown = Just . show
 
 instance ToUgly () where
+  wantCost = prim [(WantNull, 0)]
   toUgly () = VNull
   textOf = shown
 instance ToUgly Bool where
+  wantCost = prim [(WantBool, 0)]
   toUgly = VBool
   textOf = shown
 instance ToUgly Int where
+  wantCost = intWant 0
   toUgly = VInt . fromIntegral
   textOf = shown
 instance ToUgly Int8 where
+  wantCost = intWant 2
   toUgly = VInt . fromIntegral
   textOf = shown
 instance ToUgly Int16 where
+  wantCost = intWant 2
   toUgly = VInt . fromIntegral
   textOf = shown
 instance ToUgly Int32 where
+  wantCost = intWant 2
   toUgly = VInt . fromIntegral
   textOf = shown
 instance ToUgly Int64 where
+  wantCost = intWant 1
   toUgly = VInt
   textOf = shown
 instance ToUgly Word8 where
+  wantCost = intWant 2
   toUgly = VInt . fromIntegral
   textOf = shown
 instance ToUgly Word16 where
+  wantCost = intWant 2
   toUgly = VInt . fromIntegral
   textOf = shown
 instance ToUgly Word32 where
+  wantCost = intWant 2
   toUgly = VInt . fromIntegral
   textOf = shown
 instance ToUgly Word where
+  wantCost = intWant 2
   toUgly = integral
   textOf = shown
 instance ToUgly Word64 where
+  wantCost = intWant 2
   toUgly = integral
   textOf = shown
 instance ToUgly Integer where
+  wantCost = intWant 1
   toUgly = integral
   textOf = shown
 instance ToUgly Natural where
+  wantCost = intWant 2
   toUgly = integral
   textOf = shown
 instance ToUgly Double where
+  wantCost = prim [(WantDouble, 0)]
   toUgly = VDouble
   textOf = shown
 instance ToUgly Float where
+  wantCost = prim [(WantDouble, 2)]
   toUgly = VDouble . realToFrac
   textOf = shown
 
 instance ToUgly Char where
+  wantCost = prim [(WantString, 2)]
   toUgly c
     | validText [c] = VString (T.singleton c)
     | otherwise = boxOpaque c
@@ -195,16 +308,19 @@ instance ToUgly Char where
 
 -- | A String is a string, unless it isn't valid Unicode: then it's a box with no text.
 instance {-# OVERLAPPING #-} ToUgly [Char] where
+  wantCost = prim [(WantString, 0)]
   toUgly s
     | validText s = VString (T.pack s)
     | otherwise = boxOpaque s
   textOf = shown
 
 instance ToUgly T.Text where
+  wantCost = prim [(WantString, 1)]
   toUgly = VString
   textOf = shown
 
 instance ToUgly B.ByteString where
+  wantCost = prim [(WantBytes, 0)]
   toUgly = VBytes
   textOf = shown
 
@@ -223,6 +339,7 @@ instance {-# OVERLAPPABLE #-} ToUgly a => ToUgly [a] where
 -- | Nothing is null, and Just x is x, unless x is itself null (Just Nothing,
 -- Just ()): then it's a box, one element long, so nothing is lost.
 instance ToUgly a => ToUgly (Maybe a) where
+  wantCost _ w = if w == WantNull then Just 0 else wantCost (Proxy :: Proxy a) w
   toUgly Nothing = VNull
   toUgly m@(Just x) = case toUgly x of
     VNull -> VBox (Box m (info (typeName m)) { infoShow = textOf m, infoElems = Just (Elems 1 one) })
@@ -250,49 +367,72 @@ instance ToUgly v => ToUgly (M.Map String v) where
 
 instance ToUgly Value where
   toUgly = id
+  wantCost _ _ = Just 4
 
 instance ToUgly Foreign where
   toUgly = VForeign
+  wantCost = prim [(WantHandle, 0)]
 
 -- | A function is callable: arguments are matched against its parameter
 -- types, then applied. Fewer than its arity give a partial application.
 instance (Typeable a, Typeable b, FromUgly a, Result b) => ToUgly (a -> b) where
   toUgly f = VBox (Box f (info (typeName f)) { infoCall = Just call })
     where
-      call [] = Left "expects an argument"
-      call args = fmap (fmap ($ f)) (matchArgs args :: Conv ((a -> b) -> IO Value))
+      call c args
+        | Just _ <- callHint c = Left (monomorphic (typeName f))
+        | null args = Left (Refused "expects an argument")
+        | otherwise = either (Left . Refused) Right
+            (fmap (fmap ($ f)) (matchArgs (callWant c) args :: Conv ((a -> b) -> IO Value)))
 
 -- | An action is callable with no arguments: the call runs it.
 instance ToUgly a => ToUgly (IO a) where
   toUgly io = VBox (Box io (info (typeName io)) { infoCall = Just call })
-    where call args = fmap (fmap ($ io)) (matchArgs args :: Conv (IO a -> IO Value))
+    where
+      call c args
+        | Just _ <- callHint c = Left (monomorphic (typeName io))
+        | otherwise = either (Left . Refused) Right
+            (fmap (fmap ($ io)) (matchArgs (callWant c) args :: Conv (IO a -> IO Value)))
+
+-- | A hint for a function that has no type variables.
+monomorphic :: String -> Refused
+monomorphic ty = NoInstance ("a function of type " ++ ty ++ " has no type variables for a hint to apply")
 
 
 -- Calls.
 
 -- | What a call does with its arguments, by the callee's type alone: so
 -- that matching (for overloads) never evaluates anything.
+--
+-- The kind wanted is matched against the result's type too (wantCost): a
+-- result that can't be that kind is refused before anything runs, and the
+-- cost of the one that can ranks a polymorphic function's instantiations.
 class Typeable r => Result r where
-  matchArgs :: [Arg] -> Conv (r -> IO Value)
+  matchArgs :: Want -> [Arg] -> Conv (r -> IO Value)
 
 -- | A function takes the next argument; with none left, it's a partial application.
 instance {-# OVERLAPPING #-} (Typeable a, Typeable b, FromUgly a, Result b) => Result (a -> b) where
-  matchArgs [] = Right (0, return . toUgly)
-  matchArgs (x : xs) = do
+  matchArgs w [] = resultAs w (Proxy :: Proxy (a -> b)) (return . toUgly)
+  matchArgs w (x : xs) = do
     (c1, getA) <- fromUgly x
-    (c2, runB) <- matchArgs xs :: Conv (b -> IO Value)
+    (c2, runB) <- matchArgs w xs :: Conv (b -> IO Value)
     return (c1 + c2, \f -> getA >>= runB . f)
 
 -- | An action is run when the arguments are used up.
 instance {-# OVERLAPPING #-} (Typeable a, ToUgly a) => Result (IO a) where
-  matchArgs [] = Right (0, fmap toUgly)
-  matchArgs _ = Left "too many arguments"
+  matchArgs w [] = resultAs w (Proxy :: Proxy a) (fmap toUgly)
+  matchArgs _ _ = Left "too many arguments"
 
 -- | Anything else is the result, evaluated (to weak head normal form) when
 -- the arguments are used up.
 instance {-# OVERLAPPABLE #-} (Typeable r, ToUgly r) => Result r where
-  matchArgs [] = Right (0, evaluate . toUgly)
-  matchArgs _ = Left "too many arguments"
+  matchArgs w [] = resultAs w (Proxy :: Proxy r) (evaluate . toUgly)
+  matchArgs _ _ = Left "too many arguments"
+
+-- | A result of type a, as the kind wanted: at its cost, or refused.
+resultAs :: forall a f. ToUgly a => Want -> Proxy a -> f -> Conv f
+resultAs w p run = case wantCost p w of
+  Just c -> Right (c, run)
+  Nothing -> Left ("its result, " ++ article (typeNameP p) ++ ", can't be " ++ wantName w)
 
 
 -- In: a foreign value converts as a literal of its kind would.

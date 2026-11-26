@@ -9,7 +9,7 @@ module Example
   ) where
 
 data Shape = Circle Double | Square Double
-  deriving (Show, Eq)
+  deriving (Show, Read, Eq)
 
 data Pt = Pt Int Int
   deriving (Show, Eq, Ord)
