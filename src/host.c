@@ -1,7 +1,7 @@
 /*
  * The built-in "c" language: the home of values the host makes itself.
  * C callables (callbacks), and core lists and maps that any runtime can use
- * through the protocol. It is a plugin like any other, so the core has no
+ * through the protocol (lists are iterable too, by an iterator object). It is a plugin like any other, so the core has no
  * special cases for it; each ctx has one runtime of it, on the ctx's thread.
  */
 #include <stdlib.h>
@@ -11,7 +11,7 @@
 #include "internal.h"
 
 
-typedef enum { C_CALLABLE, C_LIST, C_MAP } ckind ;
+typedef enum { C_CALLABLE, C_LIST, C_MAP, C_ITER } ckind ;
 
 typedef struct cobj {
 	ckind kind ;
@@ -24,6 +24,9 @@ typedef struct cobj {
 	ugly_val *items ;            /* C_LIST: values; C_MAP: values, parallel to keys */
 	char **keys ;
 	size_t n, cap ;
+
+	struct cobj *list ;          /* C_ITER: the list (one native reference), and the next index */
+	size_t pos ;
 } cobj ;
 
 
@@ -115,8 +118,13 @@ static int grow(cobj *o){
 }
 
 
+static void c_release(ugly_rt *rt, void *ref) ;
+
 static void cobj_free(cobj *o){
 	size_t i ;
+	if (o->kind == C_ITER){
+		c_release(NULL, o->list) ;
+	}
 	for (i = 0 ; i < o->n ; i++){
 		unstore(&o->items[i]) ;
 		if (o->kind == C_MAP){
@@ -171,8 +179,9 @@ static ugly_status c_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *t
 	const char *name = "function" ;
 	switch (o->kind){
 		case C_CALLABLE: *traits = UGLY_TRAIT_CALLABLE ; name = "function" ; break ;
-		case C_LIST: *traits = UGLY_TRAIT_ELEMENTS ; name = "list" ; break ;
+		case C_LIST: *traits = UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_ITERABLE ; name = "list" ; break ;
 		case C_MAP: *traits = UGLY_TRAIT_MEMBERS ; name = "map" ; break ;
+		case C_ITER: *traits = UGLY_TRAIT_ITERABLE ; name = "iterator" ; break ;
 	}
 	return ugly_val_set_string(ctx, type_name, name, strlen(name)) ;
 }
@@ -397,6 +406,55 @@ static ugly_status c_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *m
 }
 
 
+/* A list gives an iterator over its indexes; an iterator gives itself. */
+static ugly_status c_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	cobj *o = ref ;
+	if (o->kind == C_ITER){
+		o->refs++ ;      /* the export's reference; given back, since the handle is live */
+		return ugly_export(ctx, rt, o, (uintptr_t)o, out) ;
+	}
+	if (o->kind != C_LIST){
+		return not_capable(ctx, "value is not iterable") ;
+	}
+	cobj *it = cobj_new(C_ITER) ;
+	if (it == NULL){
+		return ctx_fail(ctx, UGLY_ERR_NOMEM, "core", "", "out of memory") ;
+	}
+	o->refs++ ;
+	it->list = o ;
+	return ugly_export(ctx, rt, it, (uintptr_t)it, out) ;
+}
+
+
+/* Reads the list as it is now, like Python's list iterator: splicing it meanwhile moves what comes next. */
+static ugly_status c_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max,
+	size_t *got){
+
+	(void)rt ;
+	cobj *o = ref ;
+	*got = 0 ;
+	if (o->kind != C_ITER){
+		return not_capable(ctx, "value is not an iterator") ;
+	}
+	while ((*got < max)&&(o->pos < o->list->n)){
+		ugly_status st = load(ctx, &o->list->items[o->pos], want, &out[*got]) ;
+		if (st != UGLY_OK){
+			return st ;
+		}
+		o->pos++ ;
+		(*got)++ ;
+	}
+	return UGLY_OK ;
+}
+
+
+/* C has no stringification of its own. */
+static ugly_status c_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	(void)rt ; (void)ref ; (void)out ;
+	return ctx_fail(ctx, UGLY_ERR_NOT_SUPPORTED, "c", "TypeError", "C values have no string form") ;
+}
+
+
 static void c_release(ugly_rt *rt, void *ref){
 	(void)rt ;
 	cobj *o = ref ;
@@ -424,6 +482,9 @@ const ugly_plugin ugly_c_plugin = {
 	.call = c_call,
 	.invoke = c_invoke,
 	.release = c_release,
+	.iter = c_iter,
+	.next = c_next,
+	.to_string = c_to_string,
 } ;
 
 

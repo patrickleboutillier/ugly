@@ -237,6 +237,107 @@ ugly_status ugly_splice(ugly_ctx *ctx, ugly_handle h, int64_t offset, int64_t re
 }
 
 
+/* ---------------------------------------------------------------- */
+/* Iteration and stringification (ABI 5)                            */
+/* ---------------------------------------------------------------- */
+
+ugly_status ugly_iter(ugly_ctx *ctx, ugly_handle h, ugly_handle *out){
+	call c ;
+	ugly_val v = ugly_null() ;
+	if (out != NULL){
+		*out = UGLY_NO_HANDLE ;
+	}
+	ugly_status st = begin(&c, ctx, h, NULL, 0, NULL) ;
+	if (st == UGLY_OK){
+		if (out == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_iter: out is required") ;
+		}
+		else if ((st = NOT_IMPL(c.p->iter)) == UGLY_OK){
+			ugly_handle it = UGLY_NO_HANDLE ;
+			st = c.p->iter(ctx, c.rt, c.ref, &it) ;
+			if (st == UGLY_OK){
+				v = ugly_hval(it) ;
+			}
+		}
+	}
+	st = end(&c, st, "iter", UGLY_HANDLE, &v) ;
+	if (st == UGLY_OK){
+		*out = v.as.h ;
+	}
+	return st ;
+}
+
+
+/*
+ * Unlike the other operations, a failure keeps the values made before it:
+ * they are the caller's, as they would have been one at a time.
+ */
+ugly_status ugly_next(ugly_ctx *ctx, ugly_handle it, ugly_kind want, ugly_val *out, size_t max, size_t *got){
+	call c ;
+	size_t n = 0, i ;
+	if (got != NULL){
+		*got = 0 ;
+	}
+	ugly_status st = begin(&c, ctx, it, NULL, 0, NULL) ;
+	if (st == UGLY_OK){
+		if ((out == NULL)||(got == NULL)||(max == 0)){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_next: out, got and max >= 1 are required") ;
+		}
+		else if ((st = NOT_IMPL(c.p->next)) == UGLY_OK){
+			for (i = 0 ; i < max ; i++){
+				out[i] = ugly_null() ;
+			}
+			st = c.p->next(ctx, c.rt, c.ref, want, out, max, &n) ;
+		}
+	}
+	int entered = (c.rt != NULL) ;
+	const char *lang = (entered ? c.rt->lang->name : "") ;
+	st = end(&c, st, "next", UGLY_ANY, NULL) ;
+	if (! entered){
+		return st ;
+	}
+	const char *bad = NULL ;
+	if (n > max){
+		bad = "more values than asked for" ;
+		n = max ;
+	}
+	for (i = 0 ; (bad == NULL)&&(i < n) ; i++){
+		if ((want != UGLY_ANY)&&(out[i].kind != want)){
+			bad = "a value of another kind than wanted" ;
+		}
+	}
+	if (bad != NULL){
+		for (i = 0 ; i < n ; i++){
+			ugly_val_release(ctx, &out[i]) ;
+		}
+		return ctx_fail(ctx, UGLY_ERR_INTERNAL, "core", "", "plugin %s: next returned %s", lang, bad) ;
+	}
+	*got = n ;
+	return st ;
+}
+
+
+ugly_status ugly_to_string(ugly_ctx *ctx, ugly_handle h, ugly_val *out){
+	call c ;
+	ugly_status st = begin(&c, ctx, h, NULL, 0, out) ;
+	if (st == UGLY_OK){
+		if (out == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_to_string: out is required") ;
+		}
+		else if ((st = NOT_IMPL(c.p->to_string)) == UGLY_OK){
+			st = c.p->to_string(ctx, c.rt, c.ref, out) ;
+		}
+	}
+	const char *lang = (c.rt != NULL ? c.rt->lang->name : "") ;
+	st = end(&c, st, "to_string", UGLY_ANY, out) ;
+	if ((st == UGLY_OK)&&(out->kind != UGLY_STRING)&&(out->kind != UGLY_BYTES)){
+		ugly_val_release(ctx, out) ;
+		return ctx_fail(ctx, UGLY_ERR_INTERNAL, "core", "", "plugin %s: to_string returned neither STRING nor BYTES", lang) ;
+	}
+	return st ;
+}
+
+
 ugly_status ugly_call(ugly_ctx *ctx, ugly_handle fn, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out){
 	call c ;
 	ugly_status st = begin(&c, ctx, fn, args, nargs, out) ;

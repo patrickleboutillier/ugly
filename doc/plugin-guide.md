@@ -51,6 +51,13 @@ lines of C, with no interpreter in the way: read it first.
   The core asks for the length before a `splice` (its range check) unless
   `describe` reports that trait, and a lazy list's length doesn't return
   (Haskell's `[0..]` hung there until libugly 2.6).
+- **Iteration never runs ahead** (ABI 5). `next` runs at most `max` steps,
+  stopping early only at the end, so a batch is the same as that many
+  single steps; pulling ahead would run a generator's code the caller never
+  asked for. `iter` on an iterator exports that same object (same identity
+  key, so the same handle), and `release` of the last reference closes it
+  as a `break` would. Values made before an error stay in `out` with `*got`
+  counting them: the core hands them to the caller with the error.
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the

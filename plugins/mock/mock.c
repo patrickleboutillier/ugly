@@ -7,6 +7,8 @@
  * ugly_plugin.h.
  *
  * Its "conformance" module provides the fixtures of contract.md section 9.
+ * Lists are iterable, and so are its generators (count_to, naturals,
+ * fail_after): objects that produce their values when asked, one at a time.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +23,7 @@
 /* The mock language's native values                                */
 /* ---------------------------------------------------------------- */
 
-typedef enum { M_MODULE, M_FUNC, M_COUNTER, M_LIST, M_CLASS, M_POINT, M_EXC, M_PROXY, M_KWBOX } mkind ;
+typedef enum { M_MODULE, M_FUNC, M_COUNTER, M_LIST, M_CLASS, M_POINT, M_EXC, M_PROXY, M_KWBOX, M_ITER, M_GEN } mkind ;
 
 typedef struct mobj mobj ;
 typedef struct mock_rt mock_rt ;
@@ -48,8 +50,10 @@ struct mobj {
 	const char *name ;   /* M_FUNC */
 	mock_fn fn ;
 
-	int64_t count ;      /* M_COUNTER */
-	mobj *items ;
+	int64_t count ;      /* M_COUNTER; M_ITER: the next index; M_GEN: the next value */
+	mobj *items ;        /* M_COUNTER; M_ITER: the list */
+	int64_t limit ;      /* M_GEN: where it ends (< 0: never) */
+	bool fails ;         /* M_GEN: raises at 'limit' instead of ending */
 
 	mval *vals ;         /* M_LIST */
 	size_t n, cap ;
@@ -67,6 +71,7 @@ struct mock_rt {
 	mobj *module ;       /* the "conformance" module, cached: same handle on every import */
 	int64_t finalized ;  /* objects freed so far */
 	int64_t live ;       /* objects alive now */
+	int64_t produced ;   /* values the last generator made */
 } ;
 
 
@@ -129,6 +134,7 @@ static void obj_unref(mobj *o){
 	size_t i ;
 	switch (o->kind){
 		case M_COUNTER:
+		case M_ITER:
 			obj_unref(o->items) ;
 			break ;
 		case M_MODULE:
@@ -384,7 +390,8 @@ static ugly_status f_echo(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *re
 
 
 static const char *kind_of(const mval *v){
-	static const char *objs[] = { "module", "function", "counter", "list", "class", "point", "exception", "proxy", "kwbox" } ;
+	static const char *objs[] = { "module", "function", "counter", "list", "class", "point", "exception", "proxy", "kwbox",
+		"iterator", "generator" } ;
 	switch (v->kind){
 		case UGLY_NULL: return "null" ;
 		case UGLY_BOOL: return "bool" ;
@@ -588,6 +595,239 @@ static ugly_status f_kw(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret)
 }
 
 
+/* ---------------------------------------------------------------- */
+/* Iteration: the mock's own, and over foreign iterables            */
+/* ---------------------------------------------------------------- */
+
+/*
+ * An iterator over xs: a new one over a list, the value itself for an
+ * iterator or a generator, and for a foreign value a proxy of the iterator
+ * its language gives (ugly_iter).
+ */
+static ugly_status iter_open(ugly_ctx *ctx, mock_rt *m, const mval *xs, mobj **out){
+	*out = NULL ;
+	if (xs->kind == UGLY_HANDLE){
+		mobj *o = xs->as.o ;
+		switch (o->kind){
+			case M_LIST: {
+				mobj *it = obj_new(m, M_ITER) ;
+				o->refs++ ;
+				it->items = o ;
+				*out = it ;
+				return UGLY_OK ;
+			}
+			case M_ITER:
+			case M_GEN:
+				o->refs++ ;
+				*out = o ;
+				return UGLY_OK ;
+			case M_PROXY: {
+				ugly_handle h ;
+				ugly_status st = ugly_iter(ctx, o->h, &h) ;
+				if (st != UGLY_OK){
+					return st ;
+				}
+				mobj *p = obj_new(m, M_PROXY) ;
+				p->h = h ;
+				*out = p ;
+				return UGLY_OK ;
+			}
+			default:
+				break ;
+		}
+	}
+	return fail(ctx, m, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not iterable") ;
+}
+
+
+/* The next value of an iterator from iter_open; *done at the end. */
+static ugly_status iter_step(ugly_ctx *ctx, mock_rt *m, mobj *it, mval *out, bool *done){
+	*out = mnull() ;
+	*done = false ;
+	switch (it->kind){
+		case M_ITER:
+			if ((uint64_t)it->count >= it->items->n){
+				*done = true ;
+			}
+			else {
+				*out = mval_copy(&it->items->vals[it->count++]) ;
+			}
+			return UGLY_OK ;
+		case M_GEN:
+			if ((it->limit >= 0)&&(it->count >= it->limit)){
+				if (it->fails){
+					it->fails = false ;          /* like a generator that raised: it's over */
+					mobj *e = obj_new(m, M_EXC) ;
+					e->type = strdup("ConformanceError") ;
+					e->message = strdup("fail_after") ;
+					return ugly_raise_native(ctx, m->urt, e->type, e->message, e, (uintptr_t)e) ;
+				}
+				*done = true ;
+				return UGLY_OK ;
+			}
+			m->produced++ ;
+			*out = mint(it->count++) ;
+			return UGLY_OK ;
+		case M_PROXY: {
+			ugly_val v ;
+			size_t got = 0 ;
+			ugly_status st = ugly_next(ctx, it->h, UGLY_ANY, &v, 1, &got) ;
+			if ((st != UGLY_OK)||(got == 0)){
+				*done = (got == 0) ;
+				return st ;
+			}
+			st = to_native(ctx, m, v, out) ;
+			ugly_val_release(ctx, &v) ;
+			return st ;
+		}
+		default:
+			return fail(ctx, m, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not an iterator") ;
+	}
+}
+
+
+static ugly_status make_gen(mock_rt *m, int64_t limit, bool fails, mval *ret){
+	mobj *g = obj_new(m, M_GEN) ;
+	g->limit = limit ;
+	g->fails = fails ;
+	m->produced = 0 ;
+	*ret = mobjval(g) ;
+	return UGLY_OK ;
+}
+
+
+/* count_to(n): 0..n-1, made one at a time as they're asked for. */
+static ugly_status f_count_to(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	ARGS(1) ;
+	mval k ;
+	ugly_status st = coerce(ctx, m, &a[0], UGLY_INT, &k) ;
+	return (st == UGLY_OK ? make_gen(m, k.as.i, false, ret) : st) ;
+}
+
+
+/* naturals(): 0, 1, 2... without end. */
+static ugly_status f_naturals(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	(void)a ;
+	ARGS(0) ;
+	return make_gen(m, -1, false, ret) ;
+}
+
+
+/* fail_after(n): 0..n-1, then raises ConformanceError. */
+static ugly_status f_fail_after(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	ARGS(1) ;
+	mval k ;
+	ugly_status st = coerce(ctx, m, &a[0], UGLY_INT, &k) ;
+	return (st == UGLY_OK ? make_gen(m, k.as.i, true, ret) : st) ;
+}
+
+
+/* produced(): how many values the last generator made. */
+static ugly_status f_produced(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	(void)a ;
+	ARGS(0) ;
+	*ret = mint(m->produced) ;
+	return UGLY_OK ;
+}
+
+
+/* sum_iter(xs): the sum of what the mock's loop gets from xs. */
+static ugly_status f_sum_iter(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	ARGS(1) ;
+	mobj *it ;
+	ugly_status st = iter_open(ctx, m, &a[0], &it) ;
+	int64_t sum = 0 ;
+	while (st == UGLY_OK){
+		mval v, k ;
+		bool done ;
+		if (((st = iter_step(ctx, m, it, &v, &done)) != UGLY_OK)||(done)){
+			break ;
+		}
+		st = coerce(ctx, m, &v, UGLY_INT, &k) ;
+		mval_free(&v) ;
+		if (st == UGLY_OK){
+			sum += k.as.i ;
+		}
+	}
+	if (it != NULL){
+		obj_unref(it) ;
+	}
+	if (st == UGLY_OK){
+		*ret = mint(sum) ;
+	}
+	return st ;
+}
+
+
+/* take_iter(xs, n): a list of the first n values of xs; the loop stops there. */
+static ugly_status f_take_iter(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	ARGS(2) ;
+	mval k ;
+	mobj *it = NULL ;
+	ugly_status st = coerce(ctx, m, &a[1], UGLY_INT, &k) ;
+	if (st == UGLY_OK){
+		st = iter_open(ctx, m, &a[0], &it) ;
+	}
+	mobj *l = obj_new(m, M_LIST) ;
+	while ((st == UGLY_OK)&&((int64_t)l->n < k.as.i)){
+		mval v ;
+		bool done ;
+		if (((st = iter_step(ctx, m, it, &v, &done)) != UGLY_OK)||(done)){
+			break ;
+		}
+		list_push(l, v) ;
+	}
+	if (it != NULL){
+		obj_unref(it) ;
+	}
+	if (st != UGLY_OK){
+		obj_unref(l) ;
+		return st ;
+	}
+	*ret = mobjval(l) ;
+	return UGLY_OK ;
+}
+
+
+/* The mock's stringification: counter(<count>) for a counter, the kind's name for other objects. */
+static ugly_status mock_str(ugly_ctx *ctx, mock_rt *m, const mval *v, mval *out){
+	char buf[64] ;
+	switch (v->kind){
+		case UGLY_NULL: *out = mstr(UGLY_STRING, "null", 4) ; return UGLY_OK ;
+		case UGLY_BOOL: *out = (v->as.b ? mstr(UGLY_STRING, "true", 4) : mstr(UGLY_STRING, "false", 5)) ; return UGLY_OK ;
+		case UGLY_HANDLE:
+			break ;
+		default:
+			return coerce(ctx, m, v, UGLY_STRING, out) ;
+	}
+	mobj *o = v->as.o ;
+	if (o->kind == M_PROXY){
+		ugly_val s ;
+		ugly_status st = ugly_to_string(ctx, o->h, &s) ;
+		if (st == UGLY_OK){
+			st = to_native(ctx, m, s, out) ;
+			ugly_val_release(ctx, &s) ;
+		}
+		return st ;
+	}
+	if (o->kind == M_COUNTER){
+		int len = snprintf(buf, sizeof(buf), "counter(%lld)", (long long)o->count) ;
+		*out = mstr(UGLY_STRING, buf, (size_t)len) ;
+		return UGLY_OK ;
+	}
+	const char *k = kind_of(v) ;
+	*out = mstr(UGLY_STRING, k, strlen(k)) ;
+	return UGLY_OK ;
+}
+
+
+/* stringify(x): x as the mock makes it a string. */
+static ugly_status f_stringify(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	ARGS(1) ;
+	return mock_str(ctx, m, &a[0], ret) ;
+}
+
+
 static const struct { const char *name ; mock_fn fn ; } functions[] = {
 	{ "kw", f_kw },
 	{ "echo", f_echo },
@@ -602,6 +842,13 @@ static const struct { const char *name ; mock_fn fn ; } functions[] = {
 	{ "rethrow", f_rethrow },
 	{ "finalized", f_finalized },
 	{ "inits", f_inits },
+	{ "count_to", f_count_to },
+	{ "naturals", f_naturals },
+	{ "fail_after", f_fail_after },
+	{ "produced", f_produced },
+	{ "sum_iter", f_sum_iter },
+	{ "take_iter", f_take_iter },
+	{ "stringify", f_stringify },
 } ;
 #define NFUNCTIONS (sizeof(functions) / sizeof(functions[0]))
 
@@ -697,12 +944,14 @@ static ugly_status mock_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t
 		UGLY_TRAIT_MEMBERS,          /* module */
 		UGLY_TRAIT_CALLABLE,         /* function */
 		UGLY_TRAIT_MEMBERS,          /* counter */
-		UGLY_TRAIT_ELEMENTS,         /* list */
+		UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_ITERABLE,     /* list */
 		UGLY_TRAIT_INSTANTIABLE,     /* class */
 		UGLY_TRAIT_MEMBERS,          /* point */
 		UGLY_TRAIT_MEMBERS,          /* exception */
 		0,                           /* proxy: never exported */
-		UGLY_TRAIT_MEMBERS           /* kwbox */
+		UGLY_TRAIT_MEMBERS,          /* kwbox */
+		UGLY_TRAIT_ITERABLE,         /* iterator */
+		UGLY_TRAIT_ITERABLE          /* generator */
 	} ;
 	*traits = t[o->kind] ;
 	mval v = mobjval(o) ;
@@ -795,11 +1044,15 @@ static ugly_status mock_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, con
 static ugly_status mock_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	(void)rt ;
 	mobj *o = ref ;
-	ugly_val names[16] ;
+	ugly_val fixed[2], *names = fixed ;
 	size_t n = 0, i ;
 	switch (o->kind){
 		case M_MODULE:
-			for (i = 0 ; (i < o->n)&&(n < 16) ; i++){
+			names = calloc(o->n + 1, sizeof(ugly_val)) ;
+			if (names == NULL){
+				return UGLY_ERR_NOMEM ;
+			}
+			for (i = 0 ; i < o->n ; i++){
 				const char *s = o->vals[i].as.o->name ;
 				names[n++] = ugly_str(s, strlen(s)) ;
 			}
@@ -811,7 +1064,11 @@ static ugly_status mock_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly
 		default:
 			return UGLY_ERR_NOT_CAPABLE ;
 	}
-	return ugly_list_new(ctx, names, n, out) ;
+	ugly_status st = ugly_list_new(ctx, names, n, out) ;
+	if (names != fixed){
+		free(names) ;
+	}
+	return st ;
 }
 
 
@@ -1111,6 +1368,65 @@ static ugly_status mock_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ug
 }
 
 
+static ugly_status mock_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	mock_rt *m = M(rt) ;
+	mval xs = mobjval(ref), v = mnull() ;
+	mobj *it ;
+	ugly_status st = iter_open(ctx, m, &xs, &it) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	ugly_val h ;
+	v = mobjval(it) ;
+	st = from_native(ctx, m, &v, UGLY_HANDLE, &h) ;
+	mval_free(&v) ;
+	if (st == UGLY_OK){
+		*out = h.as.h ;
+	}
+	return st ;
+}
+
+
+/* Steps the iterator up to max times; never ahead of what was asked. */
+static ugly_status mock_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max,
+	size_t *got){
+
+	mock_rt *m = M(rt) ;
+	mobj *it = ref ;
+	*got = 0 ;
+	if ((it->kind != M_ITER)&&(it->kind != M_GEN)){
+		return fail(ctx, m, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not an iterator") ;
+	}
+	while (*got < max){
+		mval v ;
+		bool done ;
+		ugly_status st = iter_step(ctx, m, it, &v, &done) ;
+		if ((st != UGLY_OK)||(done)){
+			return st ;
+		}
+		st = from_native(ctx, m, &v, want, &out[*got]) ;
+		mval_free(&v) ;
+		if (st != UGLY_OK){
+			return st ;
+		}
+		(*got)++ ;
+	}
+	return UGLY_OK ;
+}
+
+
+static ugly_status mock_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	mock_rt *m = M(rt) ;
+	mval v = mobjval(ref), s ;
+	ugly_status st = mock_str(ctx, m, &v, &s) ;
+	if (st == UGLY_OK){
+		st = from_native(ctx, m, &s, UGLY_ANY, out) ;
+		mval_free(&s) ;
+	}
+	return st ;
+}
+
+
 static void mock_release(ugly_rt *rt, void *ref){
 	(void)rt ;
 	obj_unref(ref) ;
@@ -1143,6 +1459,9 @@ static const ugly_plugin plugin = {
 	.invoke = mock_invoke,
 	.new_instance = mock_new_instance,
 	.release = mock_release,
+	.iter = mock_iter,
+	.next = mock_next,
+	.to_string = mock_to_string,
 } ;
 
 
