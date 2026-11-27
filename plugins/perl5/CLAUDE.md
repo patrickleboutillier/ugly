@@ -1,0 +1,19 @@
+# The Perl 5 plugin
+
+Notes for Claude Code, loaded when working in this directory. Shared rules: `plugins/CLAUDE.md` and the root `CLAUDE.md`.
+
+**`perl5/`** is Perl 5 (5.34 here, MULTIPLICITY), written in C against the perl API with no XS generator.
+
+- `ENTER_PERL`/`LEAVE_PERL` set and restore `PERL_GET_CONTEXT` on every entry, and are a scope for temporaries (`ENTER; SAVETMPS` ... `FREETMPS; LEAVE`): a caller that isn't Perl has none around the entry.
+- Refs are SVs. Foreign values are `Ugly::Proxy`: a blessed scalar ref holding the handle, cached per handle. Its Perl side (overloads, `AUTOLOAD`, complete tied hash and array, and `Ugly::import`) is `helper.pm`, turned into the C string `helper_pm` at build time by `embed.pl` and defined in every interpreter; the XS functions are registered with `newXS`.
+- `use Ugly python => 'json'` binds a module to a package (`bind_module`): callable members become subs on first use (`AUTOLOAD`), classes nested packages with `new`. An `AUTOLOAD` closure sees `$Ugly::AUTOLOAD`, the package it was compiled in, not the target's.
+- Modules and classes are `Ugly::Package` objects (a scalar ref holding the package name). Their identity is the stash, members are subs and nested packages, and `new` instantiates.
+- Calls run in list context and collapse (`call_perl`). Never `PUSHMARK` before `eval_sv`: it pushes its own mark.
+- The binding (`binding/`: `lib/Ugly.pm`, `auto/Ugly/Ugly.so`, `boot_Ugly`) attaches to the running perl. `END { Ugly::_teardown() }` tears down. Its test sets `PERL_DESTRUCT_LEVEL=2`, so the host frees everything and valgrind measures only UGLY.
+
+## Embedding perl: what v1 taught
+
+- Every entry into an embedded perl must save and restore `PERL_GET_CONTEXT`.
+- Call `PERL_SYS_INIT3` once per process, only if `PL_curinterp` is NULL. **Never** call `PERL_SYS_TERM`: after it, perl can't start again in the same process (`perl_alloc` exits with EBADF).
+- Delete a runtime with `perl_destruct`/`perl_free` under its context.
+- `call_sv` mortalizes its arguments. Whatever wraps an RV must own exactly one reference (v1's `wrap` took two, so objects were never DESTROYed).

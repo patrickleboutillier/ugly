@@ -1,0 +1,16 @@
+# Tests, benchmarks, CI and the build
+
+Notes for Claude Code, loaded when working in this directory. The project's rules are in the root `CLAUDE.md`.
+
+**`tests/`** is the conformance suite: 10 C programs (the 8 groups of contract §9, `options` and `iterators`) plus `conformance.h` (TAP and fixture), and `pairwise.c`.
+
+- Meson registers each program once per plugin in `test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair of different plugins (suite `pairwise`, env `UGLY_TEST_PEER`).
+- Fixtures are each plugin's `conformance` module, in `tests/lua/` and `tests/python/` (the mock's are built in). The spec is in contract §9.
+- Expectations that depend on the language are "exact or refused". Tests that need a capability a plugin lacks report a SKIP; they never drop checks silently.
+
+- **Benchmarks** (`tests/bench.c`, a Meson `benchmark()`: `meson test -C build --benchmark --verbose`): every language in one process; C → L, L natively (`bench_self`), the A → B matrix (`bench(f, n)` fixtures), and thread scaling. It runs without `-Xcheck:jni` (`UGLY_JAVA_CHECK` empty). Results and what they found are in `doc/benchmarks.md`; update it when performance changes.
+- **`examples/`**: programs built and run as tests by exit status, which README quotes. `haskell/` uses music-diatonic (Hackage) from Python and Lua. `haproxy/` is the HAProxy proof of concept (`poc.lua`, `policy.py`, `haproxy.cfg` with `@PORT@`/`@LUA@`/`@NBTHREAD@`, and `run_poc.py`, TAP): run when `haproxy` is installed, against the binding for HAProxy's Lua (from `haproxy -vv`), with `lua-load` on 1 and 4 threads and `lua-load-per-thread` on 4, plus `lua-load` on 4 in master-worker mode (`-W`) with Python started at load (`at-load`, `UGLY_POC_AT_LOAD`); suite `haproxy`, kept out of valgrind and helgrind. `python_from_lua.lua` is a plain Lua script using Python's standard library through the binding (README's lead example). `polyglot.c` is a C host using `ugly_rt_get`.
+- **Binding tests** (suite `bindings`): `tests/python/test_binding.py` runs under the `python3` that Meson found, and `tests/lua/test_binding.lua` under `lua5.4`, and `tests/java/test_binding.java` under `java` (suites `bindings` and `jvm`). All are TAP, and the Lua one ends with `os.exit(code, true)`, so the state closes and the binding tears down.
+
+- **CI** (`.github/workflows/ci.yml`): all languages on Ubuntu 22.04 and 24.04 (`-Dwerror=true`, test, valgrind, `valgrindghc` on suite `ghc`, helgrind on `threads-*`), one job per disabled language, and a core-plus-mock job. JDK 21 is the runner's Temurin (`JAVA_HOME_21_X64`); .NET 10 comes from `actions/setup-dotnet`. Binding tests get the built plugins in `UGLY_TEST_LANGS` and SKIP checks whose language isn't built.
+- **Build:** Meson (≥ 0.61) and Ninja, out-of-tree, with `-Wall` and no warnings. `meson test -C build --setup valgrind` fails on memory errors and on definite, indirect or possible leaks. `tests/valgrind.supp` suppresses only the "possibly lost" live objects of CPython and the GHC RTS's threads. GHC tests (suite `ghc`) use `--setup valgrindghc`. Tests set `PYTHONMALLOC=malloc` and `PYTHONDONTWRITEBYTECODE=1`.
