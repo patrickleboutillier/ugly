@@ -148,10 +148,10 @@ The other way round, a Haskell program uses the other languages with
 `Ugly.withUgly` ([tests/haskell/TestBinding.hs](tests/haskell/TestBinding.hs)):
 
 ```haskell
-main = Ugly.withUgly $ do
+main = Ugly.withUgly $ do                           -- with OverloadedStrings
   json <- Ugly.module_ "python" "json"
-  xs <- Ugly.invoke json "loads" [Ugly.toValue "[1, 2, 3]"] >>= Ugly.fromValue
-  print (sum (xs :: [Int]))                            -- 6: a Python list as a [Int]
+  xs <- Ugly.invoke json "loads" ["[1, 2, 3]"]      -- the result as the type wanted
+  print (sum (xs :: [Int]))                         -- 6: a Python list as a [Int]
 ```
 
 Haskell's guide is [doc/languages/haskell.md](doc/languages/haskell.md).

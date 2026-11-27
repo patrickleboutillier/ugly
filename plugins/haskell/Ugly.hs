@@ -23,9 +23,9 @@ module Ugly
     -- * Values
   , Value (..), Foreign, ToUgly (..), FromUgly, toValue, fromValue
     -- * Operations on a foreign value
-  , call, invoke, get, index, size, members, typeOf
+  , call, call_, invoke, invoke_, get, index, size, members, typeOf
     -- * Any callable value, Haskell's own or foreign
-  , callValue
+  , callValue, callValue_
     -- * Errors
   , ForeignError, errorStatus, errorLanguage, errorType, errorMessage, errorPayload
   , UglyException, uglyToException, uglyFromException, exceptionValue, rethrow
@@ -34,7 +34,8 @@ module Ugly
 import Control.Exception (bracket_, throwIO, ErrorCall (..))
 
 import Ugly.Marshal
-import Ugly.Value
+import Ugly.Value hiding (callValue)
+import qualified Ugly.Value as V
 
 -- | Runs a program's code with UGLY: registers the plugin, attaches to the
 -- program's own runtime, and detaches at the end (nested uses are fine).
@@ -43,10 +44,11 @@ import Ugly.Value
 --
 -- > ghc -dynamic -threaded -package-db <libdir>/ugly/haskell/package.db -package ugly Main.hs
 --
+-- > {-# LANGUAGE OverloadedStrings #-}
 -- > main = Ugly.withUgly $ do
 -- >   json <- Ugly.module_ "python" "json"
--- >   s <- Ugly.invoke json "dumps" [Ugly.toValue [1, 2, 3 :: Int]]
--- >   putStrLn =<< Ugly.fromValue s
+-- >   xs <- Ugly.invoke json "loads" ["[1, 2, 3]"]
+-- >   print (sum (xs :: [Int]))
 --
 -- Other languages start on first use, on the calling thread (a runtime
 -- bound to a thread, Lua's, must then be used from that one).
@@ -61,29 +63,52 @@ module_ lang name = do
     VForeign f -> return f
     _ -> throwIO (ErrorCall ("ugly: " ++ lang ++ " module " ++ name ++ " isn't a foreign value"))
 
--- | Code in another language, evaluated: ugly.eval(lang, code).
-eval :: String -> String -> IO Value
-eval = evalIn
+-- Results: every operation returns the type its caller wants ('FromUgly':
+-- a [Int], a String, a Foreign, or the Value itself), converted as an
+-- argument would be; a refusal is a TypeError. The ones ending in _ drop
+-- the result, for a call made for its effect (no type to infer).
+--
+-- Arguments: a list of Values. With OverloadedStrings, string and number
+-- literals are Values ("x", 2, -1.5); anything else goes through toValue.
 
+-- | Code in another language, evaluated: ugly.eval(lang, code).
+eval :: FromUgly r => String -> String -> IO r
+eval lang code = evalIn lang code >>= fromValue
+
+-- | Any Haskell value as an argument ('ToUgly'): a function, a list, a
+-- value of a type a module exports.
 toValue :: ToUgly a => a -> Value
 toValue = toUgly
 
 -- | Calls it with these arguments.
-call :: Foreign -> [Value] -> IO Value
-call = foreignCall
+call :: FromUgly r => Foreign -> [Value] -> IO r
+call f args = foreignCall f args >>= fromValue
+
+call_ :: Foreign -> [Value] -> IO ()
+call_ f args = () <$ foreignCall f args
 
 -- | Calls its method: in its own language's terms (a Python method, a Lua
 -- function in its table).
-invoke :: Foreign -> String -> [Value] -> IO Value
-invoke = foreignInvoke
+invoke :: FromUgly r => Foreign -> String -> [Value] -> IO r
+invoke f m args = foreignInvoke f m args >>= fromValue
+
+invoke_ :: Foreign -> String -> [Value] -> IO ()
+invoke_ f m args = () <$ foreignInvoke f m args
 
 -- | A member.
-get :: Foreign -> String -> IO Value
-get = foreignGet
+get :: FromUgly r => Foreign -> String -> IO r
+get f name = foreignGet f name >>= fromValue
 
 -- | An element (from 0).
-index :: Foreign -> Int -> IO Value
-index = foreignIndex
+index :: FromUgly r => Foreign -> Int -> IO r
+index f i = foreignIndex f i >>= fromValue
+
+-- | Calls any callable Value, Haskell's own or foreign.
+callValue :: FromUgly r => Value -> [Value] -> IO r
+callValue v args = V.callValue v args >>= fromValue
+
+callValue_ :: Value -> [Value] -> IO ()
+callValue_ v args = () <$ V.callValue v args
 
 -- | Its number of elements.
 size :: Foreign -> IO Int
