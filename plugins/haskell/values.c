@@ -1,7 +1,7 @@
 /*
  * The Haskell plugin's values and boxes, until it joins the conformance
  * suite: every kind of value in the test module Smoke, read back
- * with each 'want', by Haskell's rules (doc/haskell-bridge.md): primitives
+ * with each 'want', by Haskell's rules (doc/languages/haskell.md): primitives
  * by value, everything else boxed, read-only, lazy where Haskell is, and
  * exceptions raised where a value is forced.
  */

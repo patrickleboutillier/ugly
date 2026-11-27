@@ -177,7 +177,7 @@ lines of C, with no interpreter in the way: read it first.
 Every interpreter can find a module by name, list an object's members and
 call a function with whatever arguments arrive. A compiled language has
 none of that at run time. Haskell's plugin
-([doc/haskell-bridge.md](haskell-bridge.md)) moved it to compile time, and
+([doc/languages/haskell.md](languages/haskell.md)) moved it to compile time, and
 the shape should carry over to the next one:
 
 - **A module is a library built for UGLY.** An export module, written by

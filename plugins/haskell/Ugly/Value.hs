@@ -23,7 +23,7 @@
 -- ('Collect'): pure, through unsafePerformIO, as a foreign import of a C
 -- function may be declared pure, unless its result is in IO.
 --
--- The choices are doc/haskell-bridge.md's "Decided": integers out of range
+-- The choices are doc/languages/haskell.md's "Design choices": integers out of range
 -- are refused, never wrapped; Maybe is flattened unless Just x is itself
 -- null.
 module Ugly.Value
