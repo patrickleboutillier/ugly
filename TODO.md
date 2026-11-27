@@ -97,22 +97,6 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   doesn't state yet.
 - [ ] **Julia** (`jl_init`): numerical work, the same once-per-process shape
   as Python.
-- [ ] **Haskell** (in progress): the language that tests the contract's
-  assumptions most. The plan is [doc/haskell-bridge.md](doc/haskell-bridge.md):
-  GHC's RTS in the host's process, modules as compiled export tables that
-  Template Haskell generates, polymorphic functions expanded into one
-  overload per instance and chosen at the call by argument types, `hint`
-  and `want`. In `plugins/haskell/`: the skeleton, values and boxes,
-  export tables and calls, module libraries loaded from a path, and
-  foreign values in Haskell, `hint` and `want` for overloads, and the
-  conformance suite (all 9 groups, pairwise with every language), and
-  music-diatonic as an example (from Python and Lua), and the binding (a
-  Haskell program as host: `Ugly.withUgly`) are done; next is the
-  language guide (`doc/languages/haskell.md`) and Haskell's column in
-  contract §10. The test case is the author's
-  own `music-diatonic` (Hackage 0.1.2), whose sources wait in
-  `stuff/haskell/` with the spikes (local, re-fetch from Hackage if
-  missing).
 - [ ] **Bindings for compiled languages**, with no plugin: a safe Rust crate,
   a C++ header, Go and Zig wrappers over `ugly.h`. Cheap, and they bring
   every embedded language to programs in those languages.
@@ -164,6 +148,15 @@ contract and in the pull requests.
   C# on the CLR through `hostfxr` (any thread, keyword arguments as named
   arguments, hints), and its binding (`Ugly.dll` in any .NET program,
   through `dynamic`).
+- **Haskell** (GHC, 2026-11-26): the language that tested the contract's
+  assumptions most, built as [doc/haskell-bridge.md](doc/haskell-bridge.md)
+  planned it. Modules are compiled export tables Template Haskell
+  generates, in module libraries on a path; polymorphic functions are
+  expanded per instance and chosen at the call (a hint is a type
+  application, `want` picks by result); foreign values and callbacks in
+  Haskell; the conformance suite and pairwise; music-diatonic from Python
+  and Lua; the binding (`Ugly.withUgly`, a Haskell program as host). Guide:
+  [doc/languages/haskell.md](doc/languages/haskell.md).
 - **Hosts:** HAProxy, in `lua-load-per-thread` and `lua-load` on several
   threads, and in master-worker mode with Python started in the master;
   options for runtimes created on demand (`ugly_configure`). Forking after
