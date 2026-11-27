@@ -87,6 +87,10 @@ lines of C, with no interpreter in the way: read it first.
     and only those are their own iterators, and only those are disposed of
     at their last release: closing every disposable the core lets go of
     would close files.
+  - Batching across a costly boundary (JNI) needs the count of values made
+    before an exception to survive it: Java's `Bridge.next` fills an array
+    and bumps a one-element counter as it goes, and the C side reads it
+    after clearing the exception, converts those values, then rethrows.
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the

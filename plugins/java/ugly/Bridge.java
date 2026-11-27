@@ -14,11 +14,14 @@ import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.BaseStream;
 
 /**
  * The Java side of the plugin: the handle protocol over reflection. The C
@@ -35,7 +38,7 @@ public final class Bridge {
 	private Bridge(){ }
 
 	/* Traits, as in ugly.h. */
-	static final int MEMBERS = 1, ELEMENTS = 2, CALLABLE = 4, INSTANTIABLE = 8;
+	static final int MEMBERS = 1, ELEMENTS = 2, CALLABLE = 4, INSTANTIABLE = 8, ITERABLE = 32;
 
 	public static final class NotFound extends RuntimeException {
 		private static final long serialVersionUID = 1L;
@@ -77,11 +80,17 @@ public final class Bridge {
 		return e[0];
 	}
 
-	static synchronized void releaseId(Object o){
-		long[] e = ids.get(o);
-		if ((e != null)&&(--e[1] <= 0)){
-			ids.remove(o);
+	/** The last release of an iterator over a stream (iter) closes the stream, as try-with-resources would. */
+	static void releaseId(Object o){
+		boolean last = false;
+		synchronized (Bridge.class){
+			long[] e = ids.get(o);
+			if ((e != null)&&(--e[1] <= 0)){
+				ids.remove(o);
+				last = true;
+			}
 		}
+		if (last && (o instanceof StreamIterator)) ((StreamIterator)o).close();     // outside the lock: it runs onClose handlers
 	}
 
 	/* Static methods as callable values: one per (class, name), so they have a stable identity. */
@@ -110,7 +119,59 @@ public final class Bridge {
 		int t = MEMBERS;
 		if (o.getClass().isArray()||(o instanceof List)) t |= ELEMENTS;
 		if (sam(o.getClass()) != null) t |= CALLABLE;
+		if ((o instanceof Iterable)||(o instanceof Iterator)||(o instanceof BaseStream)||o.getClass().isArray()) t |= ITERABLE;
 		return t;
+	}
+
+	/* ---------------------------------------------------------------- */
+	/* Iteration (contract §2)                                          */
+	/* ---------------------------------------------------------------- */
+
+	/** An iterator over a stream, which UGLY closes when its last reference goes. */
+	static final class StreamIterator implements Iterator<Object>, AutoCloseable {
+		final BaseStream<?, ?> stream;
+		final Iterator<?> it;
+		StreamIterator(BaseStream<?, ?> s){ stream = s ; it = s.iterator() ; }
+		@Override public boolean hasNext(){ return it.hasNext(); }
+		@Override public Object next(){ return it.next(); }
+		@Override public void close(){ stream.close(); }
+	}
+
+	/** An array's elements (a primitive one's, boxed). */
+	static final class ArrayIterator implements Iterator<Object> {
+		final Object array;
+		int i = 0;
+		ArrayIterator(Object a){ array = a ; }
+		@Override public boolean hasNext(){ return i < Array.getLength(array); }
+		@Override public Object next(){
+			if (! hasNext()) throw new NoSuchElementException();
+			return Array.get(array, i++);
+		}
+	}
+
+	/** What for-each takes, and what Java iterates besides: an Iterator is its own; Iterable.iterator(), arrays, streams. */
+	public static Object iter(Object o){
+		if (o instanceof Iterator) return o;
+		if (o instanceof Iterable) return ((Iterable<?>)o).iterator();
+		if (o instanceof BaseStream) return new StreamIterator((BaseStream<?, ?>)o);
+		if (o.getClass().isArray()) return new ArrayIterator(o);
+		throw new NotCapable("value is not iterable");
+	}
+
+	/**
+	 * Up to out.length steps of an iterator into out: hasNext() and next()
+	 * only as many times as asked. got[0] counts them as they come, so an
+	 * exception keeps the values before it.
+	 */
+	public static int next(Object it, Object[] out, int[] got){
+		if (! (it instanceof Iterator)) throw new NotCapable("value is not an iterator");
+		Iterator<?> i = (Iterator<?>)it;
+		int n = 0;
+		while ((n < out.length)&&i.hasNext()){
+			out[n] = i.next();
+			got[0] = ++n;
+		}
+		return n;
 	}
 
 	/**

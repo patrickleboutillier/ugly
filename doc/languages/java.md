@@ -51,11 +51,29 @@ Java has no operator overloading, so it's all methods:
 | `get("x")`, `set("x", v)` | members |
 | `get(i)`, `set(i, v)`, `length()` | elements, 0-based |
 | `names()`, `traits()` | member names; `UGLY_TRAIT_*` bits |
+| `iterator()`, for-each | the value's own iteration (`Foreign` is an `Iterable<Object>`) |
+| `toString()` | its own language's string for it |
 
 Results are `Object`: cast them. A foreign value passed to a Java method
 that expects an interface becomes a dynamic proxy for it: its single
 abstract method calls the value, and its other methods invoke the value's
 by name. So a Lua or Python function works as a `Function<Object, Object>`.
+
+**Iteration** (contract §2): `Foreign` is an `Iterable<Object>`, so
+for-each, `forEach` and anything taking an `Iterable` run the foreign
+language's own iteration, one value per step: a Python generator runs only
+as far as the loop goes, and `break` on an infinite one is fine. A Lua
+iterator function works as is (`string.gmatch`). A value its language
+doesn't iterate but that has elements (a Lua table) is walked by index.
+`toString()` is the foreign language's string (Python's `str()`).
+
+```java
+Foreign itertools = (Foreign)Ugly.module("python", "itertools");
+for (Object x : (Foreign)itertools.invoke("count", 1)){     // an infinite Python iterator
+	if ((Long)x > 3) break;
+	System.out.println(x);                                    // 1, 2, 3
+}
+```
 
 ## Java values elsewhere
 
@@ -75,6 +93,13 @@ by name. So a Lua or Python function works as a `Function<Object, Object>`.
   class.
 - A class with a public constructor is a `class` (INSTANTIABLE); one without
   is a `module` of its static members. Public nested classes are members.
+- Iterable is what for-each takes (`Iterable`, arrays), and what Java
+  iterates besides: an `Iterator` (its own iterator), and streams
+  (`BaseStream`). A `Map` isn't, as in Java. Each step is `hasNext()` and
+  `next()`, only as many times as asked; a batch crosses JNI once per 256
+  values. Releasing the iterator over a stream closes the stream
+  (`onClose` handlers run), as try-with-resources would.
+- `ugly_to_string` is `toString()`.
 
 ## Java as a guest
 
@@ -132,7 +157,10 @@ ugly.configure("java", classpath=["lib/a.jar"], options=["-Xmx64m"])
   Arguments narrow to `int`, `short`... parameters only when the value fits.
 - **Releases follow the GC.** A `Foreign` releases its handle when it's
   collected (a `Cleaner`), so foreign objects live until the JVM's next
-  collections.
+  collections. That goes for a foreign iterator a for-each left early too:
+  a Python generator is closed when its `Foreign` is collected.
+- **A stream is iterated once**, as in Java: a second `ugly_iter` on it is
+  Java's `IllegalStateException`.
 - **Overloads.** An INT argument is a `Long`, so `f(long)` beats `f(int)`,
   and both beat `f(double)` and `f(Object)`. When the choice matters, give
   a hint.

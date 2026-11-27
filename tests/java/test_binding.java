@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 31;
+	static final int PLAN = 37;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -143,6 +143,28 @@ public class test_binding {
 			catch (ForeignException e){
 				ok(e.getMessage().contains("takes no call options"), "keyword arguments to Lua are refused");
 			}
+		});
+
+		check("iteration", () -> {
+			Foreign itertools = (Foreign)Ugly.module("python", "itertools");
+			List<Long> firsts = new java.util.ArrayList<>();
+			for (Object x : (Foreign)itertools.invoke("count", 1)){
+				if ((Long)x > 3) break;
+				firsts.add((Long)x);
+			}
+			ok(firsts.equals(List.of(1L, 2L, 3L)), "for-each over an infinite Python iterator, left with break");
+			Foreign words = (Foreign)((Foreign)Ugly.module("lua", "string")).invoke("gmatch", "one two", "%a+");
+			List<Object> ws = new java.util.ArrayList<>();
+			words.forEach(ws::add);
+			ok(ws.equals(List.of("one", "two")), "forEach over a Lua iterator function (string.gmatch)");
+			Foreign squares = (Foreign)Ugly.eval("lua", "local t = {} for i = 1, 3 do t[i] = i * i end return t");
+			List<Object> sq = new java.util.ArrayList<>();
+			for (Object x : squares) sq.add(x);
+			ok(sq.equals(List.of(1L, 4L, 9L)), "a Lua table, which Lua doesn't iterate: walked by index");
+			Foreign py = (Foreign)Ugly.module("python", "conformance");
+			ok(Long.valueOf(10).equals(py.invoke("sum_iter", List.of(1L, 2L, 3L, 4L))), "Python's for over a Java List");
+			ok(Long.valueOf(3).equals(py.invoke("sum_iter", java.util.stream.Stream.of(1L, 2L))), "  ... and over a Java Stream");
+			ok("{'a': 1}".equals(Ugly.eval("python", "{'a': 1}").toString()), "toString() of a Foreign: Python's str()");
 		});
 
 		check("js", () -> {

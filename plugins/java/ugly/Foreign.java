@@ -3,14 +3,16 @@ package ugly;
 import java.lang.ref.Cleaner;
 import java.lang.ref.WeakReference;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 /**
  * A value from another language: one owned UGLY handle, released when this
  * object is collected. There is one Foreign per foreign value (== holds).
  * Its methods go through the core with that language's own rules.
  */
-public final class Foreign {
+public final class Foreign implements Iterable<Object> {
 	private static final Cleaner cleaner = Cleaner.create();
 	private static final Map<Long, WeakReference<Foreign>> cache = new HashMap<>();
 
@@ -78,9 +80,52 @@ public final class Foreign {
 		return Long.hashCode(handle);
 	}
 
+	/** Its own language's string for it (Python's str(), Lua's tostring); ugly.Foreign(n) for a value it has none for. */
 	@Override
 	public String toString(){
-		return "ugly.Foreign(" + handle + ")";
+		String s = toStr(handle);
+		return (s != null ? s : "ugly.Foreign(" + handle + ")");
+	}
+
+	/**
+	 * for-each, and anything taking an Iterable: the value's own iteration
+	 * (contract §2), one value per step, so a Python generator runs only as
+	 * far as the loop goes. A value its language doesn't iterate but that
+	 * has elements (a Lua table) is walked by index.
+	 */
+	@Override
+	@SuppressWarnings("unchecked")
+	public Iterator<Object> iterator(){
+		Object it = iter(handle);
+		if (it == null){
+			if ((traits() & Bridge.ELEMENTS) == 0) throw new UnsupportedOperationException("ugly: the foreign value is not iterable");
+			return new Iterator<Object>(){
+				int i = 0;
+				final int n = length();
+				@Override public boolean hasNext(){ return i < n; }
+				@Override public Object next(){
+					if (i >= n) throw new NoSuchElementException();
+					return get(i++);
+				}
+			};
+		}
+		if (it instanceof Iterator) return (Iterator<Object>)it;     // a Java iterator, come home
+		final Foreign f = (Foreign)it;
+		return new Iterator<Object>(){
+			final Object[] slot = new Object[1];
+			int state = 0;     // 0: not asked yet, 1: a value in slot, 2: the end
+			@Override public boolean hasNext(){
+				if (state == 0) state = (Foreign.next(f.handle, slot) ? 1 : 2);
+				return state == 1;
+			}
+			@Override public Object next(){
+				if (! hasNext()) throw new NoSuchElementException();
+				Object v = slot[0];
+				slot[0] = null;
+				state = 0;
+				return v;
+			}
+		};
 	}
 
 	/* Natives, registered by the plugin (RegisterNatives). */
@@ -102,4 +147,7 @@ public final class Foreign {
 	static native Object module(String lang, String name);
 	static native Object eval(String lang, String code);
 	static native void configure(String lang, String key, String value);
+	static native Object iter(long h);
+	static native boolean next(long h, Object[] slot);
+	static native String toStr(long h);
 }
