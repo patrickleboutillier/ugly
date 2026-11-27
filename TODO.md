@@ -135,7 +135,7 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 
 ## Done
 
-Released as 2.2.0 (the first release) through 2.6.0; details in the
+Released as 2.2.0 (the first release) through 2.7.0; details in the
 contract and in the pull requests.
 
 - **Languages:** QuickJS, Perl 5 (with namespace import and complete ties),
