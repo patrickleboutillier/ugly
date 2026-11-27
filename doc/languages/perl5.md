@@ -151,7 +151,8 @@ An error from another language is an `Ugly::Error` object with `type`,
 goes on unchanged, and `die $e->payload` rethrows the original exception.
 
 A Perl `die` going out has the object's class as its type (and its
-`message` field, if it's a hash), or `die` and the string. An error perl
+`message` field, if it's a hash), or `die` and the string. The message is
+text: a byte string that isn't UTF-8 already is read as Latin-1. An error perl
 itself raises while another language uses a Perl value (a store into a
 restricted hash, a tied `FETCH` that dies) is that operation's error, in
 the same way. An exception object whose `""` overload dies has its class's

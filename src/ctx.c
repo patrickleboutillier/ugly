@@ -136,6 +136,83 @@ ugly_status ctx_check(ugly_ctx *ctx){
 /* Errors                                                           */
 /* ---------------------------------------------------------------- */
 
+/*
+ * An error's text, as valid UTF-8 whatever it was given. Plugins build
+ * messages in fixed buffers, which cut a long one in the middle of a
+ * character, and some languages' strings are bytes (Lua's, Perl's): a
+ * language whose strings are strict (Python's, C#'s) would then fail to
+ * build its exception, and lose the error it was reporting. A sequence cut
+ * short by the end of the string is dropped; any other byte that isn't
+ * UTF-8 becomes U+FFFD.
+ */
+static size_t utf8_len(const unsigned char *s, size_t left){
+	unsigned char c = s[0] ;
+	size_t n = (c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0), i ;
+	if ((n == 0)||(n > left)){
+		return 0 ;
+	}
+	for (i = 1 ; i < n ; i++){
+		if ((s[i] & 0xC0) != 0x80){
+			return 0 ;
+		}
+	}
+	uint32_t cp = (n == 1 ? c : n == 2 ? (uint32_t)(c & 0x1F) : n == 3 ? (uint32_t)(c & 0x0F) : (uint32_t)(c & 0x07)) ;
+	for (i = 1 ; i < n ; i++){
+		cp = (cp << 6) | (s[i] & 0x3F) ;
+	}
+	/* No overlong forms, no surrogates, nothing past U+10FFFF. */
+	if (((n == 2)&&(cp < 0x80))||((n == 3)&&(cp < 0x800))||((n == 4)&&(cp < 0x10000))
+		||((cp >= 0xD800)&&(cp <= 0xDFFF))||(cp > 0x10FFFF)){
+		return 0 ;
+	}
+	return n ;
+}
+
+
+/* Whether s[0..left) is the start of a sequence that the end of the string cut. */
+static int utf8_cut(const unsigned char *s, size_t left){
+	unsigned char c = s[0] ;
+	size_t n = ((c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0), i ;
+	if ((n == 0)||(left >= n)){
+		return 0 ;
+	}
+	for (i = 1 ; i < left ; i++){
+		if ((s[i] & 0xC0) != 0x80){
+			return 0 ;
+		}
+	}
+	return 1 ;
+}
+
+
+static char *text_dup(const char *text){
+	const unsigned char *s = (const unsigned char *)(text != NULL ? text : "") ;
+	size_t len = strlen((const char *)s), i = 0, o = 0 ;
+	char *out = malloc(3 * len + 1) ;
+	if (out == NULL){
+		return NULL ;
+	}
+	while (i < len){
+		size_t n = utf8_len(s + i, len - i) ;
+		if (n > 0){
+			memcpy(out + o, s + i, n) ;
+			o += n ;
+			i += n ;
+		}
+		else if (utf8_cut(s + i, len - i)){
+			break ;
+		}
+		else {
+			memcpy(out + o, "\xEF\xBF\xBD", 3) ;
+			o += 3 ;
+			i++ ;
+		}
+	}
+	out[o] = '\0' ;
+	return out ;
+}
+
+
 ugly_error *error_new(ugly_status status, const char *language, const char *type, const char *message,
 	ugly_handle payload){
 
@@ -144,9 +221,9 @@ ugly_error *error_new(ugly_status status, const char *language, const char *type
 		return NULL ;
 	}
 	err->status = status ;
-	err->language = xstrdup(language) ;
-	err->type = xstrdup(type) ;
-	err->message = xstrdup(message) ;
+	err->language = text_dup(language) ;
+	err->type = text_dup(type) ;
+	err->message = text_dup(message) ;
 	err->payload = payload ;
 	return err ;
 }

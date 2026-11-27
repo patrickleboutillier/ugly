@@ -8,7 +8,7 @@ behind each item; what's done is listed at the end. The contract,
 
 A bug hunt over the core and the eight plugins, after 2.7.0. Each was
 confirmed by a repro unless marked *(by reading)*. Line numbers are 2.7.0's.
-The crashes, the leaks and the wrong results are fixed (under "Done").
+The crashes, the leaks, the wrong results and the lost errors are fixed (under "Done").
 
 ### Crashes: what's left
 
@@ -37,17 +37,12 @@ The thirteen are fixed (under "Done"). Seen while fixing them:
 - [ ] **Perl: `isa`, `can`, `DOES` and `VERSION`** on a proxy are Perl's
   own, not the foreign value's (Perl code calls them on any object).
 
-### Lost errors
-
-- [ ] **Messages cut mid-character, or not UTF-8.** Lua, Python, Perl and
-  JS cut messages at 511 bytes with `snprintf`, and Lua and Perl pass
-  bytes that aren't UTF-8. Python then raises `UnicodeDecodeError` instead
-  of `ugly.Error` (`raise_ugly`): type, language and payload are lost.
-  Sanitize once in the core (`error_new`), and decode leniently in Python.
-  (Haskell decodes leniently since the crash fixes.)
-
 ### Smaller
 
+- [ ] **Error messages are cut at 511 bytes** by the plugins' buffers
+  (Lua, Python, Perl, JS). The text is whole characters now, but a long
+  message loses its end: pass the language's own string to
+  `ugly_raise_native` instead of a copy in a buffer.
 - [ ] **Python embedded: buffered stdout is lost at exit** when piped
   (Python is never finalized). Flush in `py_rt_delete`, or document it.
 - [ ] **Python: a round-tripped exception loses its inner traceback**
@@ -335,5 +330,10 @@ contract and in the pull requests.
   CALLABLE, so calling it from Python or Lua constructs it; Lua keeps a
   callable class member's owner, as Python does (`this` for a JS function
   member); Python's `bool()` asks for a first element, not a length.
+- **Review fixes, lost errors** (2026-11-27): an error's language, type
+  and message are valid UTF-8 whatever they were made from (the core drops
+  a character cut by the end of the text and puts U+FFFD for other bytes
+  that aren't UTF-8), so Python no longer raises `UnicodeDecodeError` in
+  place of the error; a Perl `die` with Latin-1 text keeps its characters.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).
