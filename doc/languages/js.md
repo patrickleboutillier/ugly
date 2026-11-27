@@ -86,6 +86,12 @@ for (const x of itertools.count(1)) {      // an infinite Python iterator
 - Members are properties, own or inherited. Elements are arrays.
 - The type name is the constructor's name (`Object`, `Array`, a class's
   name), and `module` for a module namespace.
+- A function is CALLABLE and, when `new` works on it, INSTANTIABLE. A class
+  is INSTANTIABLE only, since JS refuses to call one: so calling it from a
+  language with no `new` constructs it (`Point(3, 4)` in Python or Lua). A
+  class is known by its source text; one compiled without it (`qjsc`
+  stripping sources) counts as a function, and can't be constructed that
+  way.
 - `invoke` calls with `this` bound to the object.
 - Iterable is what `for...of` takes: anything with a `Symbol.iterator`
   method (arrays, `Map`, `Set`, generators, iterators). `ugly_iter` calls

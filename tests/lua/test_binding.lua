@@ -101,6 +101,19 @@ ok(#words == 2 and words[1] == "one" and words[2] == "two", "a Lua iterator (str
 ok(tostring(c) == "counter(3)", "tostring(c) is Python's str(c): counter(3)")
 ok(tostring(builtins.dict) == "<class 'dict'>", "  ... and str() of a class: <class 'dict'>")
 
+-- A class that is callable too, got as a member, is the class and still knows its owner.
+local datetime_mod = ugly.module("python", "datetime")
+ok(datetime_mod.date(2026, 11, 27).year == 2026 and datetime_mod.date.today().year >= 2026,
+	"a Python class held as a member: called, and its own members")
+if (os.getenv("UGLY_TEST_LANGS") or ""):find("js", 1, true) then
+	local obj = ugly.eval("js", "({ x: 2, add: function(a){ return this.x + a }, C: class C { constructor(v){ this.v = v } } })")
+	ok(obj.add(3) == 5 and obj:add(4) == 6, "a JS function member (a constructor too) is called with its owner as this")
+	ok(obj.C(9).v == 9, "  ... and calling a JS class constructs it")
+else
+	ok(true, "a JS function member # SKIP js isn't built")
+	ok(true, "a JS class # SKIP js isn't built")
+end
+
 -- A key that is neither an integer nor a string: an error, and the value isn't kept.
 local weak = setmetatable({}, { __mode = "v" })
 do

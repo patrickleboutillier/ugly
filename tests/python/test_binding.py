@@ -268,11 +268,15 @@ ok(bool(ugly.eval("lua", "return { 1 }")) is True and bool(ugly.eval("lua", "ret
 if "js" in built:
     holder = ugly.eval("js", "({ C: class C { static s = 5 ; constructor(x){ this.x = x } } })")
     ok(isinstance(holder.C, ugly.Proxy) and holder.C.s == 5, "a JS class held as a member: its static member")
+    made = holder.C(7)
+    ok(made.x == 7 and ugly.eval("js", "(class Q { constructor(a, b){ this.sum = a + b } })")(2, 3).sum == 5,
+        "  ... and calling a JS class constructs it")
     # A classic function is a constructor too in JS: as a member it is still called on its owner.
     obj = ugly.eval("js", "({ x: 2, add: function(a){ return this.x + a }, twice(a){ return 2 * a + this.x } })")
     ok(obj.add(3) == 5 and obj.twice(3) == 8, "  ... and a JS function member is called with its owner as this")
 else:
     skip("a class as a member: its members", "js")
+    skip("calling a JS class constructs", "js")
     skip("a function member: this", "js")
 
 # A describe that failed once (asked from a thread Lua refuses) isn't remembered as "no traits".

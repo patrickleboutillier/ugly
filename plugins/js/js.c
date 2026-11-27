@@ -44,6 +44,7 @@ typedef struct pcache_entry {
 typedef struct jsbox {
 	JSValue v ;
 	int open ;                   /* an iterator stepped (ugly_next) and not done: release calls its return() */
+	int is_class ;               /* a constructor: whether it's a class (is_class); -1 until asked */
 	struct jsbox *prev, *next ;
 } jsbox ;
 
@@ -325,6 +326,7 @@ static jsbox *new_box(jsrt *r, JSValue v){
 	}
 	b->v = v ;
 	b->open = 0 ;
+	b->is_class = -1 ;
 	b->prev = NULL ;
 	b->next = r->boxes ;
 	if (r->boxes != NULL){
@@ -1640,6 +1642,41 @@ static ugly_status js_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t 
 }
 
 
+/*
+ * Whether a constructor is a class: one that can't be called, only
+ * constructed. JS keeps no such flag where we can read it, but a class's
+ * source text begins with "class" (Function.prototype.toString, not the
+ * value's own toString, which is the program's to define). A function
+ * compiled without its source isn't recognized, and stays callable. Asked
+ * once per box.
+ */
+static int is_class(jsrt *r, jsbox *b){
+	if (b->is_class < 0){
+		JSContext *c = r->c ;
+		b->is_class = 0 ;
+		JSValue global = JS_GetGlobalObject(c) ;
+		JSValue function = JS_GetPropertyStr(c, global, "Function") ;
+		JSValue proto = JS_GetPropertyStr(c, function, "prototype") ;
+		JSValue to_string = JS_GetPropertyStr(c, proto, "toString") ;
+		JSValue text = (JS_IsFunction(c, to_string) ? JS_Call(c, to_string, b->v, 0, NULL) : JS_UNDEFINED) ;
+		if (JS_IsException(text)||JS_IsException(to_string)||JS_IsException(proto)||JS_IsException(function)){
+			drop_exception(c) ;
+		}
+		else if (JS_IsString(text)){
+			const char *s = JS_ToCString(c, text) ;
+			b->is_class = ((s != NULL)&&(strncmp(s, "class", 5) == 0)&&((s[5] == ' ')||(s[5] == '{')||(s[5] == '\n')||(s[5] == '\t'))) ;
+			JS_FreeCString(c, s) ;
+		}
+		JS_FreeValue(c, text) ;
+		JS_FreeValue(c, to_string) ;
+		JS_FreeValue(c, proto) ;
+		JS_FreeValue(c, function) ;
+		JS_FreeValue(c, global) ;
+	}
+	return b->is_class ;
+}
+
+
 static ugly_status js_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
 	jsrt *r = RT(rt) ;
 	JSContext *c = r->c ;
@@ -1655,7 +1692,15 @@ static ugly_status js_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *
 			t |= UGLY_TRAIT_CALLABLE ;
 		}
 		if (JS_IsConstructor(c, v)){
+			/*
+			 * A class is INSTANTIABLE and not CALLABLE, as JS has it (calling
+			 * one throws), so that calling it from a language with no 'new'
+			 * constructs it. A function is both.
+			 */
 			t |= UGLY_TRAIT_INSTANTIABLE ;
+			if (is_class(r, (jsbox *)ref)){
+				t &= ~(uint32_t)UGLY_TRAIT_CALLABLE ;
+			}
 		}
 		/* What for...of takes: a Symbol.iterator method (arrays, Map, Set, generators, iterators). */
 		JSValue f = JS_GetProperty(c, v, r->iterator) ;

@@ -1006,14 +1006,35 @@ static int api_kw(lua_State *L){
 static int proxy_call(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
-	int n = lua_gettop(L) - 1 ;
+	/*
+	 * A class got as a member that is callable too (proxy_index) knows its
+	 * owner: { owner, name } is its user value, and calling it invokes the
+	 * member on the owner, as a method closure would.
+	 */
+	int top = lua_gettop(L), first = 2 ;
+	ugly_handle owner = UGLY_NO_HANDLE ;
+	const char *member = NULL ;
+	if (lua_getiuservalue(L, 1, 1) == LUA_TTABLE){
+		lua_rawgeti(L, -1, 1) ;
+		proxy *o = to_proxy(L, -1) ;
+		lua_rawgeti(L, -2, 2) ;
+		member = lua_tostring(L, -1) ;     /* the table keeps both alive */
+		if ((o != NULL)&&(member != NULL)){
+			owner = o->h ;
+			if ((top >= 2)&&lua_rawequal(L, 2, -2)){
+				first = 3 ;     /* called with ':': the receiver isn't an argument */
+			}
+		}
+	}
+	lua_settop(L, top) ;
+	int n = top - first + 1 ;
 	lua_kw k ;
-	ugly_status st = take_kw(L, ctx, 2, &n, &k) ;
+	ugly_status st = take_kw(L, ctx, first, &n, &k) ;
 	if (st != UGLY_OK){
 		return throw_ugly_error(L, ctx, st) ;
 	}
 	ugly_val *args = calloc((size_t)n + 1, sizeof(ugly_val)) ;
-	int made = lua_args(L, ctx, 2, args, n, &st) ;
+	int made = lua_args(L, ctx, first, args, n, &st) ;
 	ugly_val out = ugly_null() ;
 	if (st == UGLY_OK){
 		uint32_t traits = 0 ;
@@ -1021,7 +1042,10 @@ static int proxy_call(lua_State *L){
 		if (ugly_describe(ctx, p->h, &traits, &tn) == UGLY_OK){
 			ugly_val_release(ctx, &tn) ;
 		}
-		if ((traits & UGLY_TRAIT_INSTANTIABLE)&&(! (traits & UGLY_TRAIT_CALLABLE))){
+		if (owner != UGLY_NO_HANDLE){
+			st = ugly_invoke_opts(ctx, owner, member, args, (size_t)n, &k.o, UGLY_ANY, &out) ;
+		}
+		else if ((traits & UGLY_TRAIT_INSTANTIABLE)&&(! (traits & UGLY_TRAIT_CALLABLE))){
 			ugly_handle h = UGLY_NO_HANDLE ;
 			st = ugly_new_opts(ctx, p->h, args, (size_t)n, &k.o, &h) ;
 			out = ugly_hval(h) ;
@@ -1109,11 +1133,31 @@ static int proxy_index(lua_State *L){
 		 * still works, through __call.
 		 */
 		uint32_t traits = 0 ;
-		ugly_val tn ;
-		if ((ugly_describe(ctx, out.as.h, &traits, &tn) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)
-			&&(! (traits & UGLY_TRAIT_INSTANTIABLE))){
-			method = 1 ;
-			ugly_val_release(ctx, &out) ;
+		ugly_val tn = ugly_null() ;
+		if ((ugly_describe(ctx, out.as.h, &traits, &tn) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)){
+			if (! (traits & UGLY_TRAIT_INSTANTIABLE)){
+				method = 1 ;
+				ugly_val_release(ctx, &out) ;
+			}
+			else {
+				/*
+				 * A class that is callable too (a JS function is also a
+				 * constructor; a Python class): the class, and it remembers
+				 * its owner for when it is called (proxy_call). Its own
+				 * proxy, not the cached one of that value.
+				 */
+				ugly_val_release(ctx, &tn) ;
+				proxy *m = lua_newuserdatauv(L, sizeof(proxy), 1) ;
+				m->h = out.as.h ;     /* the result's reference is the proxy's */
+				luaL_setmetatable(L, PROXY_MT) ;
+				lua_createtable(L, 2, 0) ;
+				lua_pushvalue(L, 1) ;
+				lua_rawseti(L, -2, 1) ;
+				lua_pushstring(L, name) ;
+				lua_rawseti(L, -2, 2) ;
+				lua_setiuservalue(L, -2, 1) ;
+				return 1 ;
+			}
 		}
 		ugly_val_release(ctx, &tn) ;
 	}

@@ -51,10 +51,12 @@ identity).
 - `p:m(x)` and `p.m(x)` both invoke `m` with the foreign language's receiver
   rules (Python's bound method, Java's `this`...). A member that is a class
   stays the class, so `mod.Point(1, 2)` constructs and `mod.Point.origin`
-  still reads a member.
+  still reads a member. One that is callable too (a Python class, a JS
+  function, which is also a constructor) is still called on its owner, so
+  a JS `function` member gets its `this`.
 - A foreign function that isn't a class is a real Lua function (a C
   closure), so Lua's library takes it: `string.gsub(s, "%w+", py.str.capitalize)`.
-- Calling a class that can only be instantiated (a Java or Perl class)
+- Calling a class that can only be instantiated (a Java, Perl or JS class)
   constructs it.
 - **Iteration** (contract §2): `for x in ugly.iter(p) do` runs what the
   foreign language's loop runs (a Python generator, a list, a dict's

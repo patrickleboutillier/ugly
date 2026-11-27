@@ -51,11 +51,12 @@ proxies hash).
   that is a class stays the class, so `mod.Point.origin` is its member; one
   that is callable too (a JS function, which is also a constructor) is
   still called on its owner, so `this` is right.
-- `bool(p)` is false for a sequence of length 0, as Python's own are, and
-  true for everything else. A Lua table with only named fields has length
-  0, so it is false: test `len()` or a field instead.
-- `p(x)` calls it; calling a class that can only be instantiated (a Java or
-  Perl class) constructs it: `perl.KwBox(value=5)`.
+- `bool(p)` is false for an empty sequence, as Python's own are, and true
+  for everything else. It asks for the first element, not the length, so
+  an infinite Haskell list is true at once. A Lua table with only named
+  fields has no first element, so it is false: test a field instead.
+- `p(x)` calls it; calling a class that can only be instantiated (a Java,
+  Perl or JS class) constructs it: `perl.KwBox(value=5)`.
 - **Iteration is the foreign language's own** (contract §2): `for x in p`,
   `list(p)`, `iter(p)` and `next(p)` run what that language's loop runs,
   one value per step, so a generator runs only as far as Python's loop

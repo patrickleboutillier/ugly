@@ -6,5 +6,6 @@ Notes for Claude Code, loaded when working in this directory. Shared rules: `plu
 
 - Every operation runs under `lua_pcall` (`op_body`), except `call`, which pcalls the target directly so a call costs one of Lua's roughly 200 nested C calls. Lua doesn't check pushes and guarantees a C function 20 slots: `lua_checkstack` (`ARG_SLOTS`) before pushing a call's arguments.
 - Proxies are `ugly.proxy` userdata, cached per owned handle in a weak table. A foreign function (CALLABLE, not INSTANTIABLE) is a C closure (`proxy_fn`) over that userdata instead, so Lua's C library takes it; `to_proxy()` recognizes both. A callable member that isn't a class becomes a method closure (`proxy_method`); a class member stays the class. Foreign errors travel as `ugly.error` userdata, with `e.payload`, and are restored unchanged when they escape.
+- A member that is CALLABLE and INSTANTIABLE (a Python class, a JS function) is a proxy userdata of its own (not the cached one) with `{ owner, name }` as its user value: `proxy_call` invokes the member on the owner.
 - Elements are 0-based in the protocol and 1-based in Lua.
 - `invoke` passes `self` only to methods found through the metatable, not to raw fields.
