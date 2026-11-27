@@ -489,6 +489,17 @@ static unsafe class Conv {
         }
     }
 
+    static bool WideDouble(object o, out double d) {
+        switch (o) {
+            case ulong x: d = x; return true;
+            case nuint x: d = x; return true;
+            case System.Numerics.BigInteger x: d = (double)x; return true;
+            case Int128 x: d = (double)x; return true;
+            case UInt128 x: d = (double)x; return true;
+            default: d = 0; return false;
+        }
+    }
+
     static bool Floating(object o, out double d) {
         switch (o) {
             case double x: d = x; return true;
@@ -545,7 +556,8 @@ static unsafe class Conv {
                 double d;
                 if (o == null) throw TypeError("a double");
                 if (Floating(o, out d)) { }
-                else if (Integral(o, out long i) || Wide(o, out i, out _)) d = o is System.Numerics.BigInteger bi ? (double)bi : i;     // integers widen
+                else if (Integral(o, out long i)) d = i;     // integers widen
+                else if (WideDouble(o, out d)) { }           // from their own value: one beyond int64 has no long
                 else throw TypeError("a double");
                 v->Kind = Kind.Double;
                 v->D = d;

@@ -105,5 +105,13 @@ const c2 = py.make_counter();
 c2.inc();
 ok(String(c2) === "counter(1)" && `${c2}` === "counter(1)", "String(c) and a template: Python's str(c)");
 
+// A symbol names no foreign member: storing under one is refused, not stored under its description.
+const symDict = ugly.eval("python", "{}");
+let symRefused = false;
+try { symDict[Symbol("tag")] = 1; } catch (e) { symRefused = e instanceof TypeError; }
+symDict.plain = 2;
+ok(symRefused && ugly.eval("python", "lambda d: ','.join(sorted(d))")(symDict) === "plain",
+	"proxy[Symbol()] = v is a TypeError, and stores nothing");
+
 console.log("1.." + count);
 if (failures > 0) throw new Error(failures + " test(s) failed");

@@ -59,6 +59,7 @@ A foreign value is a proxy object, one per value (`===` is identity).
 - A proxy's prototype holds only those two (`[Symbol.iterator]`,
   `toString`); its own members come first, so a Java object's `toString`
   is Java's.
+- A symbol names no foreign member: `p[Symbol()] = v` is a `TypeError`.
 - Members of a foreign value can't be deleted from JS: `delete p.k` does
   nothing (TODO).
 

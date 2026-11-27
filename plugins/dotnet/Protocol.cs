@@ -80,10 +80,24 @@ static class Protocol {
         if ((o is IEnumerator) && ((o is not IEnumerable) || Iterating(o))) return o;
         if (o is IEnumerable en) {
             IEnumerator e = en.GetEnumerator();
+            // Such an object gives itself the first time: handed out as it is, it would be
+            // the enumerable's own handle, spent after one pass and never disposed of on
+            // its own. An iterator of its own, then; the next pass gets a fresh one.
+            if (ReferenceEquals(e, o)) e = new Pass(e);
             enumerators.AddOrUpdate(e, mark);
             return e;
         }
         throw Fail.NotCapable("value is not enumerable");
+    }
+
+    // One pass over an object that is its own enumerator. Enumerable too, as that object
+    // is: it comes home as an argument where an IEnumerable is taken, and goes on from where it is.
+    sealed class Pass(IEnumerator inner) : IEnumerator, IEnumerable, IDisposable {
+        public IEnumerator GetEnumerator() => this;
+        public object? Current => inner.Current;
+        public bool MoveNext() => inner.MoveNext();
+        public void Reset() => inner.Reset();
+        public void Dispose() => (inner as IDisposable)?.Dispose();
     }
 
     // A foreign value as an IEnumerable<T>: its iteration, each element coerced as it comes.

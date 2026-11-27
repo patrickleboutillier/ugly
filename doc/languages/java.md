@@ -113,7 +113,10 @@ exact type is best, then an integer narrowed to a parameter it fits, then a
 supertype, then a conversion to floating point, with `Object` last. A tie
 fails with `UGLY_ERR_TYPE` ("ambiguous call"). An overload hint names the
 one to use, by the parameter types' `Class.getName()` names, comma-separated
-(`"int,java.lang.String"`; `char[]` is `"[C"`):
+(`"int,java.lang.String"`; `char[]` is `"[C"`). A callable that isn't
+overloaded (a lambda, any functional interface) takes only the hint that
+names its one method's parameters, `"java.lang.Object"` for a `Function`:
+another is refused, never passed on to a call it makes.
 
 ```python
 String = ugly.module("java", "java.lang.String")

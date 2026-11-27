@@ -47,6 +47,8 @@ struct ugly_lang {
 	int runtimes ;               /* live runtimes */
 	int initialized ;
 	ugly_rt *rts ;               /* live runtimes, linked through ugly_rt.lang_next (langs lock) */
+	int creating ;               /* a thread is making the runtime the others will share (langs lock) */
+	pthread_t creator ;
 } ;
 
 struct ugly_rt {
@@ -122,7 +124,13 @@ void lang_add_rt(ugly_lang *lang, ugly_rt *rt) ;
 void lang_remove_rt(ugly_lang *lang, ugly_rt *rt) ;
 ugly_lang *lang_find(const char *name) ;
 ugly_rt *lang_find_rt_on_thread(ugly_lang *lang) ;
-ugly_rt *lang_share_rt(ugly_lang *lang) ;             /* a live runtime on any thread, with one more share; or NULL */
+/*
+ * A live runtime on any thread, with one more share; or NULL, and then the
+ * caller is the one thread that creates it (others wait here meanwhile) and
+ * calls lang_created when it has, or has failed.
+ */
+ugly_rt *lang_share_rt(ugly_lang *lang) ;
+void lang_created(ugly_lang *lang) ;
 void lang_rt_shares(ugly_rt *rt, int delta, int auto_created) ;
 enum { RT_KEEP, RT_DESTROY, RT_FREE } ;
 int lang_rt_unshare(ugly_rt *rt) ;                    /* drops a share: what the caller must do now */

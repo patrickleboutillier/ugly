@@ -43,6 +43,12 @@ typedef struct {
 	ugly_handle h ;              /* one owned reference */
 	PyObject *weakrefs ;
 	int traits ;                 /* the value's traits, once asked for (proxy_call); -1 until then */
+	/*
+	 * A class got as a member of 'owner' (member_proxy): calling it invokes
+	 * the member on its owner, so the foreign language's receiver rules
+	 * apply; everything else is the class's own. NULL otherwise.
+	 */
+	PyObject *owner, *name ;
 } proxy ;
 
 #define ENTER PyGILState_STATE gil_ = PyGILState_Ensure()
@@ -339,6 +345,7 @@ static PyObject *proxy_for(ugly_ctx *ctx, ugly_handle borrowed){
 	p->h = h ;
 	p->weakrefs = NULL ;
 	p->traits = -1 ;
+	p->owner = p->name = NULL ;
 	PyObject *w = PyWeakref_NewRef((PyObject *)p, NULL) ;
 	if (w != NULL){
 		PyDict_SetItem(proxy_cache, key, w) ;
@@ -560,13 +567,21 @@ static void free_kwargs(ugly_ctx *ctx, ugly_opts *o, ugly_kwarg *kw){
 }
 
 
-/* The value's traits, asked for once (a value's traits don't change). */
+/*
+ * The value's traits, asked for once (a value's traits don't change). A
+ * describe that failed (asked from a thread its runtime refuses) is none
+ * for now, and asked again next time.
+ */
 static int proxy_traits(ugly_ctx *ctx, proxy *p){
 	if (p->traits < 0){
 		uint32_t t = 0 ;
 		ugly_val tn = ugly_null() ;
-		p->traits = ((OUT(ugly_describe(ctx, p->h, &t, &tn)) == UGLY_OK) ? (int)t : 0) ;
+		ugly_status st = OUT(ugly_describe(ctx, p->h, &t, &tn)) ;
 		ugly_val_release(ctx, &tn) ;
+		if (st != UGLY_OK){
+			return 0 ;
+		}
+		p->traits = (int)t ;
 	}
 	return p->traits ;
 }
@@ -602,13 +617,19 @@ static PyObject *proxy_call(PyObject *self, PyObject *args, PyObject *kw){
 	 * in Python: Point(3, 4), KwBox(value=5).
 	 */
 	proxy *p = (proxy *)self ;
-	proxy_traits(ctx, p) ;
+	int traits = proxy_traits(ctx, p) ;
 	ugly_val out = ugly_null() ;
 	ugly_status st ;
-	if ((p->traits & UGLY_TRAIT_INSTANTIABLE)&&(! (p->traits & UGLY_TRAIT_CALLABLE))){
+	if ((traits & UGLY_TRAIT_INSTANTIABLE)&&(! (traits & UGLY_TRAIT_CALLABLE))){
 		ugly_handle h = UGLY_NO_HANDLE ;
 		st = OUT(ugly_new_opts(ctx, p->h, a, (size_t)n, &o, &h)) ;
 		out = ugly_hval(h) ;
+	}
+	else if (p->owner != NULL){
+		/* A member that is both a class and callable: called as its owner's method. */
+		const char *member = PyUnicode_AsUTF8(p->name) ;
+		st = (member == NULL ? UGLY_ERR_USAGE
+			: OUT(ugly_invoke_opts(ctx, ((proxy *)p->owner)->h, member, a, (size_t)n, &o, UGLY_ANY, &out))) ;
 	}
 	else {
 		st = OUT(ugly_call_opts(ctx, p->h, a, (size_t)n, &o, UGLY_ANY, &out)) ;
@@ -659,6 +680,33 @@ static PyMethodDef invoke_def = { "method", (PyCFunction)(void (*)(void))invoke_
 	"a method of a foreign object" } ;
 
 
+/*
+ * A member that is a class and callable too (a JS class or function, a Lua
+ * class with __call), as a proxy of the class that remembers where it came
+ * from. Not the cached proxy of that value: its own, with its own reference.
+ */
+static PyObject *member_proxy(ugly_ctx *ctx, PyObject *owner, PyObject *name, ugly_handle borrowed){
+	ugly_handle h ;
+	ugly_status st = ugly_dup(ctx, borrowed, &h) ;
+	if (st != UGLY_OK){
+		return raise_ugly(ctx, st) ;
+	}
+	proxy *p = PyObject_New(proxy, &ProxyType) ;
+	if (p == NULL){
+		ugly_release(ctx, h) ;
+		return NULL ;
+	}
+	p->h = h ;
+	p->weakrefs = NULL ;
+	p->traits = -1 ;
+	Py_INCREF(owner) ;
+	Py_INCREF(name) ;
+	p->owner = owner ;
+	p->name = name ;
+	return (PyObject *)p ;
+}
+
+
 static PyObject *bound_method(PyObject *self, PyObject *name){
 	PyObject *bound = PyTuple_Pack(2, self, name) ;
 	if (bound == NULL){
@@ -688,13 +736,19 @@ static PyObject *proxy_getattro(PyObject *self, PyObject *name){
 		return bound_method(self, name) ;     /* not a member: a method of the foreign object */
 	}
 	if ((st == UGLY_OK)&&(out.kind == UGLY_HANDLE)){
-		/* A callable member is a method: obj.m(...) invokes it, with the foreign receiver rules. */
+		/*
+		 * A callable member is a method: obj.m(...) invokes it, with the
+		 * foreign receiver rules. A class stays the class, with members of
+		 * its own, and still knows its owner when it is called.
+		 */
 		uint32_t traits = 0 ;
-		ugly_val tn ;
+		ugly_val tn = ugly_null() ;
 		if ((OUT(ugly_describe(ctx, out.as.h, &traits, &tn)) == UGLY_OK)&&(traits & UGLY_TRAIT_CALLABLE)){
 			ugly_val_release(ctx, &tn) ;
+			PyObject *m = ((traits & UGLY_TRAIT_INSTANTIABLE) ? member_proxy(ctx, self, name, out.as.h)
+				: bound_method(self, name)) ;
 			ugly_val_release(ctx, &out) ;
-			return bound_method(self, name) ;
+			return m ;
 		}
 		ugly_val_release(ctx, &tn) ;
 	}
@@ -829,6 +883,31 @@ static Py_ssize_t proxy_length(PyObject *self){
 }
 
 
+/*
+ * Truth: false for a sequence of length 0, as Python's own are; anything
+ * else is true, a value without a length included (a function: Python would
+ * otherwise ask for its len(), a TypeError).
+ */
+static int proxy_bool(PyObject *self){
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return -1 ;
+	}
+	int64_t n = 0 ;
+	ugly_status st = OUT(ugly_length(ctx, ((proxy *)self)->h, &n)) ;
+	if (st == UGLY_OK){
+		return n != 0 ;
+	}
+	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)||(st == UGLY_ERR_NOT_SUPPORTED)){
+		return 1 ;
+	}
+	raise_ugly(ctx, st) ;
+	return -1 ;
+}
+
+static PyNumberMethods proxy_number = { .nb_bool = proxy_bool } ;
+
+
 static PyObject *proxy_richcompare(PyObject *a, PyObject *b, int op){
 	if (((op != Py_EQ)&&(op != Py_NE))||(! PyObject_TypeCheck(b, &ProxyType))){
 		Py_RETURN_NOTIMPLEMENTED ;
@@ -946,6 +1025,8 @@ static void proxy_dealloc(PyObject *self){
 		Py_XDECREF(key) ;
 		ugly_release(ugly_current_ctx(), p->h) ;
 	}
+	Py_XDECREF(p->owner) ;
+	Py_XDECREF(p->name) ;
 	PyErr_Restore(t, v, tb) ;
 	PyObject_Del(self) ;
 }
@@ -972,6 +1053,7 @@ static PyTypeObject ProxyType = {
 	.tp_getattro = proxy_getattro,
 	.tp_setattro = proxy_setattro,
 	.tp_call = proxy_call,
+	.tp_as_number = &proxy_number,
 	.tp_as_mapping = &proxy_mapping,
 	.tp_as_sequence = &proxy_sequence,
 	.tp_richcompare = proxy_richcompare,

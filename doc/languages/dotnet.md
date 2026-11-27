@@ -165,7 +165,10 @@ abstract method calls the value itself).
   enumerator's iterator is itself); each step is `MoveNext()`, so a
   `yield return` method runs only as far as asked. Releasing an enumerator
   that `ugly_iter` handed out calls its `Dispose()`, as a `break` out of
-  `foreach` would, so a `yield return` method's `finally` runs.
+  `foreach` would, so a `yield return` method's `finally` runs. An
+  enumerable that is its own enumerator (a `yield return` method's result,
+  a LINQ query) gets an iterator of its own for each pass, so it can be
+  looped over again, as in C#.
 - `ugly_to_string` is `ToString()`.
 
 ## Calls and options

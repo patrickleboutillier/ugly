@@ -8,7 +8,7 @@ behind each item; what's done is listed at the end. The contract,
 
 A bug hunt over the core and the eight plugins, after 2.7.0. Each was
 confirmed by a repro unless marked *(by reading)*. Line numbers are 2.7.0's.
-The crashes and the leaks are fixed (under "Done").
+The crashes, the leaks and the wrong results are fixed (under "Done").
 
 ### Crashes: what's left
 
@@ -26,49 +26,22 @@ reading only:
   spot.** Nothing of ours is left to re-enter then, but another language's
   destructor still runs inside QuickJS's collection.
 
-### Wrong results
+### Wrong results: what's left
 
-- [ ] **Core: `ugly_rt_get` isn't atomic for any-thread languages**
-  (`rt.c`): between `lang_share_rt` and `ugly_rt_new`, threads making their
-  first call together get "python supports one runtime per process" (7 of
-  8 threads, in 1 run of 30).
-- [ ] **Python: a member that is a class becomes a bound method**
-  (`proxy_getattro` tests `CALLABLE` only; Lua also requires not
-  `INSTANTIABLE`): `m.C.s` and `m.C(1)` fail for a JS class.
-- [ ] **Python: `bool(proxy)` raises `TypeError`** for a value without a
-  length (`if callback:` fails), and is `False` for a Lua table with only
-  fields. An `nb_bool`.
-- [ ] **Python: `proxy_traits` caches 0 forever** after one failed
-  `ugly_describe` (a call from the wrong thread). Cache only on `UGLY_OK`.
-- [ ] **Perl: non-ASCII hash keys** are unreachable and stored as bytes:
-  `hv_fetch`/`hv_store`/`hv_delete` get a positive `klen`, and
-  `hv_iterkey` ignores `HeKUTF8`.
-- [ ] **Perl: `!=` and `ne` on proxies are always false** (`helper.pm`
-  overloads `==` and `eq` only, with `fallback`).
-- [ ] **Perl: foreign methods named like `Ugly::Proxy`'s own subs**
-  (`_get`, `isa`, `_release`...) never reach `AUTOLOAD`; `$o->_release`
-  releases the handle. Move the XS functions to another package.
-- [ ] **Java: `coerce()` narrows without a range check** where `score()`
-  didn't run first: `setMember`, `setIndex` on arrays, a foreign
-  function's result for an interface (`2**40+7` into an `int` field
-  stores 7; `'xyz'` into a `char` stores `'x'`).
-- [ ] **Java: a hint on a callable that isn't overloaded is dropped**
-  (`Bridge.call`'s functional-interface path never consumes `HINT`), and
-  the next overload resolution on that thread, a nested call, takes it.
-- [ ] **C#: an object both `IEnumerable` and `IEnumerator`** (`yield`,
-  LINQ) is single-shot once iterated: the second pass is empty, and
-  releasing its iterator doesn't `Dispose()` while the enumerable is held.
-  Hand out a wrapper enumerator when `GetEnumerator()` returns the object
-  itself.
-- [ ] **C#: `want = DOUBLE` on a wide integer that doesn't fit int64**
-  (`Bridge.cs`, `Wide` ignoring `fits`): `ulong.MaxValue` gives -1,
-  `Int128.MaxValue` 0.
-- [ ] **Haskell: identity collides for values sharing a heap object**
-  (`newRef`: the `StableName` alone): a newtype and its contents, empty
-  `Map`s at different types. One comes back with the other's box. Key on
-  the type too.
-- [ ] **JS: symbol-keyed assignment on a proxy** writes a string member
-  (`d[Symbol.iterator] = 2` makes a key "Symbol.iterator").
+The thirteen are fixed (under "Done"). Seen while fixing them:
+
+- [ ] **A JS class can't be constructed from Python or Lua.** A JS class
+  is CALLABLE and INSTANTIABLE, so calling its proxy calls it, and JS
+  refuses ("class constructors must be invoked with 'new'"). Every JS
+  function is a constructor too, so the traits can't tell them apart: it
+  needs a way to say `new` (`ugly.new(cls, ...)`?), or JS reporting
+  INSTANTIABLE only for classes. A design choice.
+- [ ] **Lua: a JS function member that is also a constructor** (a classic
+  `function`) isn't a method closure in Lua (`proxy_index` leaves an
+  INSTANTIABLE member alone), so `obj.f(x)` loses `this`. Python keeps the
+  owner (`member_proxy`); Lua could do the same.
+- [ ] **Perl: `isa`, `can`, `DOES` and `VERSION`** on a proxy are Perl's
+  own, not the foreign value's (Perl code calls them on any object).
 
 ### Lost errors
 
@@ -132,12 +105,54 @@ already written in Python. HAProxy works, in both of its Lua modes
   `luaL_setfuncs`), but it reaches the most embedded Luas. One Lua per
   process: it would be another `-Dlua_version`, and another binding.
 
+## Design questions (2026-11-27)
+
+From a read of the design after the review, for consideration: none is
+decided. Unlike the next section, the first two would change what existing
+plugins do.
+
+- [ ] **`MEMBERS` holds both attributes and entries.** A Python dict's
+  members are its keys, a Java `Map`'s come after its fields and bean
+  getters, a Perl hash's before its object's methods (contract §10). So a
+  key named like a method (`keys`, `get`) is ambiguous, and each plugin
+  settles it its own way. Truffle keeps hash entries apart from members.
+  The hash protocol (below) is listed for non-string keys, but it is also
+  the other half of this split: once it exists, a string key of a dict has
+  two routes. Decide which is canonical before writing it, and whether
+  `get_member` on a dict keeps reaching its keys.
+- [ ] **Deferred release as the core's default.** Rule: `release` "must be
+  safe to re-enter, or defer the work itself". JS got it wrong (a
+  destructor re-entering inside QuickJS's collection), and the any-thread
+  languages are always queued already. The core could queue every release
+  that arrives while the home runtime is inside a call, and drain when the
+  outermost call returns, as it enforces borrows instead of documenting
+  them. Immediate release would be a capability: Perl needs it (decision
+  12, `DESTROY` when the last reference goes).
+- [ ] **No fourth thread mode before the races are closed.** Three exist
+  (the owner's thread, `UGLY_CAP_ANY_THREAD`, host-serialized), the last on
+  a promise the core can't check, and both of the core's open races are
+  here (`ugly_rt_get`, deleting a shared runtime: "Review findings"). Worth
+  a pass over §6 as one state machine once they're fixed, rather than as
+  three relaxations.
+- [ ] **The blocking model is a harder limit than cycles.** Cycles leak, a
+  bounded cost. A blocking call can't be worked around by a host that owns
+  an event loop: a Node binding (below) stalls Node for as long as Python
+  runs. Settle what the contract says about it (refuse, a thread per
+  call, or the async item below) before the Node binding, not after.
+- [ ] **The plugin ABI when plugins live out of tree.** An exact match and
+  twin slots (`call` and `call_opts`) are right while all eight are built
+  with the core. A plugin released on its own (Wasm, written in Rust)
+  breaks at every bump: four in the first four days. Options: a `size` first in
+  `ugly_plugin`, as `ugly_opts` has, with slots past it read as NULL; or
+  keep the exact match and say that plugins ship with the core.
+
 ## The contract
 
 All additive: none of it breaks existing plugins (contract, "Scope").
 
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
-  Python dicts keyed by tuples, JS `Map`.
+  Python dicts keyed by tuples, JS `Map`. See "Design questions": it also
+  decides where a dict's string keys belong.
 - [ ] **Resizing and deleting in the other bindings.** `ugly_splice` and
   `ugly_delete_member` exist, and Perl's ties use them. Python proxies
   could too (`del p[k]`, `p.append(x)`, slice assignment), and so could JS
@@ -313,5 +328,14 @@ contract and in the pull requests.
   OS thread from start to end (a `forkIO` thread used another thread's
   ctx), `raise` can't throw, the stack check works on small stacks, and
   `set_index` on an infinite list is refused before its length is asked.
+- **Review fixes, wrong results** (2026-11-27): threads asking together
+  for an any-thread language's first runtime all share the one made;
+  Python: a class held as a member is the class, `bool()` of a value
+  without a length, traits not cached from a failed describe; Perl: hash
+  keys beyond ASCII, `!=` and `ne`, the XS functions out of `Ugly::Proxy`'s
+  way (`Ugly::Core`); Java: narrowing checked for fields, elements and
+  results, a hint never left for the next call; C#: an enumerable that is
+  its own enumerator can be iterated again, a wide integer's DOUBLE;
+  Haskell: identity keyed on the type too; JS: no symbol-keyed stores.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).

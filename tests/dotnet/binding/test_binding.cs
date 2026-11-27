@@ -5,7 +5,7 @@
 using Ugly;
 
 static class TestBinding {
-    const int Plan = 41;
+    const int Plan = 43;
     static int count;
     static readonly HashSet<string> langs = new((Environment.GetEnvironmentVariable("UGLY_TEST_LANGS") ?? "").Split(','));
 
@@ -197,6 +197,14 @@ static class TestBinding {
             Ok(3.0.Equals(got[0]), $"another C# thread shares Python (UGLY_CAP_ANY_THREAD): {got[0]}");
             Ok("ABC".Equals(got[1]), $"  ... and gets its own Lua: {got[1]}");
             Ok(got[2] is ForeignException e && e.Message.Contains("thread"), $"  ... but the main thread's Lua values stay the main thread's: {(got[2] as Exception)?.Message}");
+        });
+
+        Check("enumerables", 2, ["python"], () => {
+            // An enumerable that is its own enumerator (yield, LINQ): each loop over it is a new pass.
+            var twice = (Foreign)Interop.Eval("python", "lambda xs: str([list(xs), list(xs)])")!;
+            Ok("[[0, 1, 2], [0, 1, 2]]".Equals(twice.Call(Enumerable.Range(0, 3))), $"Python iterates a LINQ enumerable twice: {twice.Call(Enumerable.Range(0, 3))}");
+            var broken = (Foreign)Interop.Eval("python", "lambda xs: str([next(iter(xs)), list(xs)])")!;
+            Ok("[0, [0, 1, 2]]".Equals(broken.Call(Enumerable.Range(0, 3))), "  ... and again after an iteration left unfinished");
         });
 
         Check("leaks", 1, ["lua"], () => {

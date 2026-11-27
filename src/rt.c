@@ -456,6 +456,12 @@ ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out){
 		}
 	}
 	st = ugly_rt_new(ctx, lang, &rt) ;
+	if (st == UGLY_OK){
+		lang_rt_shares(rt, 1, 1) ;     /* this ctx's share; the last one destroys it */
+	}
+	if (lang->plugin->caps & UGLY_CAP_ANY_THREAD){
+		lang_created(lang) ;     /* the threads waiting to share it (lang_share_rt) go on */
+	}
 	if (st != UGLY_OK){
 		if (loaded != NULL){
 			ugly_error *e = ugly_take_error(ctx) ;
@@ -464,7 +470,6 @@ ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out){
 		}
 		return st ;
 	}
-	lang_rt_shares(rt, 1, 1) ;     /* this ctx's share; the last one destroys it */
 	ctx->autos[ctx->nautos].rt = rt ;
 	ctx->autos[ctx->nautos].loaded = loaded ;
 	ctx->nautos++ ;

@@ -40,8 +40,10 @@ The binding attaches to the running perl at `use`, and tears down in an
 
 ## Foreign values in Perl
 
-A foreign value is an `Ugly::Proxy` object, one per value (`==` and `eq`
-compare identity).
+A foreign value is an `Ugly::Proxy` object, one per value (`==`, `eq`, `!=`
+and `ne` compare identity). Every method called on it is the foreign
+value's, whatever its name; only `can`, `isa`, `DOES` and `VERSION` are
+Perl's own.
 
 - `$p->{k}`, `keys %$p`, `exists`, `delete`: members, as a tied hash.
 - `$p->[0]`, `@$p`, `push`, `pop`, `shift`, `unshift`, `splice`: elements,
@@ -173,6 +175,10 @@ Key: `path` (`@INC`), ahead of `PERL5LIB`:
 
 ## Pitfalls
 
+- **Hash keys are text.** A member name from another language finds the
+  character key, or else the key that is its UTF-8 bytes (text read from a
+  file and never decoded); a new key is stored as characters. Keys are
+  listed as text the same way, a Latin-1 key's characters included.
 - **List context.** A sub that returns a list gives other languages an
   array; one that returns one value gives that value. `wantarray` is true
   unless the caller asked for another context.

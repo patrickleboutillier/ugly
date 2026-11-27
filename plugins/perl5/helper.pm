@@ -1,7 +1,7 @@
 # line 1 "ugly/plugins/perl5/helper.pm"
 # The Perl side of UGLY, defined in every perl interpreter UGLY embeds or
 # attaches to (perl5.c embeds this file as the string helper_pm). The XS
-# functions it calls (Ugly::Proxy::_call and friends) are perl5.c's.
+# functions it calls (Ugly::Core::_call and friends) are perl5.c's.
 
 # ------------------------------------------------------------------
 # Ugly::Proxy: a value from another language, holding its handle.
@@ -14,75 +14,79 @@ package Ugly::Proxy ;
 my %code ;
 
 use overload
-	'&{}' => sub { my $s = shift ; $code{$$s} //= do { my $held = Ugly::Proxy::_held($s) ; sub { Ugly::Proxy::_call($held, @_) } } },
+	'&{}' => sub { my $s = shift ; $code{$$s} //= do { my $held = Ugly::Core::_held($s) ; sub { Ugly::Core::_call($held, @_) } } },
 	'@{}' => sub { my @a ; tie @a, 'Ugly::Proxy::Array', $_[0] ; \@a },
 	'%{}' => sub { my %h ; tie %h, 'Ugly::Proxy::Hash', $_[0] ; \%h },
-	'==' => sub { Ugly::Proxy::_same($_[0], $_[1]) },
-	'eq' => sub { Ugly::Proxy::_same($_[0], $_[1]) },
+	'==' => sub { Ugly::Core::_same($_[0], $_[1]) },
+	'eq' => sub { Ugly::Core::_same($_[0], $_[1]) },
+	'!=' => sub { ! Ugly::Core::_same($_[0], $_[1]) },     # spelled out: fallback would compare their strings
+	'ne' => sub { ! Ugly::Core::_same($_[0], $_[1]) },
 	'bool' => sub { 1 },
-	'""' => sub { my $s = Ugly::Proxy::_str($_[0]) ; defined($s) ? $s : 'Ugly::Proxy(' . ${$_[0]} . ')' },
+	'""' => sub { my $s = Ugly::Core::_str($_[0]) ; defined($s) ? $s : 'Ugly::Proxy(' . ${$_[0]} . ')' },
 	fallback => 1 ;
 
+# Every other method is the foreign value's (AUTOLOAD), so this package has as
+# few subs of its own as it can: the functions behind it are in Ugly::Core.
 our $AUTOLOAD ;
-sub AUTOLOAD { my $s = shift ; (my $m = $AUTOLOAD) =~ s/.*:// ; Ugly::Proxy::_invoke($s, $m, @_) }
+sub AUTOLOAD { my $s = shift ; (my $m = $AUTOLOAD) =~ s/.*:// ; Ugly::Core::_invoke($s, $m, @_) }
 # A sub for a member that exists (Carp asks every argument for CARP_TRACE).
 sub can {
 	my ($s, $m) = @_ ;
 	return UNIVERSAL::can($s, $m) unless ref($s) ;
-	Ugly::Proxy::_has($s, $m) ? sub { Ugly::Proxy::_invoke(shift, $m, @_) } : undef
+	Ugly::Core::_has($s, $m) ? sub { Ugly::Core::_invoke(shift, $m, @_) } : undef
 }
-sub DESTROY { delete $code{${$_[0]}} ; Ugly::Proxy::_release($_[0]) }
+sub DESTROY { delete $code{${$_[0]}} ; Ugly::Core::_release($_[0]) }
 # A new ithread gets no copy: a copy's DESTROY would release the handle this thread holds.
 sub CLONE_SKIP { 1 }
 
 # %$proxy: the members (fields, methods, dict/hash/table entries).
 package Ugly::Proxy::Hash ;
 sub TIEHASH { bless [ $_[1], undef, 0 ], $_[0] }
-sub FETCH { Ugly::Proxy::_get($_[0][0], $_[1], 0) }
-sub STORE { Ugly::Proxy::_set($_[0][0], $_[1], $_[2], 0) }
-sub EXISTS { Ugly::Proxy::_has($_[0][0], $_[1]) }
+sub FETCH { Ugly::Core::_get($_[0][0], $_[1], 0) }
+sub STORE { Ugly::Core::_set($_[0][0], $_[1], $_[2], 0) }
+sub EXISTS { Ugly::Core::_has($_[0][0], $_[1]) }
 sub DELETE {
 	my ($s, $k) = @_ ;
-	my $v = Ugly::Proxy::_get($s->[0], $k, 0) ;
-	Ugly::Proxy::_delete($s->[0], $k) ;
+	my $v = Ugly::Core::_get($s->[0], $k, 0) ;
+	Ugly::Core::_delete($s->[0], $k) ;
 	$v
 }
-sub CLEAR { my $p = $_[0][0] ; Ugly::Proxy::_delete($p, $_) for Ugly::Proxy::_keys($p) }
-sub FIRSTKEY { $_[0][1] = [ Ugly::Proxy::_keys($_[0][0]) ] ; $_[0][2] = 0 ; $_[0][1][0] }
+sub CLEAR { my $p = $_[0][0] ; Ugly::Core::_delete($p, $_) for Ugly::Core::_keys($p) }
+sub FIRSTKEY { $_[0][1] = [ Ugly::Core::_keys($_[0][0]) ] ; $_[0][2] = 0 ; $_[0][1][0] }
 sub NEXTKEY { $_[0][1][ ++$_[0][2] ] }
-sub SCALAR { scalar(my @k = Ugly::Proxy::_keys($_[0][0])) }
+sub SCALAR { scalar(my @k = Ugly::Core::_keys($_[0][0])) }
 
 # @$proxy: the elements. Resizing goes through ugly_splice.
 package Ugly::Proxy::Array ;
 use Carp () ;
 sub TIEARRAY { bless [ $_[1] ], $_[0] }
-sub FETCH { Ugly::Proxy::_get($_[0][0], $_[1], 1) }
-sub STORE { Ugly::Proxy::_set($_[0][0], $_[1], $_[2], 1) }     # one past the end appends
-sub FETCHSIZE { Ugly::Proxy::_length($_[0][0]) }
+sub FETCH { Ugly::Core::_get($_[0][0], $_[1], 1) }
+sub STORE { Ugly::Core::_set($_[0][0], $_[1], $_[2], 1) }     # one past the end appends
+sub FETCHSIZE { Ugly::Core::_length($_[0][0]) }
 sub STORESIZE {
 	my ($s, $n) = @_ ;
 	my $len = $s->FETCHSIZE ;
-	if ($n < $len){ Ugly::Proxy::_splice($s->[0], $n, $len - $n) }
-	elsif ($n > $len){ Ugly::Proxy::_splice($s->[0], $len, 0, (undef) x ($n - $len)) }
+	if ($n < $len){ Ugly::Core::_splice($s->[0], $n, $len - $n) }
+	elsif ($n > $len){ Ugly::Core::_splice($s->[0], $len, 0, (undef) x ($n - $len)) }
 }
 sub EXTEND { }
 sub EXISTS { $_[1] < $_[0]->FETCHSIZE }
 sub DELETE { my ($s, $i) = @_ ; my $v = $s->FETCH($i) ; $s->STORE($i, undef) ; $v }
-sub CLEAR { Ugly::Proxy::_splice($_[0][0], 0, $_[0]->FETCHSIZE) }
-sub PUSH { my $s = shift ; Ugly::Proxy::_splice($s->[0], $s->FETCHSIZE, 0, @_) ; $s->FETCHSIZE }
-sub UNSHIFT { my $s = shift ; Ugly::Proxy::_splice($s->[0], 0, 0, @_) ; $s->FETCHSIZE }
+sub CLEAR { Ugly::Core::_splice($_[0][0], 0, $_[0]->FETCHSIZE) }
+sub PUSH { my $s = shift ; Ugly::Core::_splice($s->[0], $s->FETCHSIZE, 0, @_) ; $s->FETCHSIZE }
+sub UNSHIFT { my $s = shift ; Ugly::Core::_splice($s->[0], 0, 0, @_) ; $s->FETCHSIZE }
 sub POP {
 	my $s = shift ;
 	my $n = $s->FETCHSIZE or return undef ;
 	my $v = $s->FETCH($n - 1) ;
-	Ugly::Proxy::_splice($s->[0], $n - 1, 1) ;
+	Ugly::Core::_splice($s->[0], $n - 1, 1) ;
 	$v
 }
 sub SHIFT {
 	my $s = shift ;
 	$s->FETCHSIZE or return undef ;
 	my $v = $s->FETCH(0) ;
-	Ugly::Proxy::_splice($s->[0], 0, 1) ;
+	Ugly::Core::_splice($s->[0], 0, 1) ;
 	$v
 }
 # Perl's own rules: a negative offset counts from the end, a missing length
@@ -99,7 +103,7 @@ sub SPLICE {
 	$n = 0 if $n < 0 ;
 	$n = $len - $off if $n > $len - $off ;
 	my @gone = map { $s->FETCH($_) } $off .. $off + $n - 1 ;
-	Ugly::Proxy::_splice($s->[0], $off, $n, @_) ;
+	Ugly::Core::_splice($s->[0], $off, $n, @_) ;
 	wantarray ? @gone : $gone[-1]
 }
 
@@ -113,7 +117,7 @@ sub SPLICE {
 package Ugly::Iterator ;
 sub next {
 	my $s = shift ;
-	return Ugly::Proxy::_next($s->{of}) unless defined $s->{at} ;
+	return Ugly::Core::_next($s->{of}) unless defined $s->{at} ;
 	return if $s->{at} > $#{ $s->{of} } ;
 	$s->{of}[ $s->{at}++ ]
 }
@@ -183,9 +187,9 @@ sub opts {
 sub iter {
 	my ($x) = @_ ;
 	if (is_proxy($x)){
-		my $it = Ugly::Proxy::_iter($x) ;
+		my $it = Ugly::Core::_iter($x) ;
 		return bless { of => $it }, 'Ugly::Iterator' if defined $it ;
-		return bless { of => $x, at => 0 }, 'Ugly::Iterator' if Ugly::Proxy::_traits($x) & ELEMENTS ;
+		return bless { of => $x, at => 0 }, 'Ugly::Iterator' if Ugly::Core::_traits($x) & ELEMENTS ;
 	}
 	elsif (ref($x) && ref($x) ne 'Ugly::Package'){
 		return $x if UNIVERSAL::can($x, 'next') ;
@@ -238,10 +242,10 @@ sub bind_module {
 	$pkg = package_for($name) unless defined $pkg ;
 	my $m = Ugly::module($lang, $name) ;
 	bind_package($pkg, $m) ;
-	for my $k (Ugly::Proxy::_keys($m)){
+	for my $k (Ugly::Core::_keys($m)){
 		next unless $k =~ /^[A-Za-z_]\w*\z/ ;
-		my $v = Ugly::Proxy::_get($m, $k, 0) ;
-		bind_package("${pkg}::$k", $v) if is_proxy($v) && (Ugly::Proxy::_traits($v) & INSTANTIABLE) ;
+		my $v = Ugly::Core::_get($m, $k, 0) ;
+		bind_package("${pkg}::$k", $v) if is_proxy($v) && (Ugly::Core::_traits($v) & INSTANTIABLE) ;
 	}
 	$pkg
 }
@@ -251,8 +255,8 @@ my %reserved = map { ($_ => 1) } qw(AUTOLOAD DESTROY BEGIN END INIT CHECK UNITCH
 sub bind_package {
 	my ($pkg, $target) = @_ ;
 	no strict 'refs' ;
-	my $instantiable = Ugly::Proxy::_traits($target) & INSTANTIABLE ;
-	*{"${pkg}::new"} = sub { shift ; Ugly::Proxy::_new($target, @_) } if $instantiable ;
+	my $instantiable = Ugly::Core::_traits($target) & INSTANTIABLE ;
+	*{"${pkg}::new"} = sub { shift ; Ugly::Core::_new($target, @_) } if $instantiable ;
 	*{"${pkg}::AUTOLOAD"} = sub {
 		# Perl sets $AUTOLOAD in the package this closure was compiled in: ours.
 		(my $name = $Ugly::AUTOLOAD) =~ s/.*:// ;
@@ -274,15 +278,15 @@ sub bind_package {
 # leading class name is dropped.
 sub member_sub {
 	my ($pkg, $target, $name) = @_ ;
-	return undef unless Ugly::Proxy::_has($target, $name) ;
-	my $v = Ugly::Proxy::_get($target, $name, 0) ;
-	if (is_proxy($v) && (Ugly::Proxy::_traits($v) & CALLABLE)){
+	return undef unless Ugly::Core::_has($target, $name) ;
+	my $v = Ugly::Core::_get($target, $name, 0) ;
+	if (is_proxy($v) && (Ugly::Core::_traits($v) & CALLABLE)){
 		return sub {
 			shift if @_ && defined($_[0]) && ! ref($_[0]) && $_[0] eq $pkg ;
-			Ugly::Proxy::_invoke($target, $name, @_)
+			Ugly::Core::_invoke($target, $name, @_)
 		} ;
 	}
-	sub { Ugly::Proxy::_get($target, $name, 0) }
+	sub { Ugly::Core::_get($target, $name, 0) }
 }
 
 $INC{'Ugly.pm'} ||= __FILE__ ;

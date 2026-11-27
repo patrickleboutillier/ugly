@@ -74,6 +74,9 @@ entries =
   , ("colors", toUgly [Red, Green, Blue])
   , ("primes", toUgly [2, 3, 5, 7, 11 :: Int])
   , ("naturals", toUgly [0 :: Integer ..])
+    -- one heap object, two types: each is its own value
+  , ("noInts", toUgly ([] :: [Int]))
+  , ("noDoubles", toUgly ([] :: [Double]))
   , ("nothing", toUgly (Nothing :: Maybe Int))
   , ("just", toUgly (Just 'x'))
   , ("justNothing", toUgly (Just (Nothing :: Maybe Int)))

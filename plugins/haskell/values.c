@@ -39,8 +39,8 @@ int main(void){
 	ugly_release(ctx, h) ;
 	ok(error_is(ugly_rt_import(ctx, rt, "No.Such", &h), UGLY_ERR_NOT_FOUND, "ModuleNotFound", "No.Such"),
 		"import No.Such: NOT_FOUND, ModuleNotFound") ;
-	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 52),
-		"member_names: the 52 exports") ;
+	ok((ugly_member_names(ctx, mod, &h) == UGLY_OK)&&(ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 54),
+		"member_names: the 54 exports") ;
 	ok((ugly_get_index(ctx, h, 2, UGLY_ANY, &v) == UGLY_OK)&&is_string(v, "answer"), "in order: answer is third") ;
 	ugly_val_release(ctx, &v) ;
 	ugly_release(ctx, h) ;
@@ -104,6 +104,20 @@ int main(void){
 	get("colors", UGLY_ANY, &v) ;
 	ok((ugly_get_index(ctx, v.as.h, 2, UGLY_STRING, &w) == UGLY_OK)&&is_string(w, "Blue"), "[Color]: [2] is Blue") ;
 	ugly_val_release(ctx, &w) ;
+	ugly_val_release(ctx, &v) ;
+	/* [] is one heap object at every element type: two values all the same, each with its own type. */
+	ugly_val none ;
+	bool one = true ;
+	get("noInts", UGLY_ANY, &v) ;
+	get("noDoubles", UGLY_ANY, &none) ;
+	ok((ugly_same(ctx, v.as.h, none.as.h, &one) == UGLY_OK)&&(! one), "an empty [Int] and an empty [Double] are two values") ;
+	uint32_t seq = UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_FIXED_SIZE | UGLY_TRAIT_ITERABLE ;
+	ok(type_is(v.as.h, seq, "[Int]")&&type_is(none.as.h, seq, "[Double]"),
+		"  ... each of its own type") ;
+	get("noInts", UGLY_ANY, &w) ;
+	ok((ugly_same(ctx, v.as.h, w.as.h, &one) == UGLY_OK)&& one, "  ... and the empty [Int] is the same value each time") ;
+	ugly_val_release(ctx, &w) ;
+	ugly_val_release(ctx, &none) ;
 	ugly_val_release(ctx, &v) ;
 	get("naturals", UGLY_ANY, &v) ;
 	ok((ugly_get_index(ctx, v.as.h, 1000, UGLY_ANY, &w) == UGLY_OK)&&(w.as.i == 1000),

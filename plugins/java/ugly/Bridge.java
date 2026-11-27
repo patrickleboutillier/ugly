@@ -324,9 +324,17 @@ public final class Bridge {
 			MethodRef r = (MethodRef)f;
 			return invokeOn(r.cls, r.target, r.name, args);
 		}
-		if (f instanceof Foreign) return ((Foreign)f).call(args);
+		// Not overloaded: a hint is taken here (never left for the next resolution on this thread), and must name it.
+		String hint = HINT.get();
+		HINT.remove();
+		if (f instanceof Foreign){
+			if (hint != null) throw new NotFound("a foreign value has no overload (" + hint + ")");
+			return ((Foreign)f).call(args);
+		}
 		Method m = sam(f.getClass());
 		if (m == null) throw new NotCapable("value is not callable");
+		if ((hint != null)&&(! signature(m.getParameterTypes()).equals(hint)))
+			throw new NotFound("no overload " + m.getName() + "(" + hint + ")");
 		Object[] a = convert(m.getParameterTypes(), args);
 		if (a == null) throw new TypeMismatch("arguments don't fit " + m);
 		return unwrap(() -> m.invoke(f, a));
@@ -529,6 +537,9 @@ public final class Bridge {
 		if (t.isInstance(a)) return a;
 		if (a instanceof Long){
 			long v = (Long)a;
+			// Checked here too: fields, array elements and results come without score() having run.
+			if (((t == Integer.class)||(t == Short.class)||(t == Byte.class))&&(! fits(v, t)))
+				throw new TypeMismatch(v + " doesn't fit " + p.getSimpleName());
 			if (t == Integer.class) return (int)v;
 			if (t == Short.class) return (short)v;
 			if (t == Byte.class) return (byte)v;
@@ -537,7 +548,10 @@ public final class Bridge {
 			if (t == BigInteger.class) return BigInteger.valueOf(v);
 		}
 		if ((a instanceof Double)&&(t == Float.class)) return ((Double)a).floatValue();
-		if ((a instanceof String)&&(t == Character.class)) return ((String)a).charAt(0);
+		if ((a instanceof String)&&(t == Character.class)){
+			if (((String)a).length() != 1) throw new TypeMismatch("a char is a string of one UTF-16 unit");
+			return ((String)a).charAt(0);
+		}
 		if ((a instanceof Foreign)&&(t.isInterface())) return proxy((Foreign)a, t);
 		if ((a instanceof MethodRef)&&(samOf(t) != null)){
 			// A Java method passed where a functional interface is expected: implement it by calling the method.
