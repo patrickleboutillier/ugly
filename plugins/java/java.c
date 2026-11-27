@@ -46,11 +46,12 @@ static struct {
 	jclass Bridge, Foreign, ForeignException, NotFound, NotCapable, TypeMismatch, Throwable, Class, Object ;
 	jclass Boolean, Long, Integer, Short, Byte, Double, Float, Character, String, BigInteger, Number, ByteArray ;
 	jmethodID b_importClass, b_traits, b_typeName, b_getMember, b_setMember, b_memberNames, b_length,
-		b_getIndex, b_setIndex, b_deleteMember, b_splice, b_hint, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf, b_kind ;
+		b_getIndex, b_setIndex, b_deleteMember, b_splice, b_hint, b_call, b_invoke, b_newInstance, b_acquireId, b_releaseId, b_foreignOf, b_kind,
+		b_iter, b_next ;
 	jmethodID f_of ;
 	jfieldID f_handle ;
 	jmethodID fe_new, fe_take, fe_payload ;
-	jmethodID t_getMessage, c_getSimpleName, o_getClass ;
+	jmethodID t_getMessage, c_getSimpleName, o_getClass, o_toString ;
 	jmethodID bool_valueOf, bool_value, long_valueOf, double_valueOf, num_longValue, num_doubleValue ;
 	jmethodID char_value, bi_bitLength ;
 } J ;
@@ -895,6 +896,10 @@ static void JNICALL n_configure(JNIEnv *env, jclass cls, jstring lang, jstring k
 }
 
 
+static jobject JNICALL n_iter(JNIEnv *env, jclass cls, jlong h) ;
+static jboolean JNICALL n_next(JNIEnv *env, jclass cls, jlong h, jobjectArray slot) ;
+static jstring JNICALL n_to_str(JNIEnv *env, jclass cls, jlong h) ;
+
 static JNINativeMethod natives[] = {
 	{ "call", "(J[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_call },
 	{ "invoke", "(JLjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)n_invoke },
@@ -915,7 +920,87 @@ static JNINativeMethod natives[] = {
 	{ "module", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", (void *)n_module },
 	{ "eval", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", (void *)n_eval },
 	{ "configure", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", (void *)n_configure },
+	{ "iter", "(J)Ljava/lang/Object;", (void *)n_iter },
+	{ "next", "(J[Ljava/lang/Object;)Z", (void *)n_next },
+	{ "toStr", "(J)Ljava/lang/String;", (void *)n_to_str },
 } ;
+
+
+/* Its iterator (a Foreign, or a Java Iterator come home); null, with nothing thrown, if its language doesn't iterate it. */
+static jobject JNICALL n_iter(JNIEnv *env, jclass cls, jlong h){
+	(void)cls ;
+	ugly_ctx *ctx = native_ctx(env) ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_iter(ctx, (ugly_handle)h, &it) ;
+	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		return NULL ;
+	}
+	ugly_val v = ugly_hval(it) ;
+	return native_result(env, ctx, st, &v) ;
+}
+
+
+/* One step of a foreign iterator: true with the value in slot[0], false at the end. */
+static jboolean JNICALL n_next(JNIEnv *env, jclass cls, jlong h, jobjectArray slot){
+	(void)cls ;
+	ugly_ctx *ctx = native_ctx(env) ;
+	if (ctx == NULL){
+		return JNI_FALSE ;
+	}
+	ugly_val v = ugly_null() ;
+	size_t got = 0 ;
+	ugly_status st = ugly_next(ctx, (ugly_handle)h, UGLY_ANY, &v, 1, &got) ;
+	if ((st != UGLY_OK)||(got == 0)){
+		if (st != UGLY_OK){
+			throw_ugly(env, ctx, st) ;
+		}
+		return JNI_FALSE ;
+	}
+	jobject o = native_result(env, ctx, UGLY_OK, &v) ;
+	if ((*env)->ExceptionCheck(env)){
+		return JNI_FALSE ;
+	}
+	(*env)->SetObjectArrayElement(env, slot, 0, o) ;
+	(*env)->DeleteLocalRef(env, o) ;
+	return JNI_TRUE ;
+}
+
+
+/* Its language's string for it (ugly_to_string), or null if it has none; its exception, thrown. */
+static jstring JNICALL n_to_str(JNIEnv *env, jclass cls, jlong h){
+	(void)cls ;
+	ugly_ctx *ctx = native_ctx(env) ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	ugly_val v = ugly_null() ;
+	ugly_status st = ugly_to_string(ctx, (ugly_handle)h, &v) ;
+	if (st == UGLY_ERR_RAISED){
+		throw_ugly(env, ctx, st) ;
+		return NULL ;
+	}
+	if (st != UGLY_OK){
+		return NULL ;
+	}
+	const char *p = (v.kind == UGLY_STRING ? v.as.str.ptr : (const char *)v.as.bytes.ptr) ;
+	size_t len = (v.kind == UGLY_STRING ? v.as.str.len : v.as.bytes.len) ;
+	jstring s = new_string(env, p, len) ;
+	if (s == NULL){
+		/* Bytes that aren't UTF-8 (Lua, Perl): what isn't ASCII becomes U+FFFD. */
+		jchar *u = malloc((len + 1) * sizeof(jchar)) ;
+		size_t i ;
+		for (i = 0 ; (u != NULL)&&(i < len) ; i++){
+			u[i] = ((unsigned char)p[i] < 0x80 ? (jchar)p[i] : (jchar)0xFFFD) ;
+		}
+		s = (u != NULL ? (*env)->NewString(env, u, (jsize)len) : NULL) ;
+		free(u) ;
+	}
+	ugly_val_release(ctx, &v) ;
+	return s ;
+}
 
 
 /* ---------------------------------------------------------------- */
@@ -1254,6 +1339,82 @@ static ugly_status jv_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly
 }
 
 
+/* Bridge.iter: an Iterator is its own; Iterable.iterator(), arrays, streams. */
+static ugly_status jv_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	JNIEnv *env = ENV(rt) ;
+	FRAME_IN(env) ;
+	jobject it = (*env)->CallStaticObjectMethod(env, J.Bridge, J.b_iter, (jobject)ref) ;
+	ugly_val v = ugly_null() ;
+	ugly_status st = out_val(env, ctx, it, UGLY_HANDLE, &v) ;
+	if (st == UGLY_OK){
+		*out = v.as.h ;
+	}
+	FRAME_OUT(env) ;
+	return st ;
+}
+
+
+/*
+ * Bridge.next, in chunks of up to 256 (one crossing each): hasNext() and
+ * next() only as many times as asked. If the iterator throws, the values it
+ * made before are converted and kept, then its exception is the error.
+ */
+static ugly_status jv_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max,
+	size_t *got){
+
+	JNIEnv *env = ENV(rt) ;
+	ugly_status st = UGLY_OK ;
+	*got = 0 ;
+	while ((st == UGLY_OK)&&(*got < max)){
+		size_t chunk = (max - *got > 256 ? 256 : max - *got) ;
+		FRAME_IN(env) ;
+		jobjectArray vals = (*env)->NewObjectArray(env, (jsize)chunk, J.Object, NULL) ;
+		jintArray count = (vals != NULL ? (*env)->NewIntArray(env, 1) : NULL) ;
+		if (count == NULL){
+			st = java_failure(env, ctx) ;
+			FRAME_OUT(env) ;
+			break ;
+		}
+		(*env)->CallStaticIntMethod(env, J.Bridge, J.b_next, (jobject)ref, vals, count) ;
+		jthrowable e = (*env)->ExceptionOccurred(env) ;
+		if (e != NULL){
+			(*env)->ExceptionClear(env) ;
+		}
+		jint n = 0 ;
+		(*env)->GetIntArrayRegion(env, count, 0, 1, &n) ;
+		jint i ;
+		for (i = 0 ; (i < n)&&(st == UGLY_OK) ; i++){
+			jobject o = (*env)->GetObjectArrayElement(env, vals, i) ;
+			st = to_val(env, ctx, o, want, &out[*got]) ;
+			(*env)->DeleteLocalRef(env, o) ;
+			if (st == UGLY_OK){
+				(*got)++ ;
+			}
+		}
+		if ((st == UGLY_OK)&&(e != NULL)){
+			(*env)->Throw(env, e) ;
+			st = java_failure(env, ctx) ;
+		}
+		FRAME_OUT(env) ;
+		if ((size_t)n < chunk){
+			break ;     /* the end (or an error) */
+		}
+	}
+	return st ;
+}
+
+
+/* toString(). */
+static ugly_status jv_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	JNIEnv *env = ENV(rt) ;
+	FRAME_IN(env) ;
+	jobject s = (*env)->CallObjectMethod(env, (jobject)ref, J.o_toString) ;
+	ugly_status st = out_val(env, ctx, s, UGLY_STRING, out) ;
+	FRAME_OUT(env) ;
+	return st ;
+}
+
+
 static void jv_release(ugly_rt *rt, void *ref){
 	(void)rt ;
 	JNIEnv *env = env_here() ;
@@ -1338,6 +1499,11 @@ static int lookup(JNIEnv *env){
 	J.b_foreignOf = (*env)->GetStaticMethodID(env, J.Bridge, "foreignOf", sig) ;
 	snprintf(sig, sizeof(sig), "(%s)I", O) ;
 	J.b_kind = (*env)->GetStaticMethodID(env, J.Bridge, "kind", sig) ;
+	snprintf(sig, sizeof(sig), "(%s)%s", O, O) ;
+	J.b_iter = (*env)->GetStaticMethodID(env, J.Bridge, "iter", sig) ;
+	snprintf(sig, sizeof(sig), "(%s[%s[I)I", O, O) ;
+	J.b_next = (*env)->GetStaticMethodID(env, J.Bridge, "next", sig) ;
+	J.o_toString = (*env)->GetMethodID(env, J.Object, "toString", "()Ljava/lang/String;") ;
 
 	J.f_of = (*env)->GetStaticMethodID(env, J.Foreign, "of", "(J)Lugly/Foreign;") ;
 	J.f_handle = (*env)->GetFieldID(env, J.Foreign, "handle", "J") ;
@@ -1497,6 +1663,9 @@ static const ugly_plugin plugin = {
 	.call = jv_call,
 	.invoke = jv_invoke,
 	.new_instance = jv_new_instance,
+	.iter = jv_iter,
+	.next = jv_next,
+	.to_string = jv_to_string,
 	.release = jv_release,
 } ;
 

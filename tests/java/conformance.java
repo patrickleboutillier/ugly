@@ -10,7 +10,10 @@ import java.lang.ref.ReferenceQueue;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.stream.Stream;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -39,6 +42,7 @@ public final class conformance {
 		public final list items = new list();
 		public counter(){ track(this); }
 		public long inc(){ count++; items.add(count); return count; }
+		@Override public String toString(){ return "counter(" + count + ")"; }
 	}
 
 	public static final class ConformanceError extends RuntimeException {
@@ -106,6 +110,64 @@ public final class conformance {
 		throw new ForeignException(e);
 	}
 
+	/* Iteration (contract §2): iterators that run only as far as asked, and a stream, closed when released. */
+	private static long producedCount = 0;
+	private static volatile long closedCount = 0;
+
+	public static Iterator<Long> count_to(long n){
+		producedCount = 0;
+		return new Iterator<Long>(){
+			long i = 0;
+			@Override public boolean hasNext(){ return i < n; }
+			@Override public Long next(){
+				if (i >= n) throw new NoSuchElementException();
+				producedCount++;
+				return i++;
+			}
+		};
+	}
+
+	public static Stream<Long> naturals(){
+		return Stream.iterate(0L, i -> i + 1).onClose(() -> closedCount++);
+	}
+
+	public static Iterator<Long> fail_after(long n){
+		return new Iterator<Long>(){
+			long i = 0;
+			@Override public boolean hasNext(){ return true; }
+			@Override public Long next(){
+				if (i >= n) throw new ConformanceError("fail_after(" + n + ")");
+				return i++;
+			}
+		};
+	}
+
+	public static long produced(){ return producedCount; }
+
+	/* for-each takes an Iterable; an iterator coming home is looped over as it is. */
+	private static Iterable<?> each(Object xs){
+		if (xs instanceof Iterator) return () -> (Iterator<Object>)xs;
+		return (Iterable<?>)xs;
+	}
+
+	public static long sum_iter(Object xs){
+		long total = 0;
+		for (Object x : each(xs)) total += ((Number)x).longValue();
+		return total;
+	}
+
+	public static ArrayList<Object> take_iter(Object xs, long n){
+		ArrayList<Object> taken = new ArrayList<>();
+		if (n <= 0) return taken;
+		for (Object x : each(xs)){
+			taken.add(x);
+			if (taken.size() >= n) break;
+		}
+		return taken;
+	}
+
+	public static String stringify(Object x){ return String.valueOf(x); }
+
 	public static long finalized(){
 		for (int round = 0 ; round < 5 ; round++){
 			System.gc();
@@ -120,6 +182,6 @@ public final class conformance {
 				Thread.currentThread().interrupt();
 			}
 		}
-		return finalizedCount;
+		return finalizedCount + closedCount;
 	}
 }
