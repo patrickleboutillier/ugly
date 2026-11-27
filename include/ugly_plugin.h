@@ -47,7 +47,9 @@ extern "C" {
  *     a handle whose home is this runtime arrives, use the original native
  *     value (ugly_resolve), never a proxy.
  *  6. Identity: export the same native object with the same identity key, so
- *     the core returns the same handle while it is live.
+ *     the core returns the same handle while it is live. In a language with
+ *     no object identity, derive the best key the runtime offers (Haskell:
+ *     a StableName after forcing to WHNF), or pass 0 for none.
  *  7. Errors: a native exception escaping to the core becomes a ugly_error
  *     (ugly_raise_native) whose payload is the exception object. A ugly_error
  *     raised into the language is thrown natively as a wrapper (ugly_take_error)

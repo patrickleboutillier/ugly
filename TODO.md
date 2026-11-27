@@ -20,6 +20,13 @@ already written in Python. HAProxy works, in both of its Lua modes
 
 All additive: none of it breaks existing plugins (contract, "Scope").
 
+- [ ] **`ugly_splice` on an infinite sequence doesn't return.** The core
+  checks the range with the plugin's `length` before the plugin's `splice`
+  runs, so a lazy Haskell list hangs where the plugin would refuse it
+  (`UGLY_ERR_NOT_CAPABLE`, every Haskell write). One additive fix is a trait for fixed-size sequences,
+  which the core refuses before asking for the length (contract §2,
+  "A sequence may be unbounded").
+
 - [ ] **Iterators and generators**: a protocol for "next" (Python iterators,
   Lua `pairs`/closures, JS iterators), beyond indexing.
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
