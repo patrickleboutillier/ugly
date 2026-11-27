@@ -705,7 +705,7 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 | Group | Covers |
 |---|---|
 | values | every kind round-trips through `echo`; int64 extremes; NaN and ±inf; strings with NUL and non-ASCII; bytes; `want` conversions per the language's own rules |
-| protocol | traits from `describe`; members, elements and `length`; `invoke` versus get-then-call; `new`; `splice` (replace, append, remove, clear, the range check) and `delete_member` (exact, or refused where members are fixed) |
+| protocol | traits from `describe`; members, elements and `length`; `invoke` versus get-then-call; `new`; `splice` (replace, append, remove, clear, the range check) and `delete_member` (exact, or refused where members are fixed); `call`, `invoke` and `new` with 1000 arguments (taken or refused) |
 | ownership | `release` runs the native finalizer (`finalized()` goes up); `dup` keeps the object alive; a stale handle is detected; **a borrowed handle kept after the call is detected**; `ugly_same` after round trips |
 | identity | the same object exported twice gives the same handle; proxies unwrap when they return home, so there's no proxy of a proxy |
 | callbacks | C → L → C → L to depth 100; runaway recursion fails cleanly, every level unwinds, and the runtime survives; L1 → L2 → L1 across runtimes; the C host owns callable lifetimes |

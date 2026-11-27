@@ -168,6 +168,38 @@ ok(ugly.eval("lua", "return require('ugly').module('python', 'math').sqrt(16)") 
 ok(ugly.eval("lua", "return require('ugly').module('python', '__main__').obj") is obj,
    "  ... and sees this script's own globals")
 
+# More arguments than Lua's stack has room for unasked: the Lua plugin asks for the room.
+count_args = ugly.eval("lua", "return function(...) return select('#', ...) end")
+ok(count_args(*range(1000)) == 1000, "a Lua function called with 1000 arguments gets them all")
+taker = ugly.eval("lua", "return { m = function(...) return select('#', ...) end }")
+ok(taker.m(*range(300)) == 300, "  ... and a Lua method invoked with 300")
+try:
+    count_args(*range(2000000))
+    ok(False, "  ... and more than Lua's stack can hold raises ugly.Error")
+except ugly.Error as e:
+    ok("stack overflow" in e.message, f"  ... and more than Lua's stack can hold raises ugly.Error: {e.message}")
+
+# Assigning through a proxy: the key is read before the GIL is released (-1 is CPython's error value).
+t = ugly.eval("lua", "return { 1, 2, 3, name = 'x' }")
+t[1] = 20
+t["name"] = "y"
+ok(t[1] == 20 and t["name"] == "y", "proxy[int] = v and proxy[str] = v")
+try:
+    t[-1] = 5
+    ok(False, "proxy[-1] = v is refused by Lua")
+except ugly.Error as e:
+    ok(True, f"proxy[-1] = v is refused by Lua: {e.message}")
+class BadIndex:
+    def __index__(self):
+        raise ValueError("no index")
+for key, exc, what in ((BadIndex(), ValueError, "an __index__ that raises"), (1.5, TypeError, "a float key"),
+        ("\udc80", UnicodeEncodeError, "a key that isn't UTF-8")):
+    try:
+        t[key] = 1
+        ok(False, f"proxy[key] = v with {what} raises {exc.__name__}")
+    except exc:
+        ok(True, f"proxy[key] = v with {what} raises {exc.__name__}")
+
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")
 ok(ugly.eval("lua", "return package.cpath").startswith("/configured/?.so;"), "  ... and cpath comes first in package.cpath")

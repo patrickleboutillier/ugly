@@ -16,6 +16,7 @@
  * - Elements are 0-based in the protocol and 1-based in Lua: ugly index i is
  *   Lua index i + 1, in both directions.
  */
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,14 @@
 #define PROXY_CACHE "ugly.proxies"
 
 #define REF(p) ((int)(intptr_t)(p))
+
+/*
+ * Stack slots to ask Lua for before pushing n arguments (lua_checkstack):
+ * the arguments, plus what converting one needs. Lua doesn't check pushes,
+ * and guarantees a C function only 20 free slots. Too many to count is
+ * refused by Lua like any size past its limit.
+ */
+#define ARG_SLOTS(n) ((n) < (size_t)(INT_MAX - 8) ? (int)(n) + 8 : INT_MAX)
 #define PTR(r) ((void *)(intptr_t)(r))
 
 #define RT_KEY "ugly.rt"
@@ -480,8 +489,10 @@ static int callable(lua_State *L, int idx){
 }
 
 
+/* Inside op_body (a pcall): too many for Lua's stack is a Lua error. */
 static int push_args(op *o){
 	size_t i ;
+	luaL_checkstack(o->r->L, ARG_SLOTS(o->nargs), "too many arguments") ;
 	for (i = 0 ; i < o->nargs ; i++){
 		if ((o->st = push_val(o->ctx, o->r, o->r->L, o->args[i])) != UGLY_OK){
 			return 0 ;
@@ -1687,6 +1698,9 @@ static ugly_status lua_call_op(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly
 	lua_rawgeti(L, LUA_REGISTRYINDEX, REF(ref)) ;
 	if (! callable(L, -1)){
 		st = ugly_fail(ctx, rt, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not callable") ;
+	}
+	if ((st == UGLY_OK)&&(! lua_checkstack(L, ARG_SLOTS(nargs)))){
+		st = ugly_raise_native(ctx, rt, "error", "stack overflow (too many arguments)", NULL, 0) ;
 	}
 	size_t i ;
 	for (i = 0 ; (i < nargs)&&(st == UGLY_OK) ; i++){

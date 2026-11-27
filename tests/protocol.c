@@ -198,6 +198,36 @@ int main(void){
 		ugly_release(ctx, m) ;
 	}
 
+	/*
+	 * More arguments than any fixture takes, and than an interpreter's stack
+	 * has room for unasked (Lua guarantees a C function 20 slots): taken or
+	 * refused, by the language's own rules, and the runtime works afterwards.
+	 */
+	enum { MANY = 1000 } ;
+	static ugly_val many[MANY] ;
+	for (i = 0 ; i < MANY ; i++){
+		many[i] = ugly_int(i) ;
+	}
+	st = fcall(&f, f.mod, "echo", many, MANY, UGLY_ANY, &v) ;
+	ok((st == UGLY_OK)||(ugly_last_error(ctx) != NULL), "call with %d arguments: taken or refused", MANY) ;
+	ugly_val_release(ctx, &v) ;
+	c = make_counter(&f, f.mod) ;
+	st = ugly_invoke(ctx, c, "inc", many, MANY, UGLY_ANY, &v) ;
+	ok((st == UGLY_OK)||(ugly_last_error(ctx) != NULL), "invoke with %d arguments: taken or refused", MANY) ;
+	ugly_val_release(ctx, &v) ;
+	ugly_release(ctx, c) ;
+	if (ugly_get_member(ctx, f.mod, "Point", UGLY_HANDLE, &cls) == UGLY_OK){
+		ugly_handle p = UGLY_NO_HANDLE ;
+		st = ugly_new(ctx, cls.as.h, many, MANY, &p) ;
+		ok((st == UGLY_OK)||(ugly_last_error(ctx) != NULL), "new with %d arguments: taken or refused", MANY) ;
+		ugly_release(ctx, p) ;
+		ugly_val_release(ctx, &cls) ;
+	}
+	v = ugly_int(7) ;
+	ugly_val back ;
+	st = fcall(&f, f.mod, "echo", &v, 1, UGLY_INT, &back) ;
+	ok((st == UGLY_OK)&&(back.as.i == 7), "  ... and the runtime still works") ;
+
 	fx_teardown(&f) ;
 	return done_testing() ;
 }
