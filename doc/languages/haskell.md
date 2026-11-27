@@ -4,8 +4,8 @@ Haskell compiled by GHC (8.8 or later, with shared libraries and the
 threaded RTS: Debian's `ghc`), language `"haskell"`. GHC's runtime system
 runs in the host's process. How Haskell maps onto the protocol is the
 Haskell column of [the contract's §10](../contract.md#10-the-languages);
-why it's built this way is [doc/haskell-bridge.md](../haskell-bridge.md).
-This page is the practical side.
+this page is the practical side, and ends with the
+[design choices](#design-choices) that shaped it.
 
 Haskell is compiled, and has no reflection at run time, so it differs from
 the other languages in one way: **a module is a library built for UGLY**.
@@ -224,6 +224,30 @@ Keys: `rts`, RTS options, as between `+RTS` and `-RTS` (`-N4`; the RTS also
 reads `GHCRTS`), and `path`, directories of module libraries, ahead of
 `UGLY_HASKELL_PATH`. In the binding the RTS is the program's, so only
 `path` applies.
+
+## Design choices
+
+Decided by the author (2026-11-26), on questions of idiom and feel:
+
+1. **`invoke` puts the receiver last**, as Haskell puts the subject last
+   (`x & f a b`): `chord.transpose(Min3rd, above)` is `transpose Min3rd
+   above chord`, a function of the module that exported `Chord`. On a
+   module, `invoke` calls its function with no receiver.
+2. **Integers that don't fit are refused** (`UGLY_ERR_TYPE`), never wrapped
+   as `fromInteger` would; this also rules out an instantiation whose
+   integer type is too small. Going out, an `Integer` beyond int64 is a box
+   of its digits.
+3. **`Maybe` is flattened**: `Nothing` is null, `Just x` is `x`, unless `x`
+   is itself null; then it stays a box one element long, so nothing is lost.
+4. **Export lists are written by hand** (`uglyModule` with names). A tool
+   that drafts one from the GHC API can come later.
+5. **No cap on `length`** of a lazy list: an infinite one doesn't return,
+   as in Haskell.
+
+Not built: `eval` and import by name through the GHC API (the `hint`
+package), which would find any installed module with no export module, at
+the cost of `libHSghc` (about 100 MB), a slow start, and an API that
+changes with every GHC.
 
 ## Pitfalls
 

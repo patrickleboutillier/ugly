@@ -154,8 +154,7 @@ main = Ugly.withUgly $ do
   print (sum (xs :: [Int]))                            -- 6: a Python list as a [Int]
 ```
 
-Haskell's guide is [doc/languages/haskell.md](doc/languages/haskell.md),
-and its design [doc/haskell-bridge.md](doc/haskell-bridge.md).
+Haskell's guide is [doc/languages/haskell.md](doc/languages/haskell.md).
 
 A QuickJS program (`qjs`) works the same way, by importing the native module
 ([tests/js/test_binding.js](tests/js/test_binding.js)):

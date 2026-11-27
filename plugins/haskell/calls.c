@@ -1,7 +1,7 @@
 /*
  * Calls into Haskell, until the plugin joins the conformance suite: the
  * functions of the test module Smoke. Currying, the literal rules
- * for arguments (doc/haskell-bridge.md), IO, Haskell functions coming home,
+ * for arguments (doc/languages/haskell.md), IO, Haskell functions coming home,
  * invoke with the receiver last, and overloads chosen by the arguments.
  */
 #include "tap.h"

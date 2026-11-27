@@ -149,8 +149,7 @@ contract and in the pull requests.
   arguments, hints), and its binding (`Ugly.dll` in any .NET program,
   through `dynamic`).
 - **Haskell** (GHC, 2026-11-26): the language that tested the contract's
-  assumptions most, built as [doc/haskell-bridge.md](doc/haskell-bridge.md)
-  planned it. Modules are compiled export tables Template Haskell
+  assumptions most. Modules are compiled export tables Template Haskell
   generates, in module libraries on a path; polymorphic functions are
   expanded per instance and chosen at the call (a hint is a type
   application, `want` picks by result); foreign values and callbacks in

@@ -12,7 +12,7 @@
  * Haskell values are immutable, so writing is refused, except for the
  * mutable values a module makes itself (IORefs behind a box). The RTS is one-way (it can't be started
  * again once stopped), so there's no 'term' and no UGLY_CAP_RESTARTABLE.
- * doc/haskell-bridge.md is the plan.
+ * doc/languages/haskell.md is the guide.
  */
 #define _GNU_SOURCE     /* RTLD_DEFAULT */
 #include <dlfcn.h>
