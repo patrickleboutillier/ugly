@@ -213,6 +213,11 @@ lines of C, with no interpreter in the way: read it first.
   reaches the host's interpreter instead of starting another.
 - **Attach on first use, on that thread**, not at import: HAProxy loads Lua
   states on its main thread and runs them on workers.
+- **A finalizer mustn't release on the spot** if the engine can't run its
+  own code inside its collector (QuickJS). Releasing a foreign value can
+  run anything, including a destructor that calls back into you. Queue the
+  release and run the queue where your language's code may run (JS: at its
+  next call out, and when the current call into it returns).
 - **Drain at your entry points.** A host program runs its own code without
   entering its runtime through the core, where queued releases run. Call
   `ugly_rt_drain` wherever the host's code uses `ugly` (it is one atomic

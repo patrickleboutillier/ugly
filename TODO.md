@@ -8,48 +8,23 @@ behind each item; what's done is listed at the end. The contract,
 
 A bug hunt over the core and the eight plugins, after 2.7.0. Each was
 confirmed by a repro unless marked *(by reading)*. Line numbers are 2.7.0's.
-The three worst crashes and the leaks are fixed (under "Done").
+The crashes and the leaks are fixed (under "Done").
 
-### Crashes and memory corruption
+### Crashes: what's left
 
-- [ ] **JS: JS code runs inside a QuickJS finalizer** (`js.c`,
-  `proxy_finalizer`). It releases synchronously; if the released value's
-  destructor re-enters JS (an open generator's `return()` in `js_release`,
-  a Perl `DESTROY`, a Lua `__gc`), JS runs mid-GC: SIGSEGV. `tearing_down`
-  only covers the binding's teardown. Defer releases made from a finalizer
-  (queue, drain in `leave()` or the next `enter`).
-- [ ] **Perl: croaks outside `G_EVAL`.** `hv_store` (`perl5.c:1437`),
-  `hv_delete`, `av_store`, `av_fill`/`av_push` in splice; tied `FETCH`,
-  `FETCHSIZE`, `FIRSTKEY` (`SvGETMAGIC`, `av_len`, `hv_iternext`);
-  overloaded `bool` (`SvTRUE`) and `""` (`SvPV_nolen` in `perl_failure`).
-  Embedded, the process exits (Python storing to a `lock_keys` hash); in the
-  binding the croak longjmps over the core's frames (`rt_leave`, JS's
-  `leave()`, Python's GIL). Needs a `G_EVAL` wrapper around them.
-- [ ] **Haskell: calls out from unbound threads use another thread's ctx**
-  (`Marshal.hs`, `currentCtx`/`operation`; `glue.c`'s `current_rt`). The ctx
-  is read by an `unsafe` import, the operation is a later `safe` call, and a
-  `forkIO` thread can change OS thread in between: `WRONG_THREAD`, then
-  `ugly_take_error` on a ctx it doesn't own (segfault with 16 threads
-  calling Python). The guide implies `forkIO` works. Take the ctx inside the
-  same safe C call, or use `runInBoundThread`.
-- [ ] **Haskell: an exception inside `raise` kills the host**
-  (`Marshal.hs`, `guarded`). `raise` is outside the `catch`: `withUtf8` on a
-  message with a lone surrogate (a non-UTF-8 `FilePath` in an
-  `IOException`), or `newRef` forcing an exception that is itself bottom,
-  escapes the foreign export and the RTS exits. Make `raise` total.
-- [ ] **Haskell: `STACK_CHECK` is off on stacks of 2 MB or less**
-  (`haskell.c`, `stack_left`): the JVM's threads have 1 MB. Deep re-entry
-  segfaults there. Scale the reserve (`min(1 MB, size / 4)`). *(By
-  reading:)* only `call` and `invoke` are checked.
-- [ ] **Haskell: `set_index` on an infinite list** (`Plugin.hs`,
-  `hsSetIndex`) asks for the length before refusing: `naturals[0] = 1`
-  exhausts memory. The 2.6.0 splice hang, still there for `set_index`.
-- [ ] **Perl: `xs_proxy_keys` uses a stale `sp`** (`perl5.c:941`) after a
-  core call that can grow perl's stack (valgrind: invalid write). `SPAGAIN`.
-  *(By reading:)* the same for `&ST(1)` passed to `take_kw`/`xs_args`.
-- [ ] **Perl binding: ithreads.** No `CLONE_SKIP` in `Ugly::Proxy` and
-  `Ugly::Error`: a thread's clone releases the parent's handle at join
-  (and would free an error twice).
+The eight crashes are fixed (under "Done"). Seen while fixing them, by
+reading only:
+
+- [ ] **Haskell: only `call` and `invoke` check the stack** (`STACK_CHECK`);
+  `get_member`, `new_instance`, `iter` and `next` enter Haskell unchecked.
+- [ ] **Perl: `&ST(1)` handed to `take_kw`/`xs_args`** while converting an
+  argument can run a tied `FETCH` that moves perl's stack.
+- [ ] **Perl: what an entry had allocated in C is lost when it croaks**
+  (the guard catches the croak; the entry's `malloc`s and owned handles at
+  that point leak).
+- [ ] **JS: a finalizer after the binding's teardown releases on the
+  spot.** Nothing of ours is left to re-enter then, but another language's
+  destructor still runs inside QuickJS's collection.
 
 ### Wrong results
 
@@ -92,8 +67,6 @@ The three worst crashes and the leaks are fixed (under "Done").
   (`newRef`: the `StableName` alone): a newtype and its contents, empty
   `Map`s at different types. One comes back with the other's box. Key on
   the type too.
-- [ ] **JS: a job run in `leave()` erases the failing call's error**, if
-  it makes any core call. Take and restore the error around `run_jobs`.
 - [ ] **JS: symbol-keyed assignment on a proxy** writes a string member
   (`d[Symbol.iterator] = 2` makes a key "Symbol.iterator").
 
@@ -102,11 +75,9 @@ The three worst crashes and the leaks are fixed (under "Done").
 - [ ] **Messages cut mid-character, or not UTF-8.** Lua, Python, Perl and
   JS cut messages at 511 bytes with `snprintf`, and Lua and Perl pass
   bytes that aren't UTF-8. Python then raises `UnicodeDecodeError` instead
-  of `ugly.Error` (`raise_ugly`), and Haskell an `IOException` instead of
-  `ForeignError` (`failed`): type, language and payload are lost. Sanitize
-  once in the core (`error_new`), and decode leniently in those two.
-- [ ] **Haskell: a member name that isn't UTF-8** is `RAISED`, not
-  `NOT_FOUND` (`peekUtf8` in `hsGetMember`...). *(By reading.)*
+  of `ugly.Error` (`raise_ugly`): type, language and payload are lost.
+  Sanitize once in the core (`error_new`), and decode leniently in Python.
+  (Haskell decodes leniently since the crash fixes.)
 
 ### Smaller
 
@@ -139,8 +110,7 @@ The three worst crashes and the leaks are fixed (under "Done").
 - [ ] **Haskell binding:** `withUgly` from two threads at once races
   (`binding.c`'s `b_depth`, `b_ctx`). *(By reading.)*
 - [ ] **Perl:** a string once used as a number goes out as a number (IOK
-  before POK): a design call, or a pitfall for the guide. An exception
-  object whose `bool` is false counts as success *(by reading)*.
+  before POK): a design call, or a pitfall for the guide.
 - [ ] **JS** *(by reading)*: a throwing `done` getter reads as "finished";
   `ugly.opts({context: 5})` is silently ignored.
 - [ ] **Mock** *(by reading)*: `want = STRING` on BYTES isn't validated as
@@ -333,5 +303,15 @@ contract and in the pull requests.
   Perl leaked an RV per call of a package's sub, and kept arrays it had
   iterated); Lua's `proxy[key] = v` reads the key before converting the
   value.
+- **Review fixes, the other crashes** (2026-11-27): JS queues what a
+  QuickJS finalizer has to release and runs it where JS may run (a
+  destructor re-entering JS inside the collection was a segfault), and a
+  job run after a failed call no longer erases its error; every entry into
+  Perl runs under `eval` (a croak in perl's API ended the process, or
+  jumped over the core's frames), `keys %$proxy` re-reads perl's stack
+  pointer, and ithreads don't clone proxies; Haskell's calls out run on one
+  OS thread from start to end (a `forkIO` thread used another thread's
+  ctx), `raise` can't throw, the stack check works on small stacks, and
+  `set_index` on an infinite list is refused before its length is asked.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).

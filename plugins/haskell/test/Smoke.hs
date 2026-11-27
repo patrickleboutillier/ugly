@@ -92,6 +92,9 @@ entries =
   , ("identity", toUgly (id :: Value -> Value))
   , ("apply", toUgly ((\f x -> f x) :: (Int -> Int) -> Int -> Int))
   , ("explode", toUgly ((\n -> if n > 0 then n else error "not positive") :: Int -> Int))
+    -- errors that are hard to report: a message UTF-8 can't encode, an exception that is itself an error
+  , ("unsayable", toUgly ((\_ -> error "bad file name: \xDC80") :: Int -> Int))
+  , ("unthrowable", toUgly ((\_ -> throw (error "inner" :: ArithException)) :: Int -> Int))
   , ("tick", toUgly (atomicModifyIORef' counter (\n -> (n + 1, n + 1))))
   , ("tickBy", toUgly (\k -> atomicModifyIORef' counter (\n -> (n + k, n + k)) :: IO Int))
   , ("next", toUgly next)

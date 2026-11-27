@@ -156,12 +156,15 @@ hsSplice ctx rt ref off n ins count = guarded ctx rt $ withElems ctx rt ref $ \e
 
 -- | set_index: replaces element i, or appends at the length.
 hsSetIndex :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Ptr Val -> IO Status
-hsSetIndex ctx rt ref i v = guarded ctx rt $ withElems ctx rt ref $ \es -> do
-  n <- elemsLength es
-  let i' = fromIntegral i
-  if i' < 0 || i' > n
-    then failWith ctx rt errNotFound "ArrayException" "index out of range"
-    else splice ctx rt es i' (if i' == n then 0 else 1) v 1
+hsSetIndex ctx rt ref i v = guarded ctx rt $ withElems ctx rt ref $ \es -> case elemsSplice es of
+  -- Before its length is asked for: an immutable list may be infinite.
+  Nothing -> failWith ctx rt errNotCapable "TypeError" "Haskell values are immutable"
+  Just _ -> do
+    n <- elemsLength es
+    let i' = fromIntegral i
+    if i' < 0 || i' > n
+      then failWith ctx rt errNotFound "ArrayException" "index out of range"
+      else splice ctx rt es i' (if i' == n then 0 else 1) v 1
 
 -- | new: calls a constructor.
 hsNewInstance :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Ptr Handle -> IO Status

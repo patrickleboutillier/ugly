@@ -4,6 +4,7 @@ use warnings ;
 use Ugly ;
 use File::Basename () ;
 use File::Spec () ;
+use Config () ;
 
 # Options for Python before anything starts it (the "use Ugly python => ..." below runs at compile time).
 BEGIN {
@@ -153,6 +154,69 @@ my $sc = $py->make_counter ;
 $sc->inc ;
 ok("$sc" eq "counter(1)", "\"\$proxy\" is Python's str(): counter(1)") ;
 ok($py->stringify(Countdown->new(1)) =~ /^Countdown=HASH\(0x/, "Python's str() of a Perl object is Perl's own: Countdown=HASH(0x...)") ;
+
+# A croak in Perl's API, during an operation another language asked for, is that operation's error.
+{
+	require Hash::Util ;
+	my %locked = (a => 1) ;
+	Hash::Util::lock_ref_keys(\%locked) ;
+	my $store = Ugly::eval("python", "lambda d, k, v: d.__setitem__(k, v)") ;
+	eval { $store->(\%locked, "b", 2) } ;
+	ok($@ =~ /disallowed key/, "Python storing into a restricted hash: Perl's error, raised in Python and back here") ;
+	my %open ;
+	$store->(\%open, "b", 2) ;
+	ok($open{b} == 2, "  ... and the next store works") ;
+}
+
+# Keys of a proxy, when listing them comes back into Perl and moves its stack.
+{
+	my $grow = sub { my @big = (1) x 200000 ; my @r = sub { @_ }->(@big) ; scalar(@r) } ;
+	my $obj = Ugly::eval("python",
+		"lambda cb: type('O', (), {'__dir__': lambda self: (cb(), ['alpha', 'beta'])[1], 'alpha': 1, 'beta': 2})()")->($grow) ;
+	my @keys = sort grep { ! /^_/ } keys %$obj ;
+	ok("@keys" eq "alpha beta", "keys %\$proxy while Python's __dir__ calls back into Perl: @keys") ;
+}
+
+# ithreads: a thread gets no copy of a proxy, so ending it releases nothing.
+if ($Config::Config{useithreads}){
+	require threads ;
+	my $dict = Ugly::eval("python", "{'a': 1}") ;
+	my $err = do { eval { $py->raise_error("kept") } ; $@ } ;
+	threads->create(sub { 1 })->join ;
+	ok(eval { $dict->{a} == 1 }, "a proxy still works after a thread started and ended") ;
+	ok($err->message eq "kept", "  ... and so does an Ugly::Error") ;
+}
+else {
+	ok(1, "ithreads # SKIP this perl has none") for 1 .. 2 ;
+}
+
+# A JS value dropped by JS's GC while it holds a Perl value that holds an open JS iterator:
+# the iterator is closed (its finally runs) after the collection, not inside it.
+if ($built{js}){
+	my $hold = sub { my $it = Ugly::iter($_[0]) ; $it->next ; return { it => $it } } ;
+	my $run = Ugly::eval("js", q{
+		(hold) => {
+			globalThis.closed = 0 ;
+			function* gen(){ try { yield 1 ; yield 2 } finally { let junk = [] ; for (let i = 0 ; i < 1000 ; i++) junk.push({ i, s: "x" + i }) ; globalThis.closed++ } }
+			let holder = hold(gen()) ;
+			holder = null ;
+			return 1 ;
+		}}) ;
+	$run->($hold) ;
+	Ugly::eval("js", 'import("ugly").then(m => { m.gc() }) ; 0') ;
+	ok(Ugly::eval("js", "globalThis.closed") == 1, "a JS iterator released from JS's own collection is closed afterwards") ;
+}
+else { skip_test("releases from a JS finalizer", "js") }
+
+# A JS call that fails with a job pending: the job runs after it, and its calls out don't erase the error.
+if ($built{js}){
+	my $fails = Ugly::eval("js", '(cb) => { Promise.resolve().then(() => cb()) ; throw new RangeError("boom") }') ;
+	my $ran = 0 ;
+	eval { $fails->(sub { $ran++ }) } ;
+	ok(Ugly::is_error($@) && $@->type eq 'RangeError' && $@->message eq 'boom' && $ran == 1,
+		"a JS error survives the job that runs after it: " . (Ugly::is_error($@) ? $@->type : $@)) ;
+}
+else { skip_test("a JS error and a pending job", "js") }
 
 print "1..$count\n" ;
 exit($failures ? 1 : 0) ;

@@ -149,13 +149,21 @@ An error from another language is an `Ugly::Error` object with `type`,
 goes on unchanged, and `die $e->payload` rethrows the original exception.
 
 A Perl `die` going out has the object's class as its type (and its
-`message` field, if it's a hash), or `die` and the string.
+`message` field, if it's a hash), or `die` and the string. An error perl
+itself raises while another language uses a Perl value (a store into a
+restricted hash, a tied `FETCH` that dies) is that operation's error, in
+the same way. An exception object whose `""` overload dies has its class's
+name for a message.
 
 ## Threads
 
 Each Perl interpreter belongs to the thread that created it: calls from
 another thread fail with `UGLY_ERR_WRONG_THREAD`. A process can have several
 (`UGLY_CAP_MULTI_RUNTIME`).
+
+With ithreads, a new thread gets no copy of the proxies and errors its
+parent holds (`CLONE_SKIP`): they are undefined there. Foreign values stay
+with the thread that got them.
 
 ## Configuring
 

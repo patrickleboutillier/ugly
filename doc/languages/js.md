@@ -134,7 +134,10 @@ Key: `path` (module directories), ahead of `UGLY_JS_PATH`:
   call into the runtime returns, not during it, and when JS is the host
   (`qjs`), the host's event loop runs them. Finalizers on proxies run only
   when QuickJS collects: call `ugly.gc()` to release foreign values
-  promptly.
+  promptly. What a finalizer releases is released just after the
+  collection, at JS's next call out or when the current call into JS
+  returns: another language's destructor never runs inside QuickJS's
+  collector.
 - **Stack depth.** QuickJS has its own stack limit (about 340 nested levels
   of alternating calls here); deep cross-language recursion fails there
   with QuickJS's "stack overflow" error, cleanly.

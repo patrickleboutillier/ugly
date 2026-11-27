@@ -32,6 +32,8 @@ sub can {
 	Ugly::Proxy::_has($s, $m) ? sub { Ugly::Proxy::_invoke(shift, $m, @_) } : undef
 }
 sub DESTROY { delete $code{${$_[0]}} ; Ugly::Proxy::_release($_[0]) }
+# A new ithread gets no copy: a copy's DESTROY would release the handle this thread holds.
+sub CLONE_SKIP { 1 }
 
 # %$proxy: the members (fields, methods, dict/hash/table entries).
 package Ugly::Proxy::Hash ;
@@ -126,6 +128,7 @@ sub message { $_[0]{message} }
 sub language { $_[0]{language} }
 sub payload { $_[0]{payload} }
 sub DESTROY { Ugly::Error::_free($_[0]) }
+sub CLONE_SKIP { 1 }     # as for proxies: the error would be freed twice
 
 package Ugly::Package ;
 sub name { ${$_[0]} }

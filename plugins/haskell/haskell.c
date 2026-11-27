@@ -315,7 +315,8 @@ static ugly_status hs_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_
  * the core's UGLY_MAX_DEPTH. A call is refused, as Haskell's StackOverflow,
  * once less than STACK_RESERVE is left (other languages have the same
  * limit: Lua's C calls, QuickJS's stack check, .NET's
- * EnsureSufficientExecutionStack).
+ * EnsureSufficientExecutionStack). On a small stack (a JVM thread's is
+ * 1 MB) the reserve is a quarter of it: the check must still be there.
  */
 #define STACK_RESERVE (1024 * 1024)
 
@@ -328,8 +329,8 @@ static int stack_left(void){
 		size_t size = 0 ;
 		stack_floor = (const char *)1 ;
 		if (pthread_getattr_np(pthread_self(), &attr) == 0){
-			if ((pthread_attr_getstack(&attr, &low, &size) == 0)&&(size > 2 * STACK_RESERVE)){
-				stack_floor = (const char *)low + STACK_RESERVE ;
+			if ((pthread_attr_getstack(&attr, &low, &size) == 0)&&(low != NULL)&&(size > 0)){
+				stack_floor = (const char *)low + (size > 2 * STACK_RESERVE ? STACK_RESERVE : size / 4) ;
 			}
 			pthread_attr_destroy(&attr) ;
 		}

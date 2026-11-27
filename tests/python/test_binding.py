@@ -231,7 +231,30 @@ if "perl5" in built:
     gc.collect()
     gone = ugly.eval("perl5", "$Counted::gone")
     ok(n == 3 and gone == 3, f"a Perl array Python iterated is destroyed when dropped: {gone} of 3")
+    # A croak in Perl's API is an error, not the end of the process.
+    locked = ugly.eval("perl5", "use Hash::Util () ; my %h = (a => 1) ; Hash::Util::lock_keys(%h) ; \\%h")
+    try:
+        locked["b"] = 2
+        ok(False, "storing into a restricted Perl hash raises ugly.Error")
+    except ugly.Error as e:
+        ok("disallowed key" in e.message, f"storing into a restricted Perl hash raises ugly.Error: {e.message.strip()}")
+    ugly.eval("perl5", "package Tied ; sub TIEHASH { bless {}, shift } sub FETCH { die qq(no $_[1]\\n) } sub EXISTS { 1 } 1")
+    tied = ugly.eval("perl5", "tie my %t, 'Tied' ; \\%t")
+    try:
+        tied["k"]
+        ok(False, "a tied hash whose FETCH dies raises ugly.Error")
+    except ugly.Error as e:
+        ok(e.message == "no k\n", f"a tied hash whose FETCH dies raises ugly.Error: {e.message.strip()}")
+    ugly.eval("perl5", "package Mute ; use overload '\"\"' => sub { die qq(can't say\\n) } ; 1")
+    try:
+        ugly.eval("perl5", "die bless [], 'Mute'")
+        ok(False, "an exception whose stringification dies is still an ugly.Error")
+    except ugly.Error as e:
+        ok(e.type == "Mute" and e.message == "Mute", f"an exception whose stringification dies is still an ugly.Error: {e.type}")
+    ok(ugly.eval("perl5", "6 * 7") == 42, "  ... and Perl still runs")
 else:
+    for what in ("a restricted hash", "a tied hash", "an exception's string", "Perl after them"):
+        skip("Perl croaks: " + what, "perl5")
     skip("Perl's temporaries, calls", "perl5")
     skip("Perl's temporaries, iteration", "perl5")
 
