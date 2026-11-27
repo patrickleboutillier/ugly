@@ -24,7 +24,7 @@
 
 #include "ugly_plugin.h"
 
-#define BRIDGE_ABI 6     /* Ugly.Plugin.bridgeAbi */
+#define BRIDGE_ABI 7     /* Ugly.Plugin.bridgeAbi */
 
 #ifndef UGLY_BINDING
 /* libugly_rts.so */
@@ -52,6 +52,11 @@ extern ugly_status ugly_hs_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugl
 extern ugly_status ugly_hs_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
 	size_t nargs, const char *hint, ugly_kind want, ugly_val *out) ;
 extern void ugly_hs_release(ugly_rt *rt, void *ref) ;
+/* Iteration (lists, lazily; boxes that declare it) and show. */
+extern ugly_status ugly_hs_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out) ;
+extern ugly_status ugly_hs_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max,
+	size_t *got) ;
+extern ugly_status ugly_hs_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out) ;
 /* Mutable values (an IORef behind a box), and constructors. */
 extern ugly_status ugly_hs_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, const ugly_val *v) ;
 extern ugly_status ugly_hs_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, const ugly_val *v) ;
@@ -436,6 +441,9 @@ static const ugly_plugin plugin = {
 #endif
 	.call_opts = hs_call_opts,
 	.invoke_opts = hs_invoke_opts,
+	.iter = ugly_hs_iter,
+	.next = ugly_hs_next,
+	.to_string = ugly_hs_to_string,
 } ;
 
 

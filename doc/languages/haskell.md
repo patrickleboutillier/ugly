@@ -49,6 +49,9 @@ ghc -dynamic -threaded -package-db /usr/local/lib/x86_64-linux-gnu/ugly/haskell/
 | `call_`, `invoke_`, `callValue_` | the same, dropping the result (a call made for its effect) |
 | `get f "x"`, `index f i`, `size f`, `members f`, `typeOf f` | members; elements, 0-based; their count; member names; its type's name |
 | `callValue v args` | call any callable `Value`, Haskell's own or foreign |
+| `toList f` | its own iteration as a lazy list, like `hGetContents`: each cell is one step when it's forced |
+| `iter f`, `next it` | its iterator, and the next value (`Nothing` at the end), for stepping by hand |
+| `toString f` | its own language's string for it: Python's `str()`, Lua's `tostring` |
 | `toValue`, `fromValue` | a Haskell value as a `Value` (`ToUgly`), and a `Value` you hold as a Haskell type (`FromUgly`) |
 | `rethrow`, `exceptionValue` | raise a `Value` again (an exception, or a foreign value as an error's payload); an exception as a `Value` |
 
@@ -65,6 +68,22 @@ literals are `Value`s (`"x"`, `3`, `-1.5`): `Value` has `IsString`, `Num` and
 `Fractional` instances, whose arithmetic is there for literals (a negative
 one is `negate 1`) and is an error on anything but a number. Anything else
 goes through `toValue`: a variable, a function, a list.
+
+**Iteration** (contract §2) is the foreign language's own: a Python
+generator, a Lua iterator function (`string.gmatch`), a Java `Iterator`.
+`toList` reads it lazily, so the foreign code runs only as far as Haskell
+forces the list, and an infinite one is fine with `take`:
+
+```haskell
+gen <- Ugly.eval "python" "(x * x for x in __import__('itertools').count())"
+squares <- Ugly.toList gen
+print (take 4 squares :: [Int])                 -- [0,1,4,9]: four steps of the generator
+```
+
+An error of the iterator is thrown from the cell that ran into it, as a
+`ForeignError`. An argument of a list type takes a foreign iterable that
+isn't a sequence the same way, lazily; a foreign sequence (a Python list)
+is read through its elements when the call takes it, as before.
 
 Each operation runs on the calling thread, through the core.
 
@@ -166,6 +185,16 @@ result is forced) unless its result is in `IO`.
   refuses a splice without asking for its length (`[0..]` has none).
 - **Lists are lazy.** An element is computed when it's read, so `[0..]` has
   a thousandth element. Element *i* is *i* steps from the start.
+- **Lists are iterable**, and iterating forces one cell per step: Python's
+  `for x in xs` over `[0..]` runs as far as the loop goes, linearly (where
+  indexing would walk from the start each time). `ugly_iter` on a list
+  makes an iterator (type `iterator`); on an iterator, it's itself. A box
+  written by hand iterates if its `Info` has `infoIter`: `Iterable` (makes
+  an iterator, `iterator xs` over a list of `Value`s) or `Iterator` (a
+  step, `Nothing` at the end).
+- **`ugly_to_string` is `show`**, for a type with `Show`; one without
+  refuses (`UGLY_ERR_NOT_SUPPORTED`). A box written by hand gives its text
+  as `infoShow`, an `IO String`, so a mutable value's text is current.
 - **Calls are curried**: fewer arguments than the arity give a partial
   application, itself callable. An `IO` action is called with no arguments.
 - **`describe`** gives the type's name as `Typeable` shows it: `Note`,
@@ -269,12 +298,12 @@ changes with every GHC.
 
 - **An infinite list's length doesn't return**, as in Haskell: `len(xs)`
   or `list(xs)` in Python force the whole list, memory grows, and the RTS
-  ends the process when it runs out. Read elements instead: `xs[1000]`,
-  `itertools.islice(xs, 10)`, a `for` loop that stops. GHC's `-M` doesn't
-  help: an embedded RTS can't deliver heap overflow to a main thread it
-  doesn't have.
-- **`str()` of a Haskell value isn't its `show`.** Export `'show`, as the
-  music-diatonic example does, and call it.
+  ends the process when it runs out. So does its `show` (`str(xs)`). Read
+  part of it instead: `itertools.islice(xs, 10)`, a `for` loop that stops,
+  `xs[1000]`. GHC's `-M` doesn't help: an embedded RTS can't deliver heap
+  overflow to a main thread it doesn't have.
+- **`str()` of a Haskell value is its `show`**, or the proxy's `repr()` for
+  a type without `Show`.
 - **A Haskell list passed to Python is a proxy**, not a Python list:
   `json.dumps` refuses it, as it would any foreign object.
 - **Nesting depth.** Each call into Haskell from C runs the RTS's scheduler

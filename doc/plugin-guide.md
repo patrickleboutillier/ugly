@@ -68,6 +68,14 @@ lines of C, with no interpreter in the way: read it first.
     with elements that its own language doesn't iterate. And loops probe
     more than `next`: `list(p)` asks for a length hint, which skips only a
     `TypeError`, so a proxy's "no length" must be the language's own error.
+  - In a lazy language the iterator's state is the rest of the list, and a
+    step forces exactly one cell (Haskell: an MVar, so a step that throws
+    leaves it as it was, and the next one throws again). Exporting a value
+    forces it to weak head normal form (its identity), which is the first
+    cell: count that when a test counts what was produced.
+  - A text that `to_string` returns must be read when asked, not when the
+    box was made: a mutable value's changes (Haskell's `infoShow` is
+    `IO String` for that).
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the

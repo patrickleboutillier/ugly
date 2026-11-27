@@ -13,6 +13,7 @@ module Conformance
   ( Counter, List, Point (..), ConformanceError (..), Over (..)
   , echo, kind_of, make_counter, apply, call_twice, raise_error, catch_and_return, rethrow, finalized
   , norm2, bench, bench_self
+  , count_to, naturals, fail_after, produced, sum_iter, take_iter, stringify
   ) where
 
 import Control.Exception
@@ -21,7 +22,7 @@ import Data.Int (Int64)
 import Data.IORef
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Text as T
-import System.IO.Unsafe (unsafePerformIO)
+import System.IO.Unsafe (unsafeInterleaveIO, unsafePerformIO)
 import System.Mem (performMajorGC)
 import System.Mem.Weak (deRefWeak)
 
@@ -77,7 +78,8 @@ instance FromUgly List
 
 instance ToUgly Counter where
   toUgly c@(Counter count items) = VBox (Box c (info "counter")
-    { infoMembers = Just (Members (return ["count", "items"]) get (Just set))
+    { infoShow = Just ((\n -> "counter(" ++ show n ++ ")") <$> readIORef count)
+    , infoMembers = Just (Members (return ["count", "items"]) get (Just set))
     , infoMethods = Just (\m -> if m == "inc" then Just (toUgly inc) else Nothing) })
     where
       get "count" = Just . toUgly <$> readIORef count
@@ -170,6 +172,57 @@ bench_self :: Int -> IO Int
 bench_self n = forM_ [0 .. n - 1] (\i -> evaluate (echo (VInt (fromIntegral i)))) >> return n
 
 
+-- Iteration (tests/iterators.c): lazy lists, run only as far as they're read.
+
+producedRef :: IORef Int
+producedRef = unsafePerformIO (newIORef 0)
+{-# NOINLINE producedRef #-}
+
+-- | 0..n-1, each cell counted when it's forced.
+count_to :: Int -> IO [Int]
+count_to n = writeIORef producedRef 0 >> cells 0
+  where
+    cells i
+      | i >= n = return []
+      | otherwise = unsafeInterleaveIO $ do
+          atomicModifyIORef' producedRef (\k -> (k + 1, ()))
+          (i :) <$> cells (i + 1)
+
+-- | 0, 1, 2... The part not yet read holds a tracked IORef, so dropping it is seen by finalized().
+naturals :: IO [Int]
+naturals = do
+  anchor <- newIORef ()
+  track anchor
+  let cells i = unsafeInterleaveIO (readIORef anchor >> (i :) <$> cells (i + 1))
+  cells 0
+
+-- | 0..n-1, then a ConformanceError where the next cell would be.
+fail_after :: Int -> [Int]
+fail_after n = [0 .. n - 1] ++ throw (ConformanceError ("fail_after(" ++ show n ++ ")"))
+
+produced :: IO Int
+produced = readIORef producedRef
+
+-- | Haskell's own loop: a list, which a foreign iterable becomes lazily.
+sum_iter :: [Int] -> Int
+sum_iter = sum
+
+take_iter :: [Value] -> Int -> [Value]
+take_iter xs n = take n xs
+
+-- | show: a box's text, or a foreign value's own (Ugly.toString).
+stringify :: Value -> IO String
+stringify v = case v of
+  VForeign f -> Ugly.toString f
+  VBox (Box _ i) -> maybe (return ("<" ++ infoType i ++ ">")) id (infoShow i)
+  VString t -> return (T.unpack t)
+  VInt i -> return (show i)
+  VDouble d -> return (show d)
+  VBool b -> return (show b)
+  VBytes b -> return (show b)
+  VNull -> return "()"
+
+
 -- Call options (tests/options.c): a hint chooses the instantiation.
 
 class Over a where
@@ -187,4 +240,5 @@ instance Over Value where
 uglyModule "conformance"
   [ ''Counter, ''List, ''Point, ''ConformanceError
   , 'echo, 'kind_of, 'make_counter, 'apply, 'call_twice, 'raise_error, 'catch_and_return, 'rethrow
-  , 'finalized, 'Point, 'norm2, 'bench, 'bench_self, 'over ]
+  , 'finalized, 'Point, 'norm2, 'bench, 'bench_self, 'over
+  , 'count_to, 'naturals, 'fail_after, 'produced, 'sum_iter, 'take_iter, 'stringify ]

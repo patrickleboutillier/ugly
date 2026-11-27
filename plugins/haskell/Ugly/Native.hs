@@ -12,7 +12,7 @@ module Ugly.Native
   , ok, errRaised, errType, errNotFound, errNotCapable, errStale, errNotSupported, errNotImplemented, errNoMem
   , noHandle
   , kAny, kNull, kBool, kInt, kDouble, kString, kBytes, kHandle
-  , traitMembers, traitElements, traitCallable, traitInstantiable, traitFixedSize
+  , traitMembers, traitElements, traitCallable, traitInstantiable, traitFixedSize, traitIterable
   , c_ugly_export, c_ugly_fail, c_ugly_raise_native
   , c_ugly_val_set_string, c_ugly_val_set_bytes
   , c_set_null, c_set_bool, c_set_int, c_set_double, c_set_handle, c_names
@@ -22,7 +22,7 @@ module Ugly.Native
   , c_enter, c_leave, c_current_rt, c_ctx, c_val_size, c_val_at, c_set_string, c_set_bytes
   , c_ugly_dup, c_ugly_release, c_ugly_val_release
   , c_ugly_call, c_ugly_invoke, c_ugly_get_member, c_ugly_get_index, c_ugly_length, c_ugly_member_names
-  , c_ugly_describe
+  , c_ugly_describe, c_ugly_iter, c_ugly_next, c_ugly_to_string
   , c_ugly_take_error, c_ugly_restore_error, c_ugly_error_free, c_ugly_error_payload, c_ugly_raise_handle
   , c_ugly_error_status, c_ugly_error_language, c_ugly_error_type, c_ugly_error_message
     -- the binding
@@ -69,12 +69,13 @@ kHandle = 7
 noHandle :: Handle
 noHandle = 0
 
-traitMembers, traitElements, traitCallable, traitInstantiable, traitFixedSize :: Word32
+traitMembers, traitElements, traitCallable, traitInstantiable, traitFixedSize, traitIterable :: Word32
 traitMembers = 1
 traitElements = 2
 traitCallable = 4
 traitInstantiable = 8
 traitFixedSize = 16
+traitIterable = 32
 
 foreign import ccall safe "ugly_export"
   c_ugly_export :: Ptr Ctx -> Ptr Rt -> Ptr () -> CUIntPtr -> Ptr Handle -> IO Status
@@ -133,6 +134,10 @@ foreign import ccall safe "ugly_get_index"
 foreign import ccall safe "ugly_length" c_ugly_length :: Ptr Ctx -> Handle -> Ptr Int64 -> IO Status
 foreign import ccall safe "ugly_member_names" c_ugly_member_names :: Ptr Ctx -> Handle -> Ptr Handle -> IO Status
 foreign import ccall safe "ugly_describe" c_ugly_describe :: Ptr Ctx -> Handle -> Ptr Word32 -> Ptr Val -> IO Status
+foreign import ccall safe "ugly_iter" c_ugly_iter :: Ptr Ctx -> Handle -> Ptr Handle -> IO Status
+foreign import ccall safe "ugly_next"
+  c_ugly_next :: Ptr Ctx -> Handle -> Kind -> Ptr Val -> CSize -> Ptr CSize -> IO Status
+foreign import ccall safe "ugly_to_string" c_ugly_to_string :: Ptr Ctx -> Handle -> Ptr Val -> IO Status
 
 foreign import ccall unsafe "ugly_take_error" c_ugly_take_error :: Ptr Ctx -> IO (Ptr Err)
 foreign import ccall unsafe "ugly_restore_error" c_ugly_restore_error :: Ptr Ctx -> Ptr Err -> IO Status

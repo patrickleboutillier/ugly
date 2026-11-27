@@ -14,7 +14,7 @@ _Static_assert(UGLY_OK == 0 && UGLY_ERR_RAISED == 1 && UGLY_ERR_TYPE == 2 && UGL
 _Static_assert(UGLY_ANY == 0 && UGLY_NULL == 1 && UGLY_BOOL == 2 && UGLY_INT == 3 && UGLY_DOUBLE == 4
 	&& UGLY_STRING == 5 && UGLY_BYTES == 6 && UGLY_HANDLE == 7, "Ugly.Native's kinds") ;
 _Static_assert(UGLY_TRAIT_MEMBERS == 1 && UGLY_TRAIT_ELEMENTS == 2 && UGLY_TRAIT_CALLABLE == 4
-	&& UGLY_TRAIT_INSTANTIABLE == 8 && UGLY_TRAIT_FIXED_SIZE == 16, "Ugly.Native's traits") ;
+	&& UGLY_TRAIT_INSTANTIABLE == 8 && UGLY_TRAIT_FIXED_SIZE == 16 && UGLY_TRAIT_ITERABLE == 32, "Ugly.Native's traits") ;
 
 
 void ugly_hs_set_null(ugly_val *v){

@@ -18,6 +18,8 @@
 -- error escaping goes on unchanged.
 module Ugly.Plugin () where
 
+import Control.DeepSeq (force)
+import Control.Exception (evaluate)
 import qualified Data.ByteString.Unsafe as BU
 import Data.Int
 import Data.IORef
@@ -38,7 +40,7 @@ import Ugly.Value
 
 -- | haskell.c's BRIDGE_ABI: the two sides must come from the same build.
 bridgeAbi :: CInt
-bridgeAbi = 6
+bridgeAbi = 7
 
 -- | A runtime. Modules are libraries, loaded once per process (haskell.c),
 -- so a runtime has no state yet.
@@ -71,7 +73,7 @@ hsDescribe ctx rt ref traits typeName' = guarded ctx rt $ do
   -- before asking for a length that may not return ([0..]).
   let fixed = maybe 0 (maybe traitFixedSize (const 0) . elemsSplice) (infoElems i)
   poke traits (has infoMembers traitMembers + has infoElems traitElements + has infoCall traitCallable
-    + (if infoNew i then traitInstantiable else 0) + fixed)
+    + (if infoNew i then traitInstantiable else 0) + fixed + has infoIter traitIterable)
   setText ctx typeName' (T.pack (infoType i))
 
 -- | A box's members, or a refusal.
@@ -226,6 +228,49 @@ hsInvoke ctx rt ref cname argv nargs hint want out = guarded ctx rt $ do
       (_, Just f) -> callValue' ctx rt name f (args ++ [AHome b]) call want out
       _ -> failWith ctx rt errNotFound "NotInScope" ("Variable not in scope: " ++ name ++ " (for a value of type " ++ infoType i ++ ")")
 
+-- | Its iterator: a list's is new (over its cells), an iterator's is itself.
+hsIter :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Handle -> IO Status
+hsIter ctx rt ref out = guarded ctx rt $ do
+  b@(Box _ i) <- deref ref
+  case infoIter i of
+    Just (Iterable make) -> make >>= \it -> export ctx rt it out
+    Just (Iterator _) -> export ctx rt b out
+    Nothing -> failWith ctx rt errNotCapable "TypeError" ("a value of type " ++ infoType i ++ " isn't iterable")
+
+-- | Up to max steps of an iterator, into out[0..got). Values made before
+-- an exception stay, with got counting them; the exception is the error.
+hsNext :: Ptr Ctx -> Ptr Rt -> Ptr () -> Kind -> Ptr Val -> CSize -> Ptr CSize -> IO Status
+hsNext ctx rt ref want out maxN got = do
+  poke got 0
+  guarded ctx rt $ do
+    Box _ i <- deref ref
+    case infoIter i of
+      Just (Iterator step) -> loop step 0
+      _ -> failWith ctx rt errNotCapable "TypeError" ("a value of type " ++ infoType i ++ " isn't an iterator")
+  where
+    loop step n
+      | n >= maxN = return ok
+      | otherwise = do
+          r <- step
+          case r of
+            Nothing -> return ok
+            Just v -> do
+              p <- c_val_at out n
+              st <- put ctx rt want v p
+              if st /= ok then return st else poke got (n + 1) >> loop step (n + 1)
+
+-- | show: a box's text. A type without Show has none (NOT_SUPPORTED).
+hsToString :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> IO Status
+hsToString ctx rt ref out = guarded ctx rt $ do
+  Box _ i <- deref ref
+  case infoShow i of
+    Nothing -> failWith ctx rt errNotSupported "TypeError" ("No instance for (Show " ++ infoType i ++ ")")
+    Just text -> do
+      s <- text >>= evaluate . force
+      if validText s
+        then setText ctx out (T.pack s)
+        else failWith ctx rt errType "TypeError" "its text isn't valid Unicode (a lone surrogate)"
+
 -- | Called on any thread, possibly in the middle of a call: freeing a
 -- stable pointer is safe anywhere.
 hsRelease :: Ptr Rt -> Ptr () -> IO ()
@@ -256,4 +301,7 @@ foreign export ccall "ugly_hs_set_index" hsSetIndex :: Ptr Ctx -> Ptr Rt -> Ptr 
 foreign export ccall "ugly_hs_splice" hsSplice :: Ptr Ctx -> Ptr Rt -> Ptr () -> Int64 -> Int64 -> Ptr Val -> CSize -> IO Status
 foreign export ccall "ugly_hs_new_instance" hsNewInstance :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> Ptr Handle -> IO Status
 foreign export ccall "ugly_hs_call" hsCall :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status
+foreign export ccall "ugly_hs_iter" hsIter :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Handle -> IO Status
+foreign export ccall "ugly_hs_next" hsNext :: Ptr Ctx -> Ptr Rt -> Ptr () -> Kind -> Ptr Val -> CSize -> Ptr CSize -> IO Status
+foreign export ccall "ugly_hs_to_string" hsToString :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Val -> IO Status
 foreign export ccall "ugly_hs_invoke" hsInvoke :: Ptr Ctx -> Ptr Rt -> Ptr () -> CString -> Ptr Val -> CSize -> CString -> Kind -> Ptr Val -> IO Status

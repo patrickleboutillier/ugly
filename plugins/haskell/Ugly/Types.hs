@@ -3,7 +3,7 @@
 -- | The types values cross as, both ways (Ugly.Value has the classes,
 -- Ugly.Marshal the conversions to and from C).
 module Ugly.Types
-  ( Value (..), Box (..), Info (..), Members (..), Elems (..), Arg (..), Conv
+  ( Value (..), Box (..), Info (..), Members (..), Elems (..), Iteration (..), Arg (..), Conv
   , Want (..), Call (..), Refused (..), plainCall
   , Foreign (..), ForeignError (..), UglyException (..)
   , info, fixedMembers, fixedElems
@@ -75,17 +75,24 @@ data Box = forall a. Typeable a => Box a Info
 
 data Info = Info
   { infoType :: String              -- ^ describe's type name: "Note", "[Int]", "module"
-  , infoShow :: Maybe String        -- ^ its text, for want = string (lazy: forced when asked)
+  , infoShow :: Maybe (IO String)   -- ^ its text: ugly_to_string, and want = string (run when asked:
+                                    --   a mutable value's text changes)
   , infoMembers :: Maybe Members    -- ^ MEMBERS
   , infoElems :: Maybe Elems        -- ^ ELEMENTS
   , infoCall :: Maybe (Call -> [Arg] -> Either Refused (Int, IO Value))   -- ^ CALLABLE: match, then run
   , infoMethods :: Maybe (String -> Maybe Value)   -- ^ for invoke: functions taking this value last
   , infoNew :: Bool                 -- ^ INSTANTIABLE: a constructor, which new calls
+  , infoIter :: Maybe Iteration     -- ^ ITERABLE
   }
+
+-- | Iteration (contract §2): an iterable makes an iterator (a list does,
+-- over its cells); an iterator steps, Nothing at the end. A step forces
+-- only what it returns, so a lazy list is read as far as asked.
+data Iteration = Iterable (IO Box) | Iterator (IO (Maybe Value))
 
 -- | A box with nothing but a type name.
 info :: String -> Info
-info ty = Info ty Nothing Nothing Nothing Nothing Nothing False
+info ty = Info ty Nothing Nothing Nothing Nothing Nothing False Nothing
 
 -- | Members, read (and, for a mutable value, written) in IO.
 data Members = Members
