@@ -139,10 +139,6 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
   Python dicts keyed by tuples, JS `Map`. See "Design questions": it also
   decides where a dict's string keys belong.
-- [ ] **Resizing and deleting in the other bindings.** `ugly_splice` and
-  `ugly_delete_member` exist, and Perl's ties use them. Python proxies
-  could too (`del p[k]`, `p.append(x)`, slice assignment), and so could JS
-  (`delete`, `push`). In Lua, a `__newindex` past the end already appends.
 - [ ] **Async and coroutines across runtimes.** Hard; probably needs each
   plugin to expose its scheduler.
 - [ ] **Python subinterpreters** (a GIL per interpreter, 3.12+), which would
@@ -340,5 +336,11 @@ contract and in the pull requests.
   traceback; `Map()` and `Set()` construct when called from another
   language; Lua's `ugly.tostring(f)` for a foreign function, and
   `p[1.0]` is `p[1]`.
+- **Resizing and deleting from Python and JS** (2026-11-27): a foreign
+  sequence takes `del p[i]`, slices (read, assigned, deleted), negative
+  indexes and a list's `append`, `extend`, `insert`, `pop` and `clear` in
+  Python; `push`, `pop`, `shift`, `unshift` and `splice` in JS; and
+  `del p.k`, `del p["k"]`, `delete p.k` remove a member. A member of that
+  name on the foreign value comes first.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).

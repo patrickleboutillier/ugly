@@ -737,6 +737,9 @@ static PyObject *bound_method(PyObject *self, PyObject *name){
 }
 
 
+static PyMethodDef list_def ;     /* a list's methods on a foreign sequence: below, with slices and del */
+static int is_list_method(const char *n) ;
+
 static PyObject *proxy_getattro(PyObject *self, PyObject *name){
 	const char *n = PyUnicode_AsUTF8(name) ;
 	if (n == NULL){
@@ -752,7 +755,14 @@ static PyObject *proxy_getattro(PyObject *self, PyObject *name){
 	ugly_val out = ugly_null() ;
 	ugly_status st = OUT(ugly_get_member(ctx, ((proxy *)self)->h, n, UGLY_ANY, &out)) ;
 	if ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)){
-		return bound_method(self, name) ;     /* not a member: a method of the foreign object */
+		/* Not a member. On a sequence, a list's method of that name is Python's own, over ugly_splice. */
+		if (is_list_method(n)&&(proxy_traits(ctx, (proxy *)self) & UGLY_TRAIT_ELEMENTS)){
+			PyObject *bound = PyTuple_Pack(2, self, name) ;
+			PyObject *f = (bound != NULL ? PyCFunction_New(&list_def, bound) : NULL) ;
+			Py_XDECREF(bound) ;
+			return f ;
+		}
+		return bound_method(self, name) ;     /* a method of the foreign object */
 	}
 	if ((st == UGLY_OK)&&(out.kind == UGLY_HANDLE)){
 		/*
@@ -781,13 +791,12 @@ static int proxy_setattro(PyObject *self, PyObject *name, PyObject *value){
 	if ((ctx == NULL)||(n == NULL)){
 		return -1 ;
 	}
-	if (value == NULL){
-		PyErr_SetString(PyExc_TypeError, "ugly: can't delete a foreign member") ;
-		return -1 ;
-	}
 	ugly_val v ;
-	ugly_status st = to_val(ctx, value, UGLY_ANY, &v) ;
-	if (st == UGLY_OK){
+	ugly_status st ;
+	if (value == NULL){
+		st = OUT(ugly_delete_member(ctx, ((proxy *)self)->h, n)) ;     /* del p.k */
+	}
+	else if ((st = to_val(ctx, value, UGLY_ANY, &v)) == UGLY_OK){
 		st = OUT(ugly_set_member(ctx, ((proxy *)self)->h, n, v)) ;
 		ugly_val_release(ctx, &v) ;
 	}
@@ -796,6 +805,164 @@ static int proxy_setattro(PyObject *self, PyObject *name, PyObject *value){
 		return -1 ;
 	}
 	return 0 ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* A foreign sequence as Python has them: negative indexes, slices,  */
+/* del, and a list's methods (ugly_splice underneath)                */
+/* ---------------------------------------------------------------- */
+
+/* The length, for an index counted from the end or a slice. -1 with an exception set. */
+static Py_ssize_t seq_length(ugly_ctx *ctx, proxy *p){
+	int64_t n = 0 ;
+	ugly_status st = OUT(ugly_length(ctx, p->h, &n)) ;
+	if (st != UGLY_OK){
+		raise_ugly(ctx, st) ;
+		return -1 ;
+	}
+	return (Py_ssize_t)n ;
+}
+
+
+/* An index as Python counts it: one below zero is from the end. 0 on failure (exception set). */
+static int seq_index(ugly_ctx *ctx, proxy *p, Py_ssize_t *i){
+	if (*i < 0){
+		Py_ssize_t n = seq_length(ctx, p) ;
+		if (n < 0){
+			return 0 ;
+		}
+		*i += n ;
+		if (*i < 0){
+			PyErr_SetString(PyExc_IndexError, "index out of range") ;
+			return 0 ;
+		}
+	}
+	return 1 ;
+}
+
+
+/* Replaces 'remove' elements at 'offset' with the items of 'items' (any iterable, or NULL for none). 0, or -1 with an exception set. */
+static int seq_splice(ugly_ctx *ctx, proxy *p, Py_ssize_t offset, Py_ssize_t remove, PyObject *items){
+	ugly_val *a = NULL ;
+	Py_ssize_t n = 0 ;
+	if (items != NULL){
+		PyObject *tuple = PySequence_Tuple(items) ;     /* runs the iterable now, before anything changes */
+		if (tuple == NULL){
+			return -1 ;
+		}
+		n = py_args(ctx, tuple, &a) ;
+		Py_DECREF(tuple) ;
+		if (n < 0){
+			return -1 ;
+		}
+	}
+	ugly_status st = OUT(ugly_splice(ctx, p->h, (int64_t)offset, (int64_t)remove, a, (size_t)n)) ;
+	if (a != NULL){
+		free_args(ctx, a, n) ;
+	}
+	if (st == UGLY_ERR_NOT_FOUND){
+		PyErr_SetString(PyExc_IndexError, "index out of range") ;
+		return -1 ;
+	}
+	if (st != UGLY_OK){
+		raise_ugly(ctx, st) ;
+		return -1 ;
+	}
+	return 0 ;
+}
+
+
+/* A slice's bounds over the sequence; only step 1 can be spliced. 0 on failure (exception set). */
+static int seq_slice(ugly_ctx *ctx, proxy *p, PyObject *slice, Py_ssize_t *start, Py_ssize_t *count, Py_ssize_t *step){
+	Py_ssize_t stop, n = seq_length(ctx, p) ;
+	if ((n < 0)||(PySlice_Unpack(slice, start, &stop, step) < 0)){
+		return 0 ;
+	}
+	*count = PySlice_AdjustIndices(n, start, &stop, *step) ;
+	return 1 ;
+}
+
+
+/*
+ * A list's methods, for a foreign sequence that has no member of that name
+ * (a Java list's own add, a JS array's own pop come first): self is
+ * (proxy, name).
+ */
+static PyObject *list_method(PyObject *bound, PyObject *args){
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	proxy *p = (proxy *)PyTuple_GET_ITEM(bound, 0) ;
+	const char *name = PyUnicode_AsUTF8(PyTuple_GET_ITEM(bound, 1)) ;
+	Py_ssize_t n ;
+	if (strcmp(name, "append") == 0){
+		PyObject *x ;
+		if ((! PyArg_ParseTuple(args, "O:append", &x))||((n = seq_length(ctx, p)) < 0)){
+			return NULL ;
+		}
+		PyObject *one = PyTuple_Pack(1, x) ;
+		int bad = (one == NULL)||(seq_splice(ctx, p, n, 0, one) < 0) ;
+		Py_XDECREF(one) ;
+		if (bad){
+			return NULL ;
+		}
+	}
+	else if (strcmp(name, "extend") == 0){
+		PyObject *xs ;
+		if ((! PyArg_ParseTuple(args, "O:extend", &xs))||((n = seq_length(ctx, p)) < 0)||(seq_splice(ctx, p, n, 0, xs) < 0)){
+			return NULL ;
+		}
+	}
+	else if (strcmp(name, "insert") == 0){
+		Py_ssize_t i ;
+		PyObject *x ;
+		if ((! PyArg_ParseTuple(args, "nO:insert", &i, &x))||((n = seq_length(ctx, p)) < 0)){
+			return NULL ;
+		}
+		i = (i < 0 ? (i + n < 0 ? 0 : i + n) : (i > n ? n : i)) ;     /* clamped, as list.insert does */
+		PyObject *one = PyTuple_Pack(1, x) ;
+		int bad = (one == NULL)||(seq_splice(ctx, p, i, 0, one) < 0) ;
+		Py_XDECREF(one) ;
+		if (bad){
+			return NULL ;
+		}
+	}
+	else if (strcmp(name, "pop") == 0){
+		Py_ssize_t i = -1 ;
+		if ((! PyArg_ParseTuple(args, "|n:pop", &i))||((n = seq_length(ctx, p)) < 0)){
+			return NULL ;
+		}
+		if (i < 0){
+			i += n ;
+		}
+		if ((i < 0)||(i >= n)){
+			PyErr_SetString(PyExc_IndexError, n == 0 ? "pop from an empty foreign sequence" : "pop index out of range") ;
+			return NULL ;
+		}
+		ugly_val out = ugly_null() ;
+		ugly_status st = OUT(ugly_get_index(ctx, p->h, (int64_t)i, UGLY_ANY, &out)) ;
+		PyObject *got = result(ctx, st, &out) ;
+		if ((got == NULL)||(seq_splice(ctx, p, i, 1, NULL) < 0)){
+			Py_XDECREF(got) ;
+			return NULL ;
+		}
+		return got ;
+	}
+	else {     /* clear */
+		if ((! PyArg_ParseTuple(args, ":clear"))||((n = seq_length(ctx, p)) < 0)||(seq_splice(ctx, p, 0, n, NULL) < 0)){
+			return NULL ;
+		}
+	}
+	Py_RETURN_NONE ;
+}
+
+static PyMethodDef list_def = { "method", list_method, METH_VARARGS, "a list method on a foreign sequence" } ;
+
+static int is_list_method(const char *n){
+	return (strcmp(n, "append") == 0)||(strcmp(n, "extend") == 0)||(strcmp(n, "insert") == 0)
+		||(strcmp(n, "pop") == 0)||(strcmp(n, "clear") == 0) ;
 }
 
 
@@ -820,7 +987,30 @@ static PyObject *proxy_subscript(PyObject *self, PyObject *key){
 		if ((i == -1)&&(PyErr_Occurred())){
 			return NULL ;
 		}
+		ugly_ctx *c = (i < 0 ? need_ctx() : NULL) ;
+		if ((i < 0)&&((c == NULL)||(! seq_index(c, (proxy *)self, &i)))){
+			return NULL ;
+		}
 		return proxy_item(self, i) ;
+	}
+	if (PySlice_Check(key)){
+		/* p[a:b:c]: a Python list of those elements. */
+		ugly_ctx *c = need_ctx() ;
+		Py_ssize_t start, count, step, k ;
+		if ((c == NULL)||(! seq_slice(c, (proxy *)self, key, &start, &count, &step))){
+			return NULL ;
+		}
+		PyObject *list = PyList_New(count) ;
+		for (k = 0 ; (list != NULL)&&(k < count) ; k++){
+			PyObject *x = proxy_item(self, start + k * step) ;
+			if (x == NULL){
+				Py_CLEAR(list) ;
+			}
+			else {
+				PyList_SET_ITEM(list, k, x) ;
+			}
+		}
+		return list ;
 	}
 	const char *k = PyUnicode_Check(key) ? PyUnicode_AsUTF8(key) : NULL ;
 	ugly_ctx *ctx = need_ctx() ;
@@ -845,9 +1035,18 @@ static int proxy_ass_subscript(PyObject *self, PyObject *key, PyObject *value){
 	if (ctx == NULL){
 		return -1 ;
 	}
-	if (value == NULL){
-		PyErr_SetString(PyExc_TypeError, "ugly: can't delete a foreign element") ;
-		return -1 ;
+	proxy *p = (proxy *)self ;
+	if (PySlice_Check(key)){
+		/* p[a:b] = items, del p[a:b]: one splice. A step can't be spliced. */
+		Py_ssize_t start, count, step ;
+		if (! seq_slice(ctx, p, key, &start, &count, &step)){
+			return -1 ;
+		}
+		if (step != 1){
+			PyErr_SetString(PyExc_ValueError, "ugly: a foreign sequence takes slices of step 1 only") ;
+			return -1 ;
+		}
+		return seq_splice(ctx, p, start, count, value) ;
 	}
 	/* The key first, with the GIL: OUT() releases it around its whole argument. */
 	Py_ssize_t index = 0 ;
@@ -856,6 +1055,12 @@ static int proxy_ass_subscript(PyObject *self, PyObject *key, PyObject *value){
 		index = PyNumber_AsSsize_t(key, PyExc_IndexError) ;
 		if ((index == -1)&&PyErr_Occurred()){
 			return -1 ;
+		}
+		if (! seq_index(ctx, p, &index)){
+			return -1 ;
+		}
+		if (value == NULL){
+			return seq_splice(ctx, p, index, 1, NULL) ;     /* del p[i] */
 		}
 	}
 	else if (PyUnicode_Check(key)){
@@ -868,10 +1073,12 @@ static int proxy_ass_subscript(PyObject *self, PyObject *key, PyObject *value){
 		return -1 ;
 	}
 	ugly_val v ;
-	ugly_status st = to_val(ctx, value, UGLY_ANY, &v) ;
-	if (st == UGLY_OK){
-		st = (name != NULL ? OUT(ugly_set_member(ctx, ((proxy *)self)->h, name, v))
-			: OUT(ugly_set_index(ctx, ((proxy *)self)->h, (int64_t)index, v))) ;
+	ugly_status st ;
+	if (value == NULL){
+		st = OUT(ugly_delete_member(ctx, p->h, name)) ;     /* del p["k"] */
+	}
+	else if ((st = to_val(ctx, value, UGLY_ANY, &v)) == UGLY_OK){
+		st = (name != NULL ? OUT(ugly_set_member(ctx, p->h, name, v)) : OUT(ugly_set_index(ctx, p->h, (int64_t)index, v))) ;
 		ugly_val_release(ctx, &v) ;
 	}
 	if (st != UGLY_OK){

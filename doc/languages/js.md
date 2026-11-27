@@ -60,8 +60,13 @@ A foreign value is a proxy object, one per value (`===` is identity).
   `toString`); its own members come first, so a Java object's `toString`
   is Java's.
 - A symbol names no foreign member: `p[Symbol()] = v` is a `TypeError`.
-- Members of a foreign value can't be deleted from JS: `delete p.k` does
-  nothing (TODO).
+- `delete p.k` removes the foreign member (false, so a `TypeError` in
+  strict code, where its members are fixed). `delete p[0]` is refused: it
+  would leave a hole, which a foreign sequence can't have.
+- A foreign sequence has an array's resizing methods, `push`, `pop`,
+  `shift`, `unshift` and `splice`, unless the value has a member of that
+  name itself, which comes first (a Python list's own `pop`, which throws
+  on an empty list where JS's gives `undefined`).
 
 ```js
 const itertools = ugly.module("python", "itertools");

@@ -44,9 +44,16 @@ at exit (`atexit`).
 A foreign value is an `ugly.Proxy`, one per value (`==` is identity, and
 proxies hash).
 
-- `p.x`, `p.x = v`: members. `p[0]`, `p[i] = v`, `len(p)`, `list(p)`:
-  elements, 0-based. `p["k"]` reads a member by a name that isn't an
-  identifier.
+- `p.x`, `p.x = v`, `del p.x`: members. `p[0]`, `p[i] = v`, `len(p)`,
+  `list(p)`: elements, 0-based. `p["k"]` reads a member by a name that
+  isn't an identifier, and `del p["k"]` removes it.
+- A foreign sequence works as a list does: `p[-1]` counts from the end,
+  `p[1:3]` is a Python list of those elements, `p[1:3] = items`,
+  `del p[1:3]` and `del p[i]` resize it (a slice with a step can be read,
+  not assigned), and `append`, `extend`, `insert`, `pop` and `clear` are
+  there unless the value has a member of that name itself, which comes
+  first (a JS array's own `pop`). A sequence its language can't resize
+  refuses (a Haskell list, a Java array).
 - `p.m(x)` invokes `m` with the foreign language's receiver rules. A member
   that is a class stays the class, so `mod.Point.origin` is its member; one
   that is callable too (a JS function, which is also a constructor) is

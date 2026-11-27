@@ -961,6 +961,94 @@ static int64_t atom_index(JSContext *c, JSAtom atom){
 }
 
 
+/*
+ * An array's methods that change its size, for a foreign sequence that has
+ * no member of that name (a JS array's own, a Java list's, come first):
+ * push, pop, shift, unshift and splice, over ugly_splice. data[0] is the
+ * proxy; magic says which.
+ */
+enum { SEQ_PUSH, SEQ_POP, SEQ_SHIFT, SEQ_UNSHIFT, SEQ_SPLICE } ;
+static const char *const seq_names[] = { "push", "pop", "shift", "unshift", "splice" } ;
+
+static JSValue seq_method(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data){
+	(void)this_val ;
+	jsproxy *p = proxy_of(data[0]) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return JS_EXCEPTION ;
+	}
+	int64_t len = 0 ;
+	ugly_status st = ugly_length(ctx, p->h, &len) ;
+	if (st != UGLY_OK){
+		return throw_ugly(c, ctx, st) ;
+	}
+	int64_t at = 0, remove = 0 ;
+	int first = 0 ;     /* argv[first..] are the values to put in */
+	switch (magic){
+		case SEQ_PUSH: at = len ; break ;
+		case SEQ_UNSHIFT: at = 0 ; break ;
+		case SEQ_POP: at = len - 1 ; remove = 1 ; argc = 0 ; break ;
+		case SEQ_SHIFT: at = 0 ; remove = 1 ; argc = 0 ; break ;
+		default: {
+			/* splice(start, deleteCount, ...items), with JS's clamping. */
+			int64_t start = 0, count = len ;
+			if ((argc > 0)&&(JS_ToInt64(c, &start, argv[0]) < 0)){
+				return JS_EXCEPTION ;
+			}
+			start = (start < 0 ? (len + start < 0 ? 0 : len + start) : (start > len ? len : start)) ;
+			count = (argc == 0 ? 0 : len - start) ;
+			if ((argc > 1)&&(JS_ToInt64(c, &count, argv[1]) < 0)){
+				return JS_EXCEPTION ;
+			}
+			count = (count < 0 ? 0 : (count > len - start ? len - start : count)) ;
+			at = start ;
+			remove = count ;
+			first = (argc < 2 ? argc : 2) ;
+		}
+	}
+	if (((magic == SEQ_POP)||(magic == SEQ_SHIFT))&&(len == 0)){
+		return JS_UNDEFINED ;
+	}
+	/* What goes: read before it does. pop and shift give the value, splice an array of them. */
+	JSValue gone = JS_UNDEFINED ;
+	if (magic == SEQ_SPLICE){
+		gone = JS_NewArray(c) ;
+	}
+	int64_t k ;
+	for (k = 0 ; (k < remove)&&((magic == SEQ_POP)||(magic == SEQ_SHIFT)||(magic == SEQ_SPLICE)) ; k++){
+		ugly_val v = ugly_null() ;
+		st = ugly_get_index(ctx, p->h, at + k, UGLY_ANY, &v) ;
+		JSValue x = result(c, ctx, st, &v) ;
+		if (JS_IsException(x)){
+			JS_FreeValue(c, gone) ;
+			return JS_EXCEPTION ;
+		}
+		if (magic == SEQ_SPLICE){
+			JS_SetPropertyInt64(c, gone, k, x) ;
+		}
+		else {
+			gone = x ;
+		}
+	}
+	ugly_val *a = NULL ;
+	int n = js_args(c, ctx, argc - first, argv + first, &a) ;
+	if (n < 0){
+		JS_FreeValue(c, gone) ;
+		return JS_EXCEPTION ;
+	}
+	st = ugly_splice(ctx, p->h, at, remove, a, (size_t)n) ;
+	free_args(ctx, a, n) ;
+	if (st != UGLY_OK){
+		JS_FreeValue(c, gone) ;
+		return throw_ugly(c, ctx, st) ;
+	}
+	if ((magic == SEQ_PUSH)||(magic == SEQ_UNSHIFT)){
+		return JS_NewInt64(c, len + n) ;     /* the new length, as an array's do */
+	}
+	return gone ;
+}
+
+
 /* [[GetOwnProperty]]: elements by index, "length" for element collections, members by name. */
 static int proxy_get_own_property(JSContext *c, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom atom){
 	jsproxy *p = proxy_of(obj) ;
@@ -998,8 +1086,33 @@ static int proxy_get_own_property(JSContext *c, JSPropertyDescriptor *desc, JSVa
 		}
 	}
 	if ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)){
+		/* Not there. On a sequence, an array's resizing method of that name is ours (seq_method). */
+		int which = -1, m ;
+		for (m = 0 ; (name != NULL)&&(p->traits & UGLY_TRAIT_ELEMENTS)&&(m < 5) ; m++){
+			if (strcmp(name, seq_names[m]) == 0){
+				which = m ;
+			}
+		}
 		JS_FreeCString(c, name) ;
-		return 0 ;     /* not there: JS goes on to the prototype */
+		if (which < 0){
+			return 0 ;     /* JS goes on to the prototype */
+		}
+		JSValue self = JS_DupValue(c, obj) ;
+		v = JS_NewCFunctionData(c, seq_method, 0, which, 1, &self) ;
+		JS_FreeValue(c, self) ;
+		if (JS_IsException(v)){
+			return -1 ;
+		}
+		if (desc != NULL){
+			desc->flags = JS_PROP_C_W_E ;
+			desc->value = v ;
+			desc->getter = JS_UNDEFINED ;
+			desc->setter = JS_UNDEFINED ;
+		}
+		else {
+			JS_FreeValue(c, v) ;
+		}
+		return 1 ;
 	}
 	if (st != UGLY_OK){
 		JS_FreeCString(c, name) ;
@@ -1118,9 +1231,37 @@ static int proxy_get_own_property_names(JSContext *c, JSPropertyEnum **ptab, uin
 }
 
 
+/*
+ * delete p.k: the foreign member goes (ugly_delete_member). An element
+ * doesn't: delete on an array's index leaves a hole in JS, which a foreign
+ * sequence can't have (use splice), and neither does a symbol.
+ */
 static int proxy_delete_property(JSContext *c, JSValueConst obj, JSAtom atom){
-	(void)c ; (void)obj ; (void)atom ;
-	return 0 ;     /* foreign members can't be deleted */
+	jsproxy *p = proxy_of(obj) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return -1 ;
+	}
+	JSValue key = JS_AtomToValue(c, atom) ;
+	int symbol = JS_IsSymbol(key) ;
+	JS_FreeValue(c, key) ;
+	if (symbol||((atom_index(c, atom) >= 0)&&(p->traits & UGLY_TRAIT_ELEMENTS))){
+		return 0 ;
+	}
+	const char *name = JS_AtomToCString(c, atom) ;
+	if (name == NULL){
+		return -1 ;
+	}
+	ugly_status st = ugly_delete_member(ctx, p->h, name) ;
+	JS_FreeCString(c, name) ;
+	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_SUPPORTED)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		return 0 ;     /* its members are fixed: false, a TypeError in strict code, as for a frozen object */
+	}
+	if (st != UGLY_OK){
+		throw_ugly(c, ctx, st) ;
+		return -1 ;
+	}
+	return 1 ;
 }
 
 
