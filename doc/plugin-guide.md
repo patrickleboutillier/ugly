@@ -47,6 +47,10 @@ lines of C, with no interpreter in the way: read it first.
   native value. A wrapper you made for a foreign value (a Java dynamic
   proxy, a C# delegate) must unwrap too: keep a weak map from wrapper to
   foreign value.
+- **A sequence that may be unbounded reports `UGLY_TRAIT_FIXED_SIZE`.**
+  The core asks for the length before a `splice` (its range check) unless
+  `describe` reports that trait, and a lazy list's length doesn't return
+  (Haskell's `[0..]` hung there until libugly 2.6).
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the

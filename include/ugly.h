@@ -274,6 +274,12 @@ ugly_status ugly_same(ugly_ctx *ctx, ugly_handle a, ugly_handle b, bool *out) ;
 #define UGLY_TRAIT_ELEMENTS      (1u << 1)  /* integer-indexed, with a length */
 #define UGLY_TRAIT_CALLABLE      (1u << 2)  /* ugly_call */
 #define UGLY_TRAIT_INSTANTIABLE  (1u << 3)  /* ugly_new: classes, constructors */
+/*
+ * ELEMENTS whose count never changes (a tuple, an array, an immutable or lazy
+ * list): ugly_splice is refused without asking for the length. A plugin
+ * reports it where it knows, and must for a sequence that may be unbounded.
+ */
+#define UGLY_TRAIT_FIXED_SIZE    (1u << 4)
 
 /* Traits, plus the type name in the home language's terms ("dict", "HASH", "table"). */
 ugly_status ugly_describe(ugly_ctx *ctx, ugly_handle h, uint32_t *traits, ugly_val *type_name) ;
@@ -302,7 +308,8 @@ ugly_status ugly_set_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_val v) 
  * 1, NULL, 0), clear is (0, length, NULL, 0). The range must lie within
  * 0..length, otherwise UGLY_ERR_NOT_FOUND (the core checks it, with
  * ugly_length, before the plugin runs). UGLY_ERR_NOT_CAPABLE for a sequence
- * of fixed size (a Java array, a Python tuple).
+ * of fixed size (a Java array, a Python tuple): from the core, before that
+ * check, when describe reports UGLY_TRAIT_FIXED_SIZE, else from the plugin.
  */
 ugly_status ugly_splice(ugly_ctx *ctx, ugly_handle h, int64_t offset, int64_t remove, const ugly_val *insert, size_t n) ;
 

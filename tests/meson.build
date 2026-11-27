@@ -88,6 +88,10 @@ foreach a : test_plugins
   endforeach
 endforeach
 
+# The core alone, with a test language registered in the program.
+test('fixed-size', executable('fixed_size', 'fixed_size.c', dependencies: [ugly_dep]),
+  protocol: 'tap', env: test_env_base, suite: ['conformance', 'core'])
+
 # Benchmarks (meson test -C build --benchmark --verbose): every language
 # built, in one process, printing Markdown tables (tests/bench.c).
 # Without -Xcheck:jni, which slows every JNI call.
