@@ -43,6 +43,7 @@ typedef struct pcache_entry {
 /* A native ref: one JSValue reference held for a handle, linked per runtime. */
 typedef struct jsbox {
 	JSValue v ;
+	int open ;                   /* an iterator stepped (ugly_next) and not done: release calls its return() */
 	struct jsbox *prev, *next ;
 } jsbox ;
 
@@ -57,6 +58,7 @@ typedef struct jsrt {
 	JSValue error_proto ;        /* prototype of ugly errors (inherits Error.prototype) */
 	JSValue array_buffer ;       /* the ArrayBuffer constructor */
 	JSAtom to_string_tag ;       /* Symbol.toStringTag */
+	JSAtom iterator ;            /* Symbol.iterator */
 	pcache_entry *pcache[64] ;
 } jsrt ;
 
@@ -251,6 +253,7 @@ static jsbox *new_box(jsrt *r, JSValue v){
 		return NULL ;
 	}
 	b->v = v ;
+	b->open = 0 ;
 	b->prev = NULL ;
 	b->next = r->boxes ;
 	if (r->boxes != NULL){
@@ -1055,6 +1058,107 @@ static void error_finalizer(JSRuntime *rt, JSValue val){
 }
 
 
+/* A step of a foreign iterator, as JS's iterator protocol: { value, done }. data[0] is the iterator's proxy. */
+static JSValue iter_step(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data){
+	(void)this_val ; (void)argc ; (void)argv ; (void)magic ;
+	jsproxy *p = proxy_of(data[0]) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return JS_EXCEPTION ;
+	}
+	ugly_val v = ugly_null() ;
+	size_t got = 0 ;
+	ugly_status st = ugly_next(ctx, p->h, UGLY_ANY, &v, 1, &got) ;
+	if (st != UGLY_OK){
+		return throw_ugly(c, ctx, st) ;
+	}
+	JSValue value = (got == 1 ? result(c, ctx, UGLY_OK, &v) : JS_UNDEFINED) ;
+	if (JS_IsException(value)){
+		return value ;
+	}
+	JSValue res = JS_NewObject(c) ;
+	JS_SetPropertyStr(c, res, "value", value) ;
+	JS_SetPropertyStr(c, res, "done", JS_NewBool(c, got == 0)) ;
+	return res ;
+}
+
+
+static JSValue iter_self(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)argc ; (void)argv ;
+	return JS_DupValue(c, this_val) ;
+}
+
+
+/*
+ * proxy[Symbol.iterator](), for for...of, spread, Array.from: the foreign
+ * value's own iteration, one value per step, as a JS iterator over its
+ * iterator's proxy (a foreign iterator's own "next" member is its
+ * language's, not JS's protocol). A value its language doesn't iterate but
+ * with elements gets what JS gives any array-like: Array.prototype.values.
+ */
+static JSValue proxy_iterate(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)argc ; (void)argv ;
+	jsproxy *p = proxy_of(this_val) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return (ctx == NULL ? JS_EXCEPTION : JS_ThrowTypeError(c, "ugly: not a proxy")) ;
+	}
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_iter(ctx, p->h, &it) ;
+	if (((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED))&&(p->traits & UGLY_TRAIT_ELEMENTS)){
+		JSValue global = JS_GetGlobalObject(c) ;
+		JSValue array = JS_GetPropertyStr(c, global, "Array") ;
+		JSValue proto = JS_GetPropertyStr(c, array, "prototype") ;
+		JSValue values = JS_GetPropertyStr(c, proto, "values") ;
+		JSValue r = JS_Call(c, values, this_val, 0, NULL) ;
+		JS_FreeValue(c, values) ;
+		JS_FreeValue(c, proto) ;
+		JS_FreeValue(c, array) ;
+		JS_FreeValue(c, global) ;
+		return r ;
+	}
+	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		return JS_ThrowTypeError(c, "ugly: the foreign value is not iterable") ;
+	}
+	ugly_val v = ugly_hval(it) ;
+	JSValue itp = result(c, ctx, st, &v) ;
+	if (JS_IsException(itp)){
+		return itp ;
+	}
+	if (proxy_of(itp) == NULL){
+		return itp ;     /* its iterator is a JS value, come home: JS's own */
+	}
+	JSValue obj = JS_NewObject(c) ;
+	JS_SetPropertyStr(c, obj, "next", JS_NewCFunctionData(c, iter_step, 0, 0, 1, &itp)) ;
+	JS_SetProperty(c, obj, R(c)->iterator, JS_NewCFunction(c, iter_self, "[Symbol.iterator]", 0)) ;
+	JS_FreeValue(c, itp) ;
+	return obj ;
+}
+
+
+/* proxy.toString(), and so String(proxy) and `${proxy}`: its language's (ugly_to_string). */
+static JSValue proxy_to_string(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)argc ; (void)argv ;
+	jsproxy *p = proxy_of(this_val) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return (ctx == NULL ? JS_EXCEPTION : JS_ThrowTypeError(c, "ugly: not a proxy")) ;
+	}
+	ugly_val v = ugly_null() ;
+	ugly_status st = ugly_to_string(ctx, p->h, &v) ;
+	if ((st == UGLY_ERR_NOT_SUPPORTED)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		return JS_NewString(c, "[object ugly.Proxy]") ;
+	}
+	if (st != UGLY_OK){
+		return throw_ugly(c, ctx, st) ;
+	}
+	JSValue s = (v.kind == UGLY_STRING ? JS_NewStringLen(c, v.as.str.ptr, v.as.str.len)
+		: JS_NewStringLen(c, (const char *)v.as.bytes.ptr, v.as.bytes.len)) ;
+	ugly_val_release(ctx, &v) ;
+	return s ;
+}
+
+
 static JSClassExoticMethods proxy_exotic = {
 	.get_own_property = proxy_get_own_property,
 	.get_own_property_names = proxy_get_own_property_names,
@@ -1472,6 +1576,15 @@ static ugly_status js_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *
 		if (JS_IsConstructor(c, v)){
 			t |= UGLY_TRAIT_INSTANTIABLE ;
 		}
+		/* What for...of takes: a Symbol.iterator method (arrays, Map, Set, generators, iterators). */
+		JSValue f = JS_GetProperty(c, v, r->iterator) ;
+		if (JS_IsFunction(c, f)){
+			t |= UGLY_TRAIT_ITERABLE ;
+		}
+		JS_FreeValue(c, f) ;
+		if (JS_HasException(c)){
+			drop_exception(c) ;
+		}
 	}
 	*traits = t ;
 
@@ -1812,8 +1925,130 @@ static ugly_status js_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const 
 }
 
 
+/* v[Symbol.iterator](): on an iterator, by JS's convention, itself. */
+static ugly_status js_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	jsrt *r = RT(rt) ;
+	JSContext *c = r->c ;
+	JSValueConst v = ((jsbox *)ref)->v ;
+	if (! JS_IsObject(v)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not iterable") ;
+	}
+	enter(r) ;
+	JSValue f = JS_GetProperty(c, v, r->iterator) ;
+	if (JS_IsException(f)){
+		return leave(r, js_failure(ctx, r)) ;
+	}
+	if (! JS_IsFunction(c, f)){
+		JS_FreeValue(c, f) ;
+		return leave(r, fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not iterable")) ;
+	}
+	JSValue it = JS_Call(c, f, v, 0, NULL) ;
+	JS_FreeValue(c, f) ;
+	if ((! JS_IsException(it))&&(! JS_IsObject(it))){
+		JS_FreeValue(c, it) ;
+		it = JS_ThrowTypeError(c, "the Symbol.iterator method didn't return an object") ;
+	}
+	ugly_status st = (JS_IsException(it) ? js_failure(ctx, r) : export_val(ctx, r, it, out)) ;
+	JS_FreeValue(c, it) ;
+	return leave(r, st) ;
+}
+
+
+/*
+ * it.next(), up to max times, until done: a generator runs only as far as
+ * asked. Values made before an exception are kept.
+ */
+static ugly_status js_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max,
+	size_t *got){
+
+	jsrt *r = RT(rt) ;
+	JSContext *c = r->c ;
+	jsbox *b = ref ;
+	*got = 0 ;
+	if (! JS_IsObject(b->v)){
+		return fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not an iterator") ;
+	}
+	enter(r) ;
+	JSValue next = JS_GetPropertyStr(c, b->v, "next") ;
+	if (JS_IsException(next)){
+		return leave(r, js_failure(ctx, r)) ;
+	}
+	if (! JS_IsFunction(c, next)){
+		JS_FreeValue(c, next) ;
+		return leave(r, fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not an iterator")) ;
+	}
+	ugly_status st = UGLY_OK ;
+	size_t n = 0 ;
+	while (n < max){
+		JSValue res = JS_Call(c, next, b->v, 0, NULL) ;
+		if ((! JS_IsException(res))&&(! JS_IsObject(res))){
+			JS_FreeValue(c, res) ;
+			res = JS_ThrowTypeError(c, "iterator result is not an object") ;
+		}
+		if (JS_IsException(res)){
+			b->open = 0 ;     /* a generator that threw is done */
+			st = js_failure(ctx, r) ;
+			break ;
+		}
+		JSValue done = JS_GetPropertyStr(c, res, "done") ;
+		int finished = JS_ToBool(c, done) ;
+		JS_FreeValue(c, done) ;
+		if (finished){
+			JS_FreeValue(c, res) ;
+			b->open = 0 ;
+			break ;
+		}
+		JSValue val = JS_GetPropertyStr(c, res, "value") ;
+		JS_FreeValue(c, res) ;
+		b->open = 1 ;
+		st = out_val(ctx, r, val, want, &out[n]) ;
+		if (st != UGLY_OK){
+			break ;
+		}
+		n++ ;
+	}
+	JS_FreeValue(c, next) ;
+	*got = n ;
+	return leave(r, st) ;
+}
+
+
+/* String(v): toString(), through Symbol.toPrimitive if it has one. */
+static ugly_status js_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	jsrt *r = RT(rt) ;
+	enter(r) ;
+	return leave(r, out_val(ctx, r, JS_ToString(r->c, ((jsbox *)ref)->v), UGLY_STRING, out)) ;
+}
+
+
+static int tearing_down ;     /* the binding's teardown, inside a QuickJS finalizer: no JS may run */
+
+/*
+ * The last reference to a value goes. An iterator stepped and not done is
+ * closed first, as a break would: its return(), so a generator's finally
+ * runs.
+ */
 static void js_release(ugly_rt *rt, void *ref){
-	free_box(RT(rt), ref) ;     /* JS_FreeValueRT: works while the host frees its context */
+	jsrt *r = RT(rt) ;
+	jsbox *b = ref ;
+	if (b->open && ! tearing_down){
+		b->open = 0 ;
+		enter(r) ;
+		JSValue f = JS_GetPropertyStr(r->c, b->v, "return") ;
+		if (JS_IsFunction(r->c, f)){
+			JSValue x = JS_Call(r->c, f, b->v, 0, NULL) ;
+			if (JS_IsException(x)){
+				drop_exception(r->c) ;     /* nowhere to go, as for a break in a loop that's gone */
+			}
+			JS_FreeValue(r->c, x) ;
+		}
+		else if (JS_IsException(f)){
+			drop_exception(r->c) ;
+		}
+		JS_FreeValue(r->c, f) ;
+		leave(r, UGLY_OK) ;
+	}
+	free_box(r, b) ;     /* JS_FreeValueRT: works while the host frees its context */
 }
 
 
@@ -1857,6 +2092,16 @@ static void setup(jsrt *r){
 	JSValue tag = JS_GetPropertyStr(c, symbol, "toStringTag") ;
 	r->to_string_tag = JS_ValueToAtom(c, tag) ;
 	JS_FreeValue(c, tag) ;
+	JSValue iterator = JS_GetPropertyStr(c, symbol, "iterator") ;
+	r->iterator = JS_ValueToAtom(c, iterator) ;
+	JS_FreeValue(c, iterator) ;
+
+	/* The proxies' prototype (no other: a foreign value has no JS methods): iteration and toString. */
+	JSValue proto = JS_NewObjectProto(c, JS_NULL) ;
+	JS_SetProperty(c, proto, r->iterator, JS_NewCFunction(c, proxy_iterate, "[Symbol.iterator]", 0)) ;
+	JS_SetPropertyStr(c, proto, "toString", JS_NewCFunction(c, proxy_to_string, "toString", 0)) ;
+	JS_SetClassProto(c, proxy_class, JS_DupValue(c, proto)) ;
+	JS_SetClassProto(c, proxy_fn_class, proto) ;
 	JS_FreeValue(c, symbol) ;
 	JS_FreeValue(c, global) ;
 
@@ -1918,6 +2163,7 @@ static ugly_status js_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 	JS_FreeValueRT(r->rt, r->error_proto) ;
 	JS_FreeValueRT(r->rt, r->array_buffer) ;
 	JS_FreeAtomRT(r->rt, r->to_string_tag) ;
+	JS_FreeAtomRT(r->rt, r->iterator) ;
 	if (r->owns){
 		JS_FreeContext(r->c) ;
 		JS_FreeRuntime(r->rt) ;     /* runs the remaining finalizers: proxies release their handles */
@@ -1959,6 +2205,9 @@ static const ugly_plugin plugin = {
 	.call = js_call,
 	.invoke = js_invoke,
 	.new_instance = js_new_instance,
+	.iter = js_iter,
+	.next = js_next,
+	.to_string = js_to_string,
 	.release = js_release,
 } ;
 
@@ -2014,12 +2263,14 @@ static void binding_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
 static void binding_finalizer(JSRuntime *rt, JSValue val){
 	(void)rt ; (void)val ;
 	if (b_rt != NULL){
+		tearing_down = 1 ;
 		ugly_rt_delete(b_ctx, b_rt) ;
 		ugly_lang_unload(b_ctx, b_lang) ;
 		if (b_owns_ctx){
 			ugly_ctx_delete(b_ctx) ;     /* also deletes the runtimes ugly.module created */
 		}
 		b_rt = NULL ;
+		tearing_down = 0 ;
 	}
 }
 
