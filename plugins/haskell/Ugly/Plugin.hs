@@ -67,8 +67,11 @@ hsDescribe :: Ptr Ctx -> Ptr Rt -> Ptr () -> Ptr Word32 -> Ptr Val -> IO Status
 hsDescribe ctx rt ref traits typeName' = guarded ctx rt $ do
   Box _ i <- deref ref
   let has f bit = maybe 0 (const bit) (f i)
+  -- An immutable sequence is FIXED_SIZE, so the core refuses a splice
+  -- before asking for a length that may not return ([0..]).
+  let fixed = maybe 0 (maybe traitFixedSize (const 0) . elemsSplice) (infoElems i)
   poke traits (has infoMembers traitMembers + has infoElems traitElements + has infoCall traitCallable
-    + (if infoNew i then traitInstantiable else 0))
+    + (if infoNew i then traitInstantiable else 0) + fixed)
   setText ctx typeName' (T.pack (infoType i))
 
 -- | A box's members, or a refusal.

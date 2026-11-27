@@ -91,7 +91,7 @@ int main(void){
 	/* Lists: read-only elements, lazy. */
 	get("primes", UGLY_ANY, &v) ;
 	h = v.as.h ;
-	ok((v.kind == UGLY_HANDLE)&&type_is(h, UGLY_TRAIT_ELEMENTS, "[Int]"), "[Int]: ELEMENTS") ;
+	ok((v.kind == UGLY_HANDLE)&&type_is(h, UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_FIXED_SIZE, "[Int]"), "[Int]: ELEMENTS, FIXED_SIZE") ;
 	ok((ugly_length(ctx, h, &len) == UGLY_OK)&&(len == 5), "length 5") ;
 	ok((ugly_get_index(ctx, h, 4, UGLY_ANY, &w) == UGLY_OK)&&(w.kind == UGLY_INT)&&(w.as.i == 11), "[4] is 11") ;
 	ok(error_is(ugly_get_index(ctx, h, 5, UGLY_ANY, &w), UGLY_ERR_NOT_FOUND, "ArrayException", "range"),
@@ -108,6 +108,10 @@ int main(void){
 	get("naturals", UGLY_ANY, &v) ;
 	ok((ugly_get_index(ctx, v.as.h, 1000, UGLY_ANY, &w) == UGLY_OK)&&(w.as.i == 1000),
 		"[0..] is infinite, and [1000] is 1000") ;
+	ok(type_is(v.as.h, UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_FIXED_SIZE, "[Integer]"), "[0..]: ELEMENTS, FIXED_SIZE") ;
+	ok((ugly_splice(ctx, v.as.h, 0, 0, NULL, 0) == UGLY_ERR_NOT_CAPABLE)
+		&&(strcmp(ugly_error_language(ugly_last_error(ctx)), "core") == 0),
+		"splice [0..]: NOT_CAPABLE, from the core, without asking for its length") ;
 	ugly_val_release(ctx, &v) ;
 
 	/* Maybe: Nothing is null, Just x is x, Just Nothing stays a box. */
@@ -115,13 +119,13 @@ int main(void){
 	ok((get("just", UGLY_ANY, &v) == UGLY_OK)&&is_string(v, "x"), "Just 'x' is \"x\"") ;
 	ugly_val_release(ctx, &v) ;
 	ok((get("justNothing", UGLY_ANY, &v) == UGLY_OK)&&(v.kind == UGLY_HANDLE)
-		&&type_is(v.as.h, UGLY_TRAIT_ELEMENTS, "Maybe (Maybe Int)"), "Just Nothing is a box, one element long") ;
+		&&type_is(v.as.h, UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_FIXED_SIZE, "Maybe (Maybe Int)"), "Just Nothing is a box, one element long") ;
 	ok((ugly_get_index(ctx, v.as.h, 0, UGLY_ANY, &w) == UGLY_OK)&&(w.kind == UGLY_NULL), "whose element is null") ;
 	ugly_val_release(ctx, &v) ;
 
 	/* Tuples and maps. */
 	get("pair", UGLY_ANY, &v) ;
-	ok(type_is(v.as.h, UGLY_TRAIT_ELEMENTS, "(Int,[Char])"), "a pair: ELEMENTS") ;
+	ok(type_is(v.as.h, UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_FIXED_SIZE, "(Int,[Char])"), "a pair: ELEMENTS, FIXED_SIZE") ;
 	ok((ugly_get_index(ctx, v.as.h, 1, UGLY_ANY, &w) == UGLY_OK)&&is_string(w, "one"), "[1] is \"one\"") ;
 	ugly_val_release(ctx, &w) ;
 	ugly_val_release(ctx, &v) ;

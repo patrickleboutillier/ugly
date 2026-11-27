@@ -114,6 +114,7 @@ This is Truffle's idea, reduced:
 | `ELEMENTS` | `length`, `get_index`, `set_index`, `splice`: integer indexes |
 | `CALLABLE` | `call` |
 | `INSTANTIABLE` | `new` |
+| `FIXED_SIZE` | none: with `ELEMENTS`, the count never changes, so `splice` is refused (libugly 2.6) |
 
 Plus `invoke` (a method call) and `describe` (the traits, plus the type name
 in the home language's terms).
@@ -129,7 +130,9 @@ in the home language's terms).
   clear. The core checks the range against `length` first
   (`UGLY_ERR_NOT_FOUND` outside it), so plugins see only valid ones. A
   sequence of fixed size (a Java array, a Python tuple) refuses it with
-  `UGLY_ERR_NOT_CAPABLE`.
+  `UGLY_ERR_NOT_CAPABLE`: the core does, before the range check, when
+  `describe` reports `UGLY_TRAIT_FIXED_SIZE`, and the plugin does
+  otherwise.
 - A plugin that leaves either slot NULL gets `UGLY_ERR_NOT_IMPLEMENTED`
   from the core, as for any operation.
 
@@ -163,9 +166,12 @@ caps it. So code that walks a foreign sequence reads by index until
 binding whose language needs a size to iterate (a Perl tied array's
 `FETCHSIZE`, JS's `.length`, Lua's `#`) inherits the non-termination, as
 that language would with an infinite list. The core asks for the length on
-its own in one place, `splice`'s range check, which runs before a plugin
-can refuse the call with `UGLY_ERR_NOT_CAPABLE`. That check doesn't return
-on an infinite list either, which is open in TODO.md.
+its own in one place, `splice`'s range check, so a plugin **must** report
+`UGLY_TRAIT_FIXED_SIZE` for a sequence that may be unbounded: the core
+then refuses the splice without asking (libugly 2.6, found by writing this
+paragraph; before it, splicing `[0..]` never returned). Reporting it for
+any other sequence of fixed size is optional, and saves a `length` call.
+Haskell reports it for every immutable sequence.
 
 ## 3. Ownership
 
@@ -940,7 +946,10 @@ All of them are in the headers and covered by the conformance suite.
   - `want` may choose what runs, not only convert what comes back (§1).
   - A module may need building before it can be imported, and `eval` and
     `globals` may be absent (§2).
-  - A sequence may be infinite, so its `length` may not return (§2).
+  - A sequence may be infinite, so its `length` may not return (§2). The
+    core's one call of its own to `length`, in `splice`, now comes after a
+    check for the new trait `UGLY_TRAIT_FIXED_SIZE`, which such a sequence
+    reports (libugly 2.6, test `fixed-size`).
   - Identity is best effort where the language has none (§3).
 
 ## Order of work

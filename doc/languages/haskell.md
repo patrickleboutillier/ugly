@@ -162,6 +162,8 @@ result is forced) unless its result is in `IO`.
 
 - **Haskell values are immutable**: setting a member or an element is
   `UGLY_ERR_NOT_CAPABLE`, except on a mutable value a module makes itself.
+  An immutable sequence reports `UGLY_TRAIT_FIXED_SIZE`, so the core
+  refuses a splice without asking for its length (`[0..]` has none).
 - **Lists are lazy.** An element is computed when it's read, so `[0..]` has
   a thousandth element. Element *i* is *i* steps from the start.
 - **Calls are curried**: fewer arguments than the arity give a partial
