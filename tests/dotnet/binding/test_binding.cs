@@ -5,7 +5,7 @@
 using Ugly;
 
 static class TestBinding {
-    const int Plan = 33;
+    const int Plan = 40;
     static int count;
     static readonly HashSet<string> langs = new((Environment.GetEnvironmentVariable("UGLY_TEST_LANGS") ?? "").Split(','));
 
@@ -130,6 +130,26 @@ static class TestBinding {
             catch (ForeignException e) {
                 Ok(e.Message.Contains("takes no call options"), "keyword arguments to Lua are refused");
             }
+        });
+
+        Check("iteration", 7, ["python", "lua"], () => {
+            var itertools = (Foreign)Interop.Module("python", "itertools")!;
+            var firsts = new List<long>();
+            foreach (object? x in (Foreign)itertools.Invoke("count", 1)!) {
+                if ((long)x! > 3) break;
+                firsts.Add((long)x!);
+            }
+            Ok(string.Join(",", firsts) == "1,2,3", "foreach over an infinite Python iterator, left with break");
+            var gen = (Foreign)Interop.Eval("python", "(x * x for x in range(10))")!;
+            Ok(string.Join(",", gen.Take(3)) == "0,1,4", "LINQ over a Python generator: Take(3)");
+            var words = (Foreign)((Foreign)Interop.Module("lua", "string")!).Invoke("gmatch", "one two", "%a+")!;
+            Ok(string.Join(",", words) == "one,two", "foreach over a Lua iterator function (string.gmatch)");
+            var squares = (Foreign)Interop.Eval("lua", "local t = {} for i = 1, 3 do t[i] = i * i end return t")!;
+            Ok(string.Join(",", squares) == "1,4,9", "a Lua table, which Lua doesn't iterate: walked by index");
+            var py = (Foreign)Interop.Module("python", "conformance")!;
+            Ok(10L.Equals(py.Invoke("sum_iter", new List<long> { 1, 2, 3, 4 })), "Python's for over a C# List");
+            Ok(3L.Equals(py.Invoke("sum_iter", Enumerable.Range(1, 2).Select(i => (long)i))), "  ... and over a LINQ query, run as Python asks");
+            Ok("{'a': 1}" == ((Foreign)Interop.Eval("python", "{'a': 1}")!).ToString(), "ToString() of a Foreign: Python's str()");
         });
 
         Check("host re-entry", 1, ["python"], () => {

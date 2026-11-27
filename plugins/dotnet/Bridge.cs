@@ -15,6 +15,7 @@
 // - An exception escaping to the core is raised with itself as the payload
 //   (rule 7); Protocol's NotFound, NotCapable and TypeMismatch become those
 //   statuses.
+using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
@@ -25,7 +26,7 @@ namespace Ugly;
 
 public static unsafe class Bridge {
     // Must match BRIDGE_ABI in dotnet.c.
-    const int Abi = 2;
+    const int Abi = 3;
 
     // The runtime: the CLR, from any thread. One at a time (no UGLY_CAP_MULTI_RUNTIME).
     internal static nint Rt;
@@ -209,6 +210,45 @@ public static unsafe class Bridge {
     public static int NewOpts(nint ctx, nint rt, nint r, Val* args, nuint n, Opts* opts, ulong* o) =>
         DoNew(ctx, r, args, n, opts, o);
 
+    // Its iterator: an enumerable's GetEnumerator(), an enumerator itself.
+    [UnmanagedCallersOnly]
+    public static int Iter(nint ctx, nint rt, nint r, ulong* o) {
+        try {
+            Enter();
+            *o = Conv.Export(ctx, Protocol.Iter(Obj(r)));
+            return 0;
+        }
+        catch (Exception e) { return Errors.Fail(ctx, e); }
+    }
+
+    // MoveNext() up to max times: a 'yield return' method runs only as far as asked. Values made before an exception are kept.
+    [UnmanagedCallersOnly]
+    public static int Next(nint ctx, nint rt, nint r, int want, Val* o, nuint max, nuint* got) {
+        *got = 0;
+        try {
+            Enter();
+            if (Obj(r) is not IEnumerator e) throw Fail.NotCapable("value is not an enumerator");
+            for (nuint i = 0; i < max; i++) {
+                if (!e.MoveNext()) break;
+                Conv.ToVal(ctx, e.Current, (Kind)want, &o[i]);
+                *got = i + 1;
+            }
+            return 0;
+        }
+        catch (Exception e) { return Errors.Fail(ctx, e); }
+    }
+
+    // ToString().
+    [UnmanagedCallersOnly]
+    public static int ToStr(nint ctx, nint rt, nint r, Val* o) {
+        try {
+            Enter();
+            Conv.ToVal(ctx, Obj(r).ToString() ?? "", Kind.String, o);
+            return 0;
+        }
+        catch (Exception e) { return Errors.Fail(ctx, e); }
+    }
+
     static int DoCall(nint ctx, nint r, byte* method, Val* args, nuint n, Opts* opts, int want, Val* o) {
         try {
             Enter();
@@ -288,14 +328,18 @@ static class Refs {
         }
     }
 
+    // The last release of an enumerator UGLY handed out (Protocol.Iter) disposes of it, as a break out of foreach would.
     public static void Release(nint r) {
+        object? last = null;
         lock (map) {
             object? o = GCHandle.FromIntPtr(r).Target;
             if ((o != null) && map.TryGetValue(o, out Entry? e) && (--e.Count <= 0)) {
                 map.Remove(o);
                 e.H.Free();
+                last = o;
             }
         }
+        if ((last is IDisposable d) && Protocol.Iterating(last)) d.Dispose();     // outside the lock: it runs C# code (finally blocks)
     }
 
     public static object Target(nint r) => GCHandle.FromIntPtr(r).Target!;

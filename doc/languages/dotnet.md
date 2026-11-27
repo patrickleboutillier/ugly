@@ -46,6 +46,24 @@ Interop.Shutdown();                                           // on this thread,
 | `IsForeign(x)` | whether a value is foreign |
 | `Shutdown()` | tears UGLY down: see below |
 
+**Iteration** (contract §2): a `Foreign` is an `IEnumerable<object?>`, so
+`foreach` and LINQ run the foreign language's own iteration, one value per
+step: a Python generator runs only as far as the loop goes, and `break` or
+`Take(n)` on an infinite one is fine. A Lua iterator function works as is
+(`string.gmatch`). A value its language doesn't iterate but that has
+elements (a Lua table) is walked by index. A `Foreign` passed where a
+method takes an `IEnumerable<T>` is its iteration, each element converted
+as it comes. **`ToString()`** is the foreign language's string (Python's
+`str()`, Lua's `tostring`).
+
+```csharp
+var itertools = Interop.Module("python", "itertools");
+foreach (object? x in (Foreign)itertools.Invoke("count", 1)!) {   // an infinite Python iterator
+    if ((long)x! > 3) break;
+    Console.WriteLine(x);                                         // 1, 2, 3
+}
+```
+
 The binding attaches on the first use of `Interop`, on that thread. Code in
 other languages that asks for `"dotnet"` (`ugly.module("dotnet", ...)` in
 Python) reaches this program's own CLR.
@@ -141,6 +159,15 @@ abstract method calls the value itself).
 | `byte[]` | BYTES | `byte[]` |
 | anything else (`decimal` too) | a handle | the original object |
 
+- Iterable is what `foreach` takes: `IEnumerable` (arrays, lists,
+  dictionaries, which yield `KeyValuePair`s, LINQ queries, `yield return`
+  methods) and `IEnumerator`. `ugly_iter` calls `GetEnumerator()` (an
+  enumerator's iterator is itself); each step is `MoveNext()`, so a
+  `yield return` method runs only as far as asked. Releasing an enumerator
+  that `ugly_iter` handed out calls its `Dispose()`, as a `break` out of
+  `foreach` would, so a `yield return` method's `finally` runs.
+- `ugly_to_string` is `ToString()`.
+
 ## Calls and options
 
 - **Overloads** are chosen as in Java, by scoring how well each argument
@@ -203,6 +230,12 @@ Key: `path` (directories of assemblies), ahead of `UGLY_DOTNET_PATH`.
   install its own terminal and child-process handlers (SIGCHLD, SIGCONT,
   SIGWINCH...) at that point. Not tested yet.
 - **Release follows the GC.** A `Foreign` releases its handle from its
-  finalizer, so foreign objects live until a collection.
+  finalizer, so foreign objects live until a collection. That goes for a
+  foreign iterator a `foreach` left early too: a Python generator is
+  closed when its `Foreign` is collected, not at the `break`.
+- **A `yield return` object handed to another language as an enumerable**
+  is enumerated from its start each time that language loops over it
+  (`GetEnumerator()`, as `foreach` does); `ugly_iter`'s enumerator is the
+  one that goes on where it stopped.
 - **Not under valgrind.** Tests with a CLR are suite `clr`, left out of the
   valgrind and helgrind setups.

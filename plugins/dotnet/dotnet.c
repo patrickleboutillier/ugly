@@ -34,7 +34,7 @@ struct hostfxr_dotnet_environment_info ;     /* hostfxr.h declares it inside a p
 #include <hostfxr.h>
 #include <coreclr_delegates.h>
 
-#define BRIDGE_ABI 2     /* Bridge.Abi */
+#define BRIDGE_ABI 3     /* Bridge.Abi */
 
 
 static void diag(const char *what, int rc){
@@ -75,6 +75,9 @@ static const struct { const char *method ; void **slot ; } entries[] = {
 	{ "CallOpts", (void **)&plugin.call_opts },
 	{ "InvokeOpts", (void **)&plugin.invoke_opts },
 	{ "NewOpts", (void **)&plugin.new_opts },
+	{ "Iter", (void **)&plugin.iter },
+	{ "Next", (void **)&plugin.next },
+	{ "ToStr", (void **)&plugin.to_string },
 	{ "Release", (void **)&plugin.release },
 } ;
 

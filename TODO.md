@@ -22,10 +22,10 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 
 - [ ] **Iterators and generators** (contract §2, decisions 18 to 25): the
   core (`ugly_iter`, `ugly_next`; libugly 2.7, plugin ABI 5), core lists,
-  the mock, the `iterators` group, Python, Lua, Haskell and JS (with their
-  bindings' syntax, and the pairwise checks) are done. Next, each remaining
-  plugin as producer and consumer, with its binding's syntax, guide and §10
-  row: C#, Java, Perl (and Perl's `each`).
+  the mock, the `iterators` group, Python, Lua, Haskell, JS and C# (with
+  their bindings' syntax, and the pairwise checks) are done. Next, each
+  remaining plugin as producer and consumer, with its binding's syntax,
+  guide and §10 row: Java, Perl (and Perl's `each`).
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
   Python dicts keyed by tuples, JS `Map`.
 - [ ] **Resizing and deleting in the other bindings.** `ugly_splice` and
@@ -33,7 +33,7 @@ All additive: none of it breaks existing plugins (contract, "Scope").
   could too (`del p[k]`, `p.append(x)`, slice assignment), and so could JS
   (`delete`, `push`). In Lua, a `__newindex` past the end already appends.
 - [ ] **"To string"** (`ugly_to_string`, contract §2): in the core, the
-  mock, Python, Lua, Haskell and JS; each remaining plugin implements it, and its
+  mock, Python, Lua, Haskell, JS and C#; each remaining plugin implements it, and its
   proxies use it, with iteration.
 - [ ] **Async and coroutines across runtimes.** Hard; probably needs each
   plugin to expose its scheduler.
