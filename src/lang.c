@@ -411,16 +411,47 @@ static int rt_live(ugly_rt *rt){
 }
 
 
+/*
+ * Sharing the one runtime of a language, or being the thread that creates
+ * it, is one decision: two threads that both found none would both create
+ * one, and a language with a single runtime per process (Python) refuses the
+ * second. So the first to find none says it is creating, and the others
+ * wait for it, without the lock held while the plugin makes the runtime.
+ */
+static pthread_cond_t created = PTHREAD_COND_INITIALIZER ;
+
 ugly_rt *lang_share_rt(ugly_lang *lang){
 	langs_take() ;
 	ugly_rt *rt ;
-	for (rt = lang->rts ; (rt != NULL)&&(! rt_live(rt)) ; rt = rt->lang_next){
+	for (;;){
+		for (rt = lang->rts ; (rt != NULL)&&(! rt_live(rt)) ; rt = rt->lang_next){
+		}
+		if ((rt != NULL)||(! lang->creating)||on_thread(lang->creator)){
+			break ;
+		}
+		langs_held = 0 ;
+		pthread_cond_wait(&created, &langs_lock) ;
+		langs_held = 1 ;
 	}
 	if (rt != NULL){
 		rt->shares++ ;
 	}
+	else if (! lang->creating){
+		lang->creating = 1 ;
+		lang->creator = pthread_self() ;
+	}
 	langs_give() ;
 	return rt ;
+}
+
+
+void lang_created(ugly_lang *lang){
+	langs_take() ;
+	if (lang->creating && on_thread(lang->creator)){
+		lang->creating = 0 ;
+		pthread_cond_broadcast(&created) ;
+	}
+	langs_give() ;
 }
 
 

@@ -155,6 +155,44 @@ $sc->inc ;
 ok("$sc" eq "counter(1)", "\"\$proxy\" is Python's str(): counter(1)") ;
 ok($py->stringify(Countdown->new(1)) =~ /^Countdown=HASH\(0x/, "Python's str() of a Perl object is Perl's own: Countdown=HASH(0x...)") ;
 
+# Proxies compare by identity, both ways.
+{
+	my ($a, $b) = (Ugly::eval("python", "[1]"), Ugly::eval("python", "[1]")) ;
+	my $same = $py->echo($a) ;
+	ok($a == $same && !($a != $same) && $a eq $same && !($a ne $same), "== and eq on the same foreign value, != and ne false") ;
+	ok($a != $b && !($a == $b) && $a ne $b && !($a eq $b), "!= and ne on two foreign values that look alike") ;
+}
+
+# Every method of a proxy is the foreign value's, whatever its name.
+{
+	my $o = Ugly::eval("python", "type('O', (), {'_get': lambda self, k: 'got ' + k, '_release': lambda self: 'kept', 'm': lambda self: 1})()") ;
+	ok($o->_get('k') eq 'got k', "a foreign method named _get is the foreign one") ;
+	ok($o->_release eq 'kept' && $o->m == 1, "  ... and one named _release doesn't release the proxy") ;
+}
+
+# Hash keys beyond ASCII, seen from another language: character keys, and undecoded UTF-8 ones.
+{
+	use utf8 ;
+	my %h = ("日本" => 1, "é" => 2, abc => 3) ;
+	my $bytes = "\xc3\xb1u" ;     # "ñu" as undecoded UTF-8, as text read from a file is
+	$h{$bytes} = 4 ;
+	my $get = Ugly::eval("python", "lambda d, k: d[k]") ;
+	my $set = Ugly::eval("python", "lambda d, k, v: d.__setitem__(k, v)") ;
+	ok($get->(\%h, "日本") == 1 && $get->(\%h, "é") == 2, "Python reads Perl hash members with character keys (two CJK characters, e acute)") ;
+	if ($built{js}){
+		my $listed = Ugly::eval("js", "(d) => Object.keys(d).length + ':' + ['日本', 'é', 'ñu', 'abc'].every(k => Object.keys(d).includes(k))")->(\%h) ;
+		ok($listed eq "4:true", "  ... and JS lists them all as text: $listed") ;
+	}
+	else { skip_test("a Perl hash's keys listed", "js") }
+	ok($get->(\%h, "ñu") == 4, "  ... and one whose key is undecoded UTF-8") ;
+	$set->(\%h, "ö", 5) ;
+	$set->(\%h, "ñu", 6) ;
+	ok($h{"ö"} == 5 && $h{$bytes} == 6 && keys(%h) == 5, "Python stores a new character key, and into the undecoded one") ;
+	$set->(\%h, "é", undef) ;
+	delete $h{abc} ;
+	ok(exists $h{"é"} && !defined $h{"é"}, "  ... and sets an existing character key") ;
+}
+
 # A croak in Perl's API, during an operation another language asked for, is that operation's error.
 {
 	require Hash::Util ;

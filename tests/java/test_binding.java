@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 39;
+	static final int PLAN = 44;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -22,6 +22,18 @@ public class test_binding {
 	}
 
 	interface Body { void run() throws Throwable; }
+
+	/** Narrow fields and elements, for another language to store into. */
+	public static final class Narrow {
+		public int i;
+		public short s;
+		public byte b;
+		public char c = 'c';
+		public int[] a = new int[1];
+	}
+
+	public static String over(int x){ return "int"; }
+	public static String over(long x){ return "long"; }
 
 	/** Passes a new object to Lua and keeps only a weak reference to it. */
 	static java.lang.ref.WeakReference<Object> passOne(Foreign lua){
@@ -209,6 +221,44 @@ public class test_binding {
 			ok("ABC".equals(got[1]), "  ... and gets its own Lua: " + got[1]);
 			ok(got[2] instanceof RuntimeException && String.valueOf(((Throwable)got[2]).getMessage()).contains("another thread"),
 				"  ... but the main thread's Lua values stay the main thread's: " + got[2]);
+		});
+
+		check("narrowing", () -> {
+			// A value that doesn't fit a narrow field or element is refused, not truncated.
+			Narrow n = new Narrow();
+			Foreign store = (Foreign)Ugly.eval("python", "lambda o, name, v: setattr(o, name, v)");
+			Foreign put = (Foreign)Ugly.eval("python", "lambda a, v: a.__setitem__(0, v)");
+			store.call(n, "i", 7);
+			put.call(n.a, 8);
+			int refused = 0;
+			Object[][] bad = { { "i", (1L << 40) + 7 }, { "s", 70000 }, { "b", 300 }, { "c", "xyz" } };
+			for (Object[] b : bad){
+				try { store.call(n, b[0], b[1]); }
+				catch (ForeignException e){ refused++; }
+			}
+			try { put.call(n.a, (1L << 33) + 5); }
+			catch (ForeignException e){ refused++; }
+			ok(refused == 5 && n.i == 7 && n.s == 0 && n.b == 0 && n.c == 'c' && n.a[0] == 8,
+				"Java fields and elements refuse values that don't fit: " + refused + " of 5 refused");
+			store.call(n, "s", 70);
+			store.call(n, "c", "x");
+			ok(n.s == 70 && n.c == 'x', "  ... and take those that do");
+		});
+
+		check("hints", () -> {
+			// A hint for a callable that isn't overloaded is refused, and never reaches the next resolution.
+			Foreign which = (Foreign)Ugly.eval("python",
+				"lambda x: __import__('ugly').module('java', 'test_binding').over(x)");
+			Function<Object, Object> through = f -> ((Foreign)f).call(5L);
+			Foreign plain = (Foreign)Ugly.eval("python", "lambda f, g: f(g)");
+			Foreign hinted = (Foreign)Ugly.eval("python", "lambda f, g, h: f(g, __import__('ugly').opts(hint=h))");
+			ok("long".equals(plain.call(through, which)), "a Java lambda calling back, and Python calling an overload: over(long)");
+			String got;
+			try { got = String.valueOf(hinted.call(through, which, "int")); }
+			catch (ForeignException e){ got = "refused: " + e.getMessage(); }
+			ok(got.startsWith("refused") && got.contains("no overload"), "a hint a Java lambda doesn't have is refused: " + got);
+			ok("long".equals(hinted.call(through, which, "java.lang.Object")),
+				"  ... and the one it has is taken, without reaching the overload called inside");
 		});
 
 		check("leaks", () -> {

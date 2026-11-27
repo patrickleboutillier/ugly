@@ -96,6 +96,36 @@ static int registered(plrt *r){
 #define DIED (SvROK(ERRSV)||SvTRUE(ERRSV))
 
 
+/*
+ * A hash key's length for hv_fetch and friends, from a name the core gave
+ * us (UTF-8): negative says "this key is UTF-8", which a name with
+ * characters beyond ASCII must say to find the key Perl code stored.
+ */
+static I32 key_len(const char *name){
+	size_t n = strlen(name), i ;
+	for (i = 0 ; i < n ; i++){
+		if ((unsigned char)name[i] >= 0x80){
+			return -(I32)n ;
+		}
+	}
+	return (I32)n ;
+}
+
+
+/*
+ * The same for a member of a hash. Perl programs often carry undecoded
+ * UTF-8 (decision 6), keys included: when the hash has no such character
+ * key but has the name's bytes as a key, that is the member.
+ */
+static I32 member_len(pTHX_ HV *hv, const char *name){
+	I32 n = key_len(name) ;
+	if ((n < 0)&&(! hv_exists(hv, name, n))&&hv_exists(hv, name, -n)){
+		return -n ;
+	}
+	return n ;
+}
+
+
 /* ---------------------------------------------------------------- */
 /* Helpers                                                          */
 /* ---------------------------------------------------------------- */
@@ -718,7 +748,7 @@ static SV *xs_result(pTHX_ ugly_ctx *ctx, plrt *r, ugly_status st, ugly_val *out
 }
 
 
-/* Ugly::Proxy::_call($proxy, @args) */
+/* Ugly::Core::_call($proxy, @args) */
 /*
  * Keyword arguments (contract §11): Ugly::kw(name => value, ...) as the last
  * argument, an Ugly::Kw object holding the pairs in order. If it's there,
@@ -819,7 +849,7 @@ XS(xs_proxy_call){
 }
 
 
-/* Ugly::Proxy::_invoke($proxy, $method, @args) */
+/* Ugly::Core::_invoke($proxy, $method, @args) */
 XS(xs_proxy_invoke){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -842,7 +872,7 @@ XS(xs_proxy_invoke){
 }
 
 
-/* Ugly::Proxy::_get($proxy, $key): an element for an integer key on an element collection, else a member. */
+/* Ugly::Core::_get($proxy, $key): an element for an integer key on an element collection, else a member. */
 XS(xs_proxy_get){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -867,7 +897,7 @@ XS(xs_proxy_get){
 }
 
 
-/* Ugly::Proxy::_set($proxy, $key, $value, $is_index) */
+/* Ugly::Core::_set($proxy, $key, $value, $is_index) */
 XS(xs_proxy_set){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -890,7 +920,7 @@ XS(xs_proxy_set){
 }
 
 
-/* Ugly::Proxy::_has($proxy, $name): whether the member exists (even if it is undef). */
+/* Ugly::Core::_has($proxy, $name): whether the member exists (even if it is undef). */
 XS(xs_proxy_has){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -911,7 +941,7 @@ XS(xs_proxy_has){
 }
 
 
-/* Ugly::Proxy::_delete($proxy, $name) */
+/* Ugly::Core::_delete($proxy, $name) */
 XS(xs_proxy_delete){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -927,7 +957,7 @@ XS(xs_proxy_delete){
 }
 
 
-/* Ugly::Proxy::_splice($proxy, $offset, $remove, @insert) */
+/* Ugly::Core::_splice($proxy, $offset, $remove, @insert) */
 XS(xs_proxy_splice){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -946,7 +976,7 @@ XS(xs_proxy_splice){
 }
 
 
-/* Ugly::Proxy::_new($class_proxy, @args) */
+/* Ugly::Core::_new($class_proxy, @args) */
 XS(xs_proxy_new){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -968,7 +998,7 @@ XS(xs_proxy_new){
 }
 
 
-/* Ugly::Proxy::_length($proxy) */
+/* Ugly::Core::_length($proxy) */
 XS(xs_proxy_length){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -986,7 +1016,7 @@ XS(xs_proxy_length){
 }
 
 
-/* Ugly::Proxy::_keys($proxy): the member names. */
+/* Ugly::Core::_keys($proxy): the member names. */
 XS(xs_proxy_keys){
 	dXSARGS ;
 	ugly_ctx *ctx = xs_ctx(aTHX) ;
@@ -1025,7 +1055,7 @@ XS(xs_proxy_keys){
 }
 
 
-/* Ugly::Proxy::_traits($proxy) */
+/* Ugly::Core::_traits($proxy) */
 XS(xs_proxy_traits){
 	dXSARGS ;
 	ugly_ctx *ctx = xs_ctx(aTHX) ;
@@ -1039,7 +1069,7 @@ XS(xs_proxy_traits){
 }
 
 
-/* Ugly::Proxy::_same($a, $b) */
+/* Ugly::Core::_same($a, $b) */
 XS(xs_proxy_same){
 	dXSARGS ;
 	ugly_ctx *ctx = xs_ctx(aTHX) ;
@@ -1052,7 +1082,7 @@ XS(xs_proxy_same){
 }
 
 
-/* Ugly::Proxy::_release($proxy): from DESTROY. */
+/* Ugly::Core::_release($proxy): from DESTROY. */
 XS(xs_proxy_release){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -1072,19 +1102,19 @@ XS(xs_proxy_release){
 
 
 /*
- * Ugly::Proxy::_held($proxy): another proxy for the same value, owning its
+ * Ugly::Core::_held($proxy): another proxy for the same value, owning its
  * own reference and outside the cache. The code ref &{$proxy} gives closes
  * over it, so it can be cached without keeping $proxy alive, and outlive it.
  */
 XS(xs_proxy_held){
 	dXSARGS ;
 	if ((items < 1)||(! IS_PROXY(ST(0)))){
-		croak("Ugly::Proxy::_held: not a proxy") ;
+		croak("Ugly::Core::_held: not a proxy") ;
 	}
 	ugly_ctx *ctx = ugly_current_ctx() ;
 	ugly_handle h ;
 	if ((ctx == NULL)||(ugly_dup(ctx, PROXY_HANDLE(ST(0)), &h) != UGLY_OK)){
-		croak("Ugly::Proxy::_held: stale proxy") ;
+		croak("Ugly::Core::_held: stale proxy") ;
 	}
 	SV *rv = newRV_noinc(newSVuv((UV)h)) ;
 	sv_bless(rv, gv_stashpv("Ugly::Proxy", GV_ADD)) ;
@@ -1094,7 +1124,7 @@ XS(xs_proxy_held){
 
 
 /*
- * Ugly::Proxy::_iter($proxy): an iterator over a foreign value, as a proxy;
+ * Ugly::Core::_iter($proxy): an iterator over a foreign value, as a proxy;
  * undef if its language doesn't iterate it (Ugly::iter then walks its
  * elements, if it has any).
  */
@@ -1116,7 +1146,7 @@ XS(xs_proxy_iter){
 }
 
 
-/* Ugly::Proxy::_next($iterator): its next value, or the empty list at the end. One at a time: never ahead. */
+/* Ugly::Core::_next($iterator): its next value, or the empty list at the end. One at a time: never ahead. */
 XS(xs_proxy_next){
 	dXSARGS ;
 	plrt *r = R(my_perl) ;
@@ -1136,7 +1166,7 @@ XS(xs_proxy_next){
 
 
 /*
- * Ugly::Proxy::_str($proxy): its language's stringification (ugly_to_string);
+ * Ugly::Core::_str($proxy): its language's stringification (ugly_to_string);
  * undef if it has none, or if no ctx is left (global destruction), so that
  * "" falls back to Ugly::Proxy(<handle>). An exception dies.
  */
@@ -1241,23 +1271,23 @@ static XS(xs_guard) ;     /* below, with the entries it runs */
 
 static void register_xs(pTHX){
 	const char *file = __FILE__ ;
-	newXS("Ugly::Proxy::_call", xs_proxy_call, file) ;
-	newXS("Ugly::Proxy::_invoke", xs_proxy_invoke, file) ;
-	newXS("Ugly::Proxy::_get", xs_proxy_get, file) ;
-	newXS("Ugly::Proxy::_set", xs_proxy_set, file) ;
-	newXS("Ugly::Proxy::_length", xs_proxy_length, file) ;
-	newXS("Ugly::Proxy::_has", xs_proxy_has, file) ;
-	newXS("Ugly::Proxy::_delete", xs_proxy_delete, file) ;
-	newXS("Ugly::Proxy::_splice", xs_proxy_splice, file) ;
-	newXS("Ugly::Proxy::_new", xs_proxy_new, file) ;
-	newXS("Ugly::Proxy::_keys", xs_proxy_keys, file) ;
-	newXS("Ugly::Proxy::_traits", xs_proxy_traits, file) ;
-	newXS("Ugly::Proxy::_same", xs_proxy_same, file) ;
-	newXS("Ugly::Proxy::_release", xs_proxy_release, file) ;
-	newXS("Ugly::Proxy::_held", xs_proxy_held, file) ;
-	newXS("Ugly::Proxy::_iter", xs_proxy_iter, file) ;
-	newXS("Ugly::Proxy::_next", xs_proxy_next, file) ;
-	newXS("Ugly::Proxy::_str", xs_proxy_str, file) ;
+	newXS("Ugly::Core::_call", xs_proxy_call, file) ;
+	newXS("Ugly::Core::_invoke", xs_proxy_invoke, file) ;
+	newXS("Ugly::Core::_get", xs_proxy_get, file) ;
+	newXS("Ugly::Core::_set", xs_proxy_set, file) ;
+	newXS("Ugly::Core::_length", xs_proxy_length, file) ;
+	newXS("Ugly::Core::_has", xs_proxy_has, file) ;
+	newXS("Ugly::Core::_delete", xs_proxy_delete, file) ;
+	newXS("Ugly::Core::_splice", xs_proxy_splice, file) ;
+	newXS("Ugly::Core::_new", xs_proxy_new, file) ;
+	newXS("Ugly::Core::_keys", xs_proxy_keys, file) ;
+	newXS("Ugly::Core::_traits", xs_proxy_traits, file) ;
+	newXS("Ugly::Core::_same", xs_proxy_same, file) ;
+	newXS("Ugly::Core::_release", xs_proxy_release, file) ;
+	newXS("Ugly::Core::_held", xs_proxy_held, file) ;
+	newXS("Ugly::Core::_iter", xs_proxy_iter, file) ;
+	newXS("Ugly::Core::_next", xs_proxy_next, file) ;
+	newXS("Ugly::Core::_str", xs_proxy_str, file) ;
 	newXS("Ugly::Error::_free", xs_error_free, file) ;
 	newXS("Ugly::module", xs_module, file) ;
 	newXS("Ugly::eval", xs_eval, file) ;
@@ -1315,7 +1345,7 @@ static CV *package_sub(pTHX_ const char *pkg, const char *name){
 	if (stash == NULL){
 		return NULL ;
 	}
-	SV **gvp = hv_fetch(stash, name, (I32)strlen(name), 0) ;
+	SV **gvp = hv_fetch(stash, name, key_len(name), 0) ;
 	if ((gvp == NULL)||(! isGV(*gvp))){
 		return NULL ;
 	}
@@ -1464,7 +1494,7 @@ static ugly_status pl_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 		SV *target = SvRV(sv) ;
 		/* A hash's entries, then an object's methods. */
 		if (SvTYPE(target) == SVt_PVHV){
-			SV **v = hv_fetch((HV *)target, name, (I32)strlen(name), 0) ;
+			SV **v = hv_fetch((HV *)target, name, member_len(aTHX_ (HV *)target, name), 0) ;
 			if (v != NULL){
 				st = to_val(aTHX_ ctx, r, *v, want, out) ;
 			}
@@ -1504,7 +1534,7 @@ static ugly_status pl_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 	else {
 		SV *pv = from_val(aTHX_ ctx, r, v, &st) ;
 		if (pv != NULL){
-			(void)hv_store((HV *)SvRV(sv), name, (I32)strlen(name), pv, 0) ;
+			(void)hv_store((HV *)SvRV(sv), name, member_len(aTHX_ (HV *)SvRV(sv), name), pv, 0) ;
 		}
 	}
 	LEAVE_PERL() ;
@@ -1522,7 +1552,7 @@ static ugly_status pl_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const
 		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "only hashes have members to delete") ;
 	}
 	else {
-		(void)hv_delete((HV *)SvRV(sv), name, (I32)strlen(name), G_DISCARD) ;
+		(void)hv_delete((HV *)SvRV(sv), name, member_len(aTHX_ (HV *)SvRV(sv), name), G_DISCARD) ;
 	}
 	LEAVE_PERL() ;
 	return st ;
@@ -1552,8 +1582,17 @@ static ugly_status pl_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_h
 		HE *he ;
 		hv_iterinit(hv) ;
 		while ((he = hv_iternext(hv)) != NULL){
-			I32 klen ;
-			const char *k = hv_iterkey(he, &klen) ;
+			/*
+			 * As UTF-8: a character key's own bytes; a byte key's too when
+			 * they are UTF-8 already (undecoded text); otherwise its
+			 * Latin-1 characters, encoded.
+			 */
+			STRLEN klen ;
+			SV *ksv = hv_iterkeysv(he) ;
+			const char *k = SvPV(ksv, klen) ;
+			if ((! SvUTF8(ksv))&&(! valid_utf8((const unsigned char *)k, klen))){
+				k = SvPVutf8(ksv, klen) ;
+			}
 			char *copy ;
 			if (package){
 				/* A package's subs, and its nested packages (Name::). */
@@ -1737,7 +1776,7 @@ static ugly_status invoke_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, const cha
 		}
 	}
 	else if (SvROK(sv)&&(SvTYPE(SvRV(sv)) == SVt_PVHV)){
-		SV **v = hv_fetch((HV *)SvRV(sv), method, (I32)strlen(method), 0) ;
+		SV **v = hv_fetch((HV *)SvRV(sv), method, member_len(aTHX_ (HV *)SvRV(sv), method), 0) ;
 		st = (((v == NULL)||(! SvROK(*v))||(SvTYPE(SvRV(*v)) != SVt_PVCV)) ? fail(ctx, r, UGLY_ERR_NOT_FOUND, "Error", method)
 			: call_perl(aTHX_ ctx, r, *v, NULL, NULL, args, nargs, o, want, out)) ;
 	}

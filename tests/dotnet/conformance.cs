@@ -46,6 +46,10 @@ public static class conformance {
 
     public static object? echo(object? x) => x;
 
+    // An integer int64 can't hold: refused as an INT, its own value as a DOUBLE.
+    public static ulong huge() => ulong.MaxValue;
+    public static Int128 huger() => Int128.MaxValue;
+
     public static string kind_of(object? x) => x switch {
         null => "null",
         bool => "bool",

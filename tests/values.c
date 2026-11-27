@@ -109,6 +109,17 @@ int main(void){
 	kind_of(&f, ugly_double(1.5), "double", "kind_of(double)") ;
 	kind_of(&f, ugly_str("s", 1), "string", "kind_of(string)") ;
 
+	if (strcmp(plugin_name(), "dotnet") == 0){
+		/* C#'s integers wider than int64: refused as an INT, and their own value (not a wrapped one) as a DOUBLE. */
+		ugly_val w ;
+		is_status(f.ctx, fcall(&f, f.mod, "huge", NULL, 0, UGLY_ANY, &w), UGLY_ERR_TYPE, "ulong.MaxValue as it is: UGLY_ERR_TYPE") ;
+		ugly_status st = fcall(&f, f.mod, "huge", NULL, 0, UGLY_DOUBLE, &w) ;
+		ok((st == UGLY_OK)&&(w.kind == UGLY_DOUBLE)&&(w.as.d == 18446744073709551616.0), "  ... as a DOUBLE: 2^64") ;
+		st = fcall(&f, f.mod, "huger", NULL, 0, UGLY_DOUBLE, &w) ;
+		ok((st == UGLY_OK)&&(w.kind == UGLY_DOUBLE)&&(w.as.d == 170141183460469231731687303715884105728.0),
+			"Int128.MaxValue as a DOUBLE: 2^127") ;
+	}
+
 	fx_teardown(&f) ;
 	return done_testing() ;
 }

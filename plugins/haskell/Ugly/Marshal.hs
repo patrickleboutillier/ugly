@@ -33,6 +33,7 @@ import Control.Concurrent (isCurrentThreadBound, rtsSupportsBoundThreads, runInB
 import Control.Monad (forM, when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
+import Data.Bits (xor)
 import Data.Char (ord)
 import Data.Int
 import Data.IORef
@@ -41,6 +42,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 import Data.Typeable
 import Data.Word
+import GHC.Fingerprint (Fingerprint (..))
 import Foreign.C.String
 import Foreign.C.Types
 import qualified Foreign.Concurrent as FC
@@ -98,7 +100,17 @@ newRef b@(Box x _) = do
     Nothing -> evaluate x >>= fmap Named . makeStableName
   sp <- newStablePtr (Ref b sn)
   count liveRefs 1
-  return (castStablePtrToPtr sp, fromIntegral (case sn of Named n -> hashStableName n) + 1)
+  return (castStablePtrToPtr sp, typedKey (case sn of Named n -> hashStableName n) (typeOf x))
+
+-- | The identity key: the value's stable name, and its type. Values of
+-- different types can be one heap object (a newtype and what it wraps; []
+-- or an empty Map at every element type; an exception and the SomeException
+-- box made of it): each must be its own handle, with its own type's box.
+typedKey :: Int -> TypeRep -> CUIntPtr
+typedKey name ty = if key == 0 then 1 else key
+  where
+    Fingerprint high low = typeRepFingerprint ty
+    key = (fromIntegral name + 1) * 0x9E3779B97F4A7C15 + fromIntegral (high `xor` low)
 
 -- | Refs not yet released, for the tests: ugly_hs_live_refs.
 liveRefs :: IORef Int

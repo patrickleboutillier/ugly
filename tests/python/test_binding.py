@@ -258,6 +258,36 @@ else:
     skip("Perl's temporaries, calls", "perl5")
     skip("Perl's temporaries, iteration", "perl5")
 
+# Truth: a foreign value is true unless it's a sequence of length 0; one without a length is true.
+ok(bool(ugly.eval("lua", "return function() end")) is True, "bool() of a foreign function is True")
+ok(bool(ugly.eval("lua", "return io.stdout")) is True, "  ... and of a value with no length (a Lua file)")
+ok(bool(ugly.eval("lua", "return { 1 }")) is True and bool(ugly.eval("lua", "return {}")) is False,
+    "  ... and a foreign sequence is true unless it's empty")
+
+# A member that is a class is the class, not a method: it has members, and calling it constructs.
+if "js" in built:
+    holder = ugly.eval("js", "({ C: class C { static s = 5 ; constructor(x){ this.x = x } } })")
+    ok(isinstance(holder.C, ugly.Proxy) and holder.C.s == 5, "a JS class held as a member: its static member")
+    # A classic function is a constructor too in JS: as a member it is still called on its owner.
+    obj = ugly.eval("js", "({ x: 2, add: function(a){ return this.x + a }, twice(a){ return 2 * a + this.x } })")
+    ok(obj.add(3) == 5 and obj.twice(3) == 8, "  ... and a JS function member is called with its owner as this")
+else:
+    skip("a class as a member: its members", "js")
+    skip("a function member: this", "js")
+
+# A describe that failed once (asked from a thread Lua refuses) isn't remembered as "no traits".
+maker = ugly.eval("lua", "local D = {} ; D.__index = D ; function D.new(x) return setmetatable({ x = x }, D) end ; return D")
+refused = []
+def from_another_thread():
+    try:
+        maker(1)
+    except ugly.Error as e:
+        refused.append(e.message)
+other = threading.Thread(target=from_another_thread)
+other.start()
+other.join()
+ok(len(refused) == 1 and maker(3).x == 3, f"a Lua class called from a wrong thread first, then from its own: {refused}")
+
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")
 ok(ugly.eval("lua", "return package.cpath").startswith("/configured/?.so;"), "  ... and cpath comes first in package.cpath")

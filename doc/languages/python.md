@@ -48,7 +48,12 @@ proxies hash).
   elements, 0-based. `p["k"]` reads a member by a name that isn't an
   identifier.
 - `p.m(x)` invokes `m` with the foreign language's receiver rules. A member
-  that is a class stays the class.
+  that is a class stays the class, so `mod.Point.origin` is its member; one
+  that is callable too (a JS function, which is also a constructor) is
+  still called on its owner, so `this` is right.
+- `bool(p)` is false for a sequence of length 0, as Python's own are, and
+  true for everything else. A Lua table with only named fields has length
+  0, so it is false: test `len()` or a field instead.
 - `p(x)` calls it; calling a class that can only be instantiated (a Java or
   Perl class) constructs it: `perl.KwBox(value=5)`.
 - **Iteration is the foreign language's own** (contract §2): `for x in p`,

@@ -1043,6 +1043,14 @@ static int proxy_define_own_property(JSContext *c, JSValueConst obj, JSAtom atom
 	if ((p == NULL)||(ctx == NULL)){
 		return -1 ;
 	}
+	/* A symbol names no foreign member: its description would be stored as a string key. */
+	JSValue key = JS_AtomToValue(c, atom) ;
+	int symbol = JS_IsSymbol(key) ;
+	JS_FreeValue(c, key) ;
+	if (symbol){
+		JS_ThrowTypeError(c, "ugly: a foreign value has no symbol-keyed properties") ;
+		return -1 ;
+	}
 	ugly_val v ;
 	ugly_status st = to_val(ctx, R(c), val, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){

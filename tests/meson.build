@@ -92,6 +92,10 @@ endforeach
 test('fixed-size', executable('fixed_size', 'fixed_size.c', dependencies: [ugly_dep]),
   protocol: 'tap', env: test_env_base, suite: ['conformance', 'core'])
 
+# ugly_rt_get from several threads at once, for a language with one runtime that any thread may enter.
+test('rt-get', executable('rt_get', 'rt_get.c', dependencies: [ugly_dep, dependency('threads')]),
+  protocol: 'tap', env: test_env_base, suite: ['conformance', 'core'])
+
 # libugly exports only ugly_*: a host exporting the names of its internals doesn't replace them.
 test('symbols', executable('symbols', 'symbols.c', dependencies: [ugly_dep], export_dynamic: true),
   protocol: 'tap', env: test_env_base, suite: ['conformance', 'core'])
