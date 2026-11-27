@@ -33,6 +33,7 @@ print(ugly.is_proxy(t), t.a)                         --> true   1
 | `ugly.configure(lang, { key = value or { ... } })` | options for a language that hasn't started ([Configuring](#configuring)) |
 | `ugly.kw{ name = value }` | keyword arguments, passed last |
 | `ugly.opts{ hint = ..., context = ... }` | other call options, passed last (beside a `kw`, in either order) |
+| `ugly.iter(v)` | a function for the generic `for` over a foreign value's own iteration: `for x in ugly.iter(p) do` |
 | `ugly.is_proxy(v)`, `ugly.is_error(e)` | whether a value is foreign, or an error from another language |
 | `ugly.shared_by_threads()` | declares a state several host threads take turns in (HAProxy's `lua-load`) |
 
@@ -55,6 +56,23 @@ identity).
   closure), so Lua's library takes it: `string.gsub(s, "%w+", py.str.capitalize)`.
 - Calling a class that can only be instantiated (a Java or Perl class)
   constructs it.
+- **Iteration** (contract §2): `for x in ugly.iter(p) do` runs what the
+  foreign language's loop runs (a Python generator, a list, a dict's
+  keys), one value per step, so the foreign code runs only as far as the
+  loop goes, and `break` is fine on an infinite one. `ugly.iter` returns a
+  Lua function as it is. A foreign value its language doesn't iterate
+  raises an error, even if it has elements: index it with `#p` and `p[i]`.
+- `tostring(p)` is the foreign language's stringification (Python's
+  `str()`, Java's `toString()`), or `ugly.proxy(...)` for a value it has
+  none for (a core list).
+
+```lua
+local itertools = ugly.module("python", "itertools")
+for x in ugly.iter(itertools.count(1)) do      -- an infinite Python iterator
+  if x > 3 then break end
+  print(x)                                       --> 1  2  3
+end
+```
 
 ## Lua values elsewhere
 
@@ -74,6 +92,14 @@ identity).
 - `invoke` passes `self` only to a method found through the metatable; a
   plain field (a module's function) is called without it. So `obj:m()` and
   `mod.f()` both work from other languages.
+- **Every function is iterable**, with the generic `for`'s meaning: Lua's
+  iterators are functions (`string.gmatch`, `io.lines`, `coroutine.wrap`).
+  `ugly_iter` gives an iterator over it; each step is `f(nil, control)`,
+  the first value returned being the next control, until `nil`. So Python's
+  `for w in string.gmatch(s, "%a+")` works. Tables aren't iterable (Lua's
+  `for` doesn't take one); their elements are.
+- `ugly_to_string` is `tostring` (`__tostring`, else `__name` and the
+  address): STRING if valid UTF-8, else BYTES.
 
 ## Lua as a guest
 
@@ -149,3 +175,9 @@ Keys: `path` and `cpath` (`package.path`, `package.cpath`), ahead of
   can't yield across it, so it suits quick decisions, not I/O.
 - **Strings are bytes.** A Lua string that isn't valid UTF-8 arrives
   elsewhere as BYTES (`bytes` in Python), not as a string.
+- **`nil` ends a loop.** A foreign iterator yielding a null (Python's
+  `None`) ends Lua's `for` there, as it would end any Lua iterator.
+- **Any function looks iterable** to other languages, even one that isn't
+  an iterator: a Python `for` over it calls it until it returns `nil`,
+  possibly forever. Other languages iterate only when their own code loops,
+  so this is Lua's meaning, not a surprise the core adds.

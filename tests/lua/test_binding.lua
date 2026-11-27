@@ -78,5 +78,28 @@ local refused, e = pcall(py.kw, 1, ugly.opts{ context = "scalar" })
 ok(not refused and tostring(e.message):find("no call context") ~= nil, "ugly.opts{ context = ... } into Python: refused")
 ok(py.kw(1, ugly.opts{}, ugly.kw{ b = 2 }) == "1 2 0", "  ... and ugly.opts and ugly.kw last, in either order")
 
+-- Iteration (contract §2): Python's iterables in Lua's generic for, through ugly.iter.
+local itertools = ugly.module("python", "itertools")
+local seen = {}
+for x in ugly.iter(builtins.range(3)) do seen[#seen + 1] = x end
+ok(table.concat(seen, ",") == "0,1,2", "for x in ugly.iter(range(3)): a Python iterable in a Lua loop")
+local total = 0
+for x in ugly.iter(itertools.count(1)) do
+	total = total + x
+	if x == 4 then break end
+end
+ok(total == 10, "  ... an infinite one (itertools.count), left with break")
+local fails = ugly.eval("python", "(lambda: (yield 1) or (yield 1 / 0))")()
+local got = {}
+ok(not pcall(function() for x in ugly.iter(fails) do got[#got + 1] = x end end) and #got == 1,
+	"  ... a generator raising ends the loop with its error, after its values")
+local mine = function() end
+ok(rawequal(ugly.iter(mine), mine), "ugly.iter on a Lua function: the function itself")
+ok(py.sum_iter(py.count_to(4)) == 6, "Python's for over a Python generator, from Lua")
+local words = py.take_iter(string.gmatch("one two three", "%a+"), 2)
+ok(#words == 2 and words[1] == "one" and words[2] == "two", "a Lua iterator (string.gmatch) in Python's for: take_iter(gmatch, 2)")
+ok(tostring(c) == "counter(3)", "tostring(c) is Python's str(c): counter(3)")
+ok(tostring(builtins.dict) == "<class 'dict'>", "  ... and str() of a class: <class 'dict'>")
+
 print("1.." .. count)
 os.exit(failures == 0 and 0 or 1, true)      -- true: close the state, so the binding tears down

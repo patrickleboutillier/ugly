@@ -51,6 +51,16 @@ proxies hash).
   that is a class stays the class.
 - `p(x)` calls it; calling a class that can only be instantiated (a Java or
   Perl class) constructs it: `perl.KwBox(value=5)`.
+- **Iteration is the foreign language's own** (contract §2): `for x in p`,
+  `list(p)`, `iter(p)` and `next(p)` run what that language's loop runs,
+  one value per step, so a generator runs only as far as Python's loop
+  goes. A Lua iterator function works as is: `for w in
+  string.gmatch(s, "%a+")`. A value its language doesn't iterate but that
+  has elements (a Lua table) gets Python's sequence protocol, as any object
+  with `__getitem__` does: `list(squares)`. An error raised by the foreign
+  iterator ends the loop as `ugly.Error`, after the values before it.
+- `str(p)` is the foreign language's stringification (Lua's `tostring`,
+  Java's `toString()`); `repr(p)` stays `<ugly.Proxy type>`.
 - **Keyword arguments are native**: `json.dumps(data, indent=2)` into
   Python, `perl.kw(1, c=3)` into Perl. A language without them (Lua, JS,
   Java) refuses the call rather than drop them.
@@ -68,6 +78,12 @@ proxies hash).
 
 - Members are attributes, or the keys of a dict. Elements are the sequence
   protocol (lists, tuples...).
+- Iterable is what `iter()` takes: lists, dicts (their keys), generators,
+  files, anything with `__iter__` or the sequence protocol. `ugly_iter` on
+  an iterator is that iterator; each step is `next()`, and a generator runs
+  only as far as asked. Releasing a generator early closes it (its
+  `finally` runs).
+- `ugly_to_string` is `str()`.
 - `invoke` calls the bound method, so `self` is always right.
 - Conversions are Python's own, strict ones: asking for INT from `"42"` or
   from `2.0` fails with `UGLY_ERR_TYPE`; an int widens to DOUBLE.
@@ -122,6 +138,9 @@ Python starts.
   `os.fork()` does, so each child has a working interpreter (HAProxy's
   master starting its workers). The child has only the thread that forked;
   Python threads the parent had are gone, as with `os.fork()`.
+- **Every proxy has `__next__`**, so `isinstance(p, collections.abc.Iterator)`
+  is true of any proxy; `next(p)` on one that isn't a foreign iterator
+  raises `TypeError`.
 - **Foreign elements can't be deleted or resized from Python** yet:
   `del p[0]`, `p.append(x)` and slice assignment aren't there (TODO).
   Assign to `p[len(p)]` to append to a Lua table or a Java list.

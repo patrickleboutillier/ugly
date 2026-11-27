@@ -552,6 +552,18 @@ static void free_kwargs(ugly_ctx *ctx, ugly_opts *o, ugly_kwarg *kw){
 }
 
 
+/* The value's traits, asked for once (a value's traits don't change). */
+static int proxy_traits(ugly_ctx *ctx, proxy *p){
+	if (p->traits < 0){
+		uint32_t t = 0 ;
+		ugly_val tn = ugly_null() ;
+		p->traits = ((OUT(ugly_describe(ctx, p->h, &t, &tn)) == UGLY_OK) ? (int)t : 0) ;
+		ugly_val_release(ctx, &tn) ;
+	}
+	return p->traits ;
+}
+
+
 static PyObject *proxy_call(PyObject *self, PyObject *args, PyObject *kw){
 	ugly_ctx *ctx = need_ctx() ;
 	if (ctx == NULL){
@@ -582,12 +594,7 @@ static PyObject *proxy_call(PyObject *self, PyObject *args, PyObject *kw){
 	 * in Python: Point(3, 4), KwBox(value=5).
 	 */
 	proxy *p = (proxy *)self ;
-	if (p->traits < 0){
-		uint32_t t = 0 ;
-		ugly_val tn = ugly_null() ;
-		p->traits = ((OUT(ugly_describe(ctx, p->h, &t, &tn)) == UGLY_OK) ? (int)t : 0) ;
-		ugly_val_release(ctx, &tn) ;
-	}
+	proxy_traits(ctx, p) ;
 	ugly_val out = ugly_null() ;
 	ugly_status st ;
 	if ((p->traits & UGLY_TRAIT_INSTANTIABLE)&&(! (p->traits & UGLY_TRAIT_CALLABLE))){
@@ -790,6 +797,11 @@ static Py_ssize_t proxy_length(PyObject *self){
 	}
 	int64_t n = 0 ;
 	ugly_status st = OUT(ugly_length(ctx, ((proxy *)self)->h, &n)) ;
+	if (st == UGLY_ERR_NOT_CAPABLE){
+		/* Python's own error for len() of what has none: list(p) and others skip it (a length hint). */
+		PyErr_SetString(PyExc_TypeError, "ugly: the foreign value has no length") ;
+		return -1 ;
+	}
 	if (st != UGLY_OK){
 		raise_ugly(ctx, st) ;
 		return -1 ;
@@ -830,6 +842,72 @@ static PyObject *proxy_repr(PyObject *self){
 	}
 	ugly_val_release(ctx, &tn) ;
 	return r ;
+}
+
+
+/*
+ * iter(p): the value's own iteration (ugly_iter), as a proxy. A value its
+ * language doesn't iterate but that has elements gets what Python gives any
+ * object with __getitem__ and no __iter__: the sequence protocol (a Lua
+ * table's elements, 0-based through proxy_item).
+ */
+static PyObject *proxy_iter(PyObject *self){
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = OUT(ugly_iter(ctx, ((proxy *)self)->h, &it)) ;
+	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		if (proxy_traits(ctx, (proxy *)self) & UGLY_TRAIT_ELEMENTS){
+			return PySeqIter_New(self) ;
+		}
+		PyErr_SetString(PyExc_TypeError, "ugly: the foreign value is not iterable") ;
+		return NULL ;
+	}
+	ugly_val v = ugly_hval(it) ;
+	return result(ctx, st, &v) ;
+}
+
+
+/* next(p), on a proxy of a foreign iterator: one value per step (a loop never runs it ahead). */
+static PyObject *proxy_iternext(PyObject *self){
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	ugly_val v = ugly_null() ;
+	size_t got = 0 ;
+	ugly_status st = OUT(ugly_next(ctx, ((proxy *)self)->h, UGLY_ANY, &v, 1, &got)) ;
+	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		PyErr_SetString(PyExc_TypeError, "ugly: the foreign value is not an iterator") ;
+		return NULL ;
+	}
+	if ((st == UGLY_OK)&&(got == 0)){
+		return NULL ;     /* the end: StopIteration */
+	}
+	return result(ctx, st, &v) ;
+}
+
+
+/* str(p): the value as its language makes it a string (ugly_to_string); repr() where it has none. */
+static PyObject *proxy_str(PyObject *self){
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	ugly_val v = ugly_null() ;
+	ugly_status st = OUT(ugly_to_string(ctx, ((proxy *)self)->h, &v)) ;
+	if ((st == UGLY_ERR_NOT_SUPPORTED)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		return proxy_repr(self) ;
+	}
+	if ((st == UGLY_OK)&&(v.kind == UGLY_BYTES)){
+		/* A language whose strings are bytes (Lua, Perl): text, with what isn't UTF-8 replaced. */
+		PyObject *r = PyUnicode_DecodeUTF8((const char *)v.as.bytes.ptr, (Py_ssize_t)v.as.bytes.len, "replace") ;
+		ugly_val_release(ctx, &v) ;
+		return r ;
+	}
+	return result(ctx, st, &v) ;
 }
 
 
@@ -880,6 +958,9 @@ static PyTypeObject ProxyType = {
 	.tp_richcompare = proxy_richcompare,
 	.tp_hash = proxy_hash,
 	.tp_repr = proxy_repr,
+	.tp_str = proxy_str,
+	.tp_iter = proxy_iter,
+	.tp_iternext = proxy_iternext,
 	.tp_weaklistoffset = offsetof(proxy, weakrefs),
 } ;
 
@@ -1084,6 +1165,12 @@ static ugly_status py_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t 
 }
 
 
+/* Whether iter() takes o, by the test it applies: __iter__, or the sequence protocol (not a dict's). */
+static int iterable(PyObject *o){
+	return (Py_TYPE(o)->tp_iter != NULL)||PySequence_Check(o) ;
+}
+
+
 static ugly_status py_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
 	(void)rt ;
 	PyObject *o = ref ;
@@ -1097,6 +1184,9 @@ static ugly_status py_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *
 		if (PySequence_Check(o)&&(! PyUnicode_Check(o))&&(! PyBytes_Check(o))){
 			t |= UGLY_TRAIT_ELEMENTS ;
 		}
+	}
+	if (iterable(o)){
+		t |= UGLY_TRAIT_ITERABLE ;
 	}
 	if (PyCallable_Check(o)){
 		t |= UGLY_TRAIT_CALLABLE ;
@@ -1479,6 +1569,70 @@ static ugly_status py_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly
 }
 
 
+/* iter(o); on an iterator, by Python's convention, itself. */
+static ugly_status py_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st ;
+	ENTER ;
+	if (! iterable(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not iterable") ;
+	}
+	else {
+		PyObject *it = PyObject_GetIter(o) ;     /* __iter__ may raise: that's RAISED */
+		if (it == NULL){
+			st = py_failure(ctx) ;
+		}
+		else {
+			st = export_obj(ctx, it, out) ;
+			Py_DECREF(it) ;
+		}
+	}
+	LEAVE ;
+	return st ;
+}
+
+
+/* next(it), up to max times: a generator runs only as far as asked. Values made before an exception are kept. */
+static ugly_status py_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max, size_t *got){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st = UGLY_OK ;
+	size_t n = 0 ;
+	ENTER ;
+	if (! PyIter_Check(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not an iterator") ;
+	}
+	while ((st == UGLY_OK)&&(n < max)){
+		PyObject *v = PyIter_Next(o) ;
+		if (v == NULL){
+			if (PyErr_Occurred()){
+				st = py_failure(ctx) ;
+			}
+			break ;     /* StopIteration: the end */
+		}
+		st = to_val(ctx, v, want, &out[n]) ;
+		Py_DECREF(v) ;
+		if (st == UGLY_OK){
+			n++ ;
+		}
+	}
+	*got = n ;
+	LEAVE ;
+	return st ;
+}
+
+
+/* str(o). */
+static ugly_status py_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	(void)rt ;
+	ENTER ;
+	ugly_status st = out_val(ctx, PyObject_Str((PyObject *)ref), UGLY_STRING, out) ;
+	LEAVE ;
+	return st ;
+}
+
+
 static void py_release(ugly_rt *rt, void *ref){
 	(void)rt ;
 	ENTER ;
@@ -1720,6 +1874,9 @@ static const ugly_plugin plugin = {
 	.call = py_call,
 	.invoke = py_invoke,
 	.new_instance = py_new_instance,
+	.iter = py_iter,
+	.next = py_next,
+	.to_string = py_to_string,
 	.release = py_release,
 } ;
 

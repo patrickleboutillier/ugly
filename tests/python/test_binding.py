@@ -142,6 +142,26 @@ ok((t.year, t.month) == (1970, 1), "os.date('!*t', 0) gives a Lua table: t.year,
 squares = ugly.eval("lua", "local t = {} for i = 1, 4 do t[i] = i * i end return t")
 ok(list(squares) == [1, 4, 9, 16], "a Lua table as a Python sequence: list(squares)")
 
+# Iteration (contract §2): Lua's iterators are functions, and Python's for takes them.
+words = [w for w in string.gmatch("one two three", "%a+")]
+ok(words == ["one", "two", "three"], "for w in string.gmatch(...): a Lua iterator in a Python loop")
+it = iter(string.gmatch("a b", "%a+"))
+ok(iter(it) is it and next(it) == "a" and next(it) == "b" and next(it, None) is None,
+   "  ... iter() is the iterator itself; next() until StopIteration")
+ok(lua.sum_iter(x * x for x in range(4)) == 14, "Lua's for over a Python generator: sum_iter(...)")
+ok(list(lua.count_to(3)) == [0, 1, 2], "list() of a Lua iterator function")
+try:
+    list(lua.fail_after(1))
+    ok(False, "a Lua iterator's error reaches Python's loop")
+except ugly.Error as e:
+    ok(e.type == "ConformanceError", "a Lua iterator's error reaches Python's loop")
+ok(str(c) == "counter(2)" and repr(c) == "<ugly.Proxy counter>", "str(c) is Lua's tostring(c); repr() stays the proxy's")
+try:
+    iter(ugly.module("lua", "io").stdout)
+    ok(False, "iter() of a Lua value neither iterable nor with elements (a file): TypeError")
+except TypeError:
+    ok(True, "iter() of a Lua value neither iterable nor with elements (a file): TypeError")
+
 # Lua code using Python through its own ugly module, reaching back into this very interpreter.
 ok(ugly.eval("lua", "return require('ugly').module('python', 'math').sqrt(16)") == 4.0,
    "embedded Lua uses require('ugly') to reach this process's Python")

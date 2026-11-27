@@ -7,15 +7,17 @@ local M = setmetatable({}, { __name = "module" })
 
 -- Objects whose finalization the suite counts: counters and their item lists.
 local finalized = 0
-local function tracked(t, name, index)
+local function tracked(t, name, index, tostr)
 	return setmetatable(t, {
 		__name = name,
 		__index = index,
+		__tostring = tostr,
 		__gc = function() finalized = finalized + 1 end,
 	})
 end
 
-local is_proxy = require("ugly").is_proxy     -- userdata, or a function for a foreign function
+local is_proxy = require("ugly").is_proxy
+local iter = require("ugly").iter            -- for x in iter(xs): a foreign iterable, or a Lua function     -- userdata, or a function for a foreign function
 
 local function is_ugly_error(x)
 	local mt = getmetatable(x)
@@ -46,7 +48,8 @@ function Counter.inc(self)
 end
 
 function M.make_counter()
-	return tracked({ count = 0, items = tracked({}, "list") }, "counter", Counter)
+	return tracked({ count = 0, items = tracked({}, "list") }, "counter", Counter,
+		function(c) return "counter(" .. c.count .. ")" end)
 end
 
 -- Benchmarks (tests/bench.c): f(i) n times, and our own echo n times.
@@ -102,5 +105,68 @@ function Point.new(x, y)
 	return setmetatable({ x = x, y = y }, PointMT)
 end
 M.Point = Point
+
+-- Iteration (contract §2): Lua's iterators are functions, called until nil.
+local produced = 0
+
+function M.count_to(n)
+	local i = 0
+	produced = 0
+	return function()
+		if i < n then
+			i = i + 1
+			produced = produced + 1
+			return i - 1
+		end
+	end
+end
+
+function M.naturals()
+	local i = -1
+	local anchor = tracked({}, "anchor")     -- collected with the function
+	return function()
+		local _ = anchor
+		i = i + 1
+		return i
+	end
+end
+
+function M.fail_after(n)
+	local i = 0
+	return function()
+		if i < n then
+			i = i + 1
+			return i - 1
+		end
+		error(setmetatable({ message = "fail_after(" .. n .. ")" }, ConformanceError))
+	end
+end
+
+function M.produced()
+	return produced
+end
+
+function M.sum_iter(xs)
+	local total = 0
+	for x in iter(xs) do
+		total = total + x
+	end
+	return total
+end
+
+function M.take_iter(xs, n)
+	local t = {}
+	if n > 0 then
+		for x in iter(xs) do
+			t[#t + 1] = x
+			if #t >= n then break end
+		end
+	end
+	return t
+end
+
+function M.stringify(x)
+	return tostring(x)
+end
 
 return M
