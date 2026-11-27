@@ -195,8 +195,15 @@ int main(void){
 	/* Errors that are hard to report are still errors, not the end of the process. */
 	ok(error_is(call("unsayable", (ugly_val[]){ ugly_int(1) }, 1, UGLY_ANY, &v), UGLY_ERR_RAISED, "ErrorCall",
 		"bad file name: \xEF\xBF\xBD"), "an error whose message UTF-8 can't encode: RAISED, with U+FFFD") ;
-	ok(error_is(call("unthrowable", (ugly_val[]){ ugly_int(1) }, 1, UGLY_ANY, &v), UGLY_ERR_RAISED, "SomeException",
-		"can't be evaluated"), "an exception that is itself an error: RAISED, without a payload") ;
+	/* What is raised depends on the GHC: 9.10+ evaluates an exception as it throws it, so the inner error escapes instead. */
+	ugly_status ust = call("unthrowable", (ugly_val[]){ ugly_int(1) }, 1, UGLY_ANY, &v) ;
+	const ugly_error *ue = ugly_last_error(ctx) ;
+	ok((ust == UGLY_ERR_RAISED)&&(ue != NULL)
+		&&(((strcmp(ugly_error_type(ue), "SomeException") == 0)&&(strstr(ugly_error_message(ue), "can't be evaluated") != NULL))
+			||((strcmp(ugly_error_type(ue), "ErrorCall") == 0)&&(strstr(ugly_error_message(ue), "inner") != NULL))),
+		"an exception that is itself an error: RAISED, without a payload or as the inner error") ;
+	fprintf(stderr, "unthrowable: status %d, %s: %s\n", ust, ue != NULL ? ugly_error_type(ue) : "-",
+		ue != NULL ? ugly_error_message(ue) : "-") ;     /* stderr: what a failed run shows */
 	ok((call("add", (ugly_val[]){ ugly_int(2), ugly_int(3) }, 2, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, 5),
 		"  ... and Haskell still runs") ;
 

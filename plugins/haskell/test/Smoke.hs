@@ -94,7 +94,7 @@ entries =
   , ("explode", toUgly ((\n -> if n > 0 then n else error "not positive") :: Int -> Int))
     -- errors that are hard to report: a message UTF-8 can't encode, an exception that is itself an error
   , ("unsayable", toUgly ((\_ -> error "bad file name: \xDC80") :: Int -> Int))
-  , ("unthrowable", toUgly ((\_ -> throw (error "inner" :: ArithException)) :: Int -> Int))
+  , ("unthrowable", toUgly ((\_ -> throwIO (SomeException notAnException)) :: Int -> IO Int))
   , ("tick", toUgly (atomicModifyIORef' counter (\n -> (n + 1, n + 1))))
   , ("tickBy", toUgly (\k -> atomicModifyIORef' counter (\n -> (n + k, n + k)) :: IO Int))
   , ("next", toUgly next)
@@ -123,5 +123,11 @@ entries =
       [ instantiation ["Int8"] ((\x -> "Int8 " ++ show x) :: Int8 -> String)
       , instantiation ["Word8"] ((\x -> "Word8 " ++ show x) :: Word8 -> String) ])
   ]
+
+-- An exception whose value is an error. Thrown in IO, wrapped by hand: 'throw' of
+-- it may raise the inner error instead (imprecise exceptions; it depends on the optimizer).
+notAnException :: ArithException
+notAnException = error "inner"
+{-# NOINLINE notAnException #-}
 
 uglyModuleFrom "Smoke" 'smoke
