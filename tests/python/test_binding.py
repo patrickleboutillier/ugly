@@ -184,11 +184,13 @@ t = ugly.eval("lua", "return { 1, 2, 3, name = 'x' }")
 t[1] = 20
 t["name"] = "y"
 ok(t[1] == 20 and t["name"] == "y", "proxy[int] = v and proxy[str] = v")
+t[-1] = 5
+ok(t[2] == 5 and t[-1] == 5 and t[-2] == 20, "proxy[-1] counts from the end, to read and to write")
 try:
-    t[-1] = 5
-    ok(False, "proxy[-1] = v is refused by Lua")
-except ugly.Error as e:
-    ok(True, f"proxy[-1] = v is refused by Lua: {e.message}")
+    t[-4]
+    ok(False, "proxy[-4] of three elements is an IndexError")
+except IndexError:
+    ok(True, "proxy[-4] of three elements is an IndexError")
 class BadIndex:
     def __index__(self):
         raise ValueError("no index")
@@ -351,6 +353,54 @@ else:
     skip("a long JS error", "js")
     skip("Map() and Set()", "js")
     skip("String() and Number()", "js")
+
+# A foreign sequence as a Python list: its methods, slices and del, over ugly_splice.
+seq = ugly.eval("lua", "return { 10, 20, 30 }")
+seq.append(40)
+seq.extend(x for x in (50, 60))
+seq.insert(0, 5)
+seq.insert(-1, 55)
+ok(list(seq) == [5, 10, 20, 30, 40, 50, 55, 60], f"append, extend and insert on a Lua table: {list(seq)}")
+ok(seq.pop() == 60 and seq.pop(0) == 5 and list(seq) == [10, 20, 30, 40, 50, 55], f"pop() and pop(0): {list(seq)}")
+ok(seq[1:3] == [20, 30] and seq[::2] == [10, 30, 50] and seq[-2:] == [50, 55], "slices are Python lists")
+seq[1:3] = ["a", "b", "c"]
+ok(list(seq) == [10, "a", "b", "c", 40, 50, 55], f"a slice assigned a list of another length: {list(seq)}")
+del seq[1:4]
+del seq[0]
+del seq[-1]
+ok(list(seq) == [40, 50], f"del of a slice, of an element, of the last one: {list(seq)}")
+try:
+    seq[::2] = [1]
+    ok(False, "a slice with a step can't be assigned: ValueError")
+except ValueError:
+    ok(True, "a slice with a step can't be assigned: ValueError")
+try:
+    del seq[7]
+    ok(False, "del of an element that isn't there is an IndexError")
+except IndexError:
+    ok(True, "del of an element that isn't there is an IndexError")
+seq.clear()
+ok(len(seq) == 0 and not seq, "clear()")
+try:
+    seq.pop()
+    ok(False, "pop() of an empty sequence is an IndexError")
+except IndexError:
+    ok(True, "pop() of an empty sequence is an IndexError")
+
+# del of a member, both ways.
+record = ugly.eval("lua", "return { a = 1, b = 2, c = 3 }")
+del record.a
+del record["b"]
+ok(ugly.eval("lua", "return function(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end")(record) == 1 and record.c == 3,
+    "del proxy.a and del proxy['b'] remove the members")
+
+# A foreign sequence's own method of that name comes first: a JS array's pop is JS's.
+if "js" in built:
+    arr = ugly.eval("js", "[1, 2, 3]")
+    arr.append(4)
+    ok(arr.pop() == 4 and arr.push(9) == 4 and list(arr) == [1, 2, 3, 9], f"append on a JS array, whose pop and push are its own: {list(arr)}")
+else:
+    skip("a JS array's own pop and push", "js")
 
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")

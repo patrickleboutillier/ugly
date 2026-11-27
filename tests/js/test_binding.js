@@ -113,5 +113,28 @@ symDict.plain = 2;
 ok(symRefused && ugly.eval("python", "lambda d: ','.join(sorted(d))")(symDict) === "plain",
 	"proxy[Symbol()] = v is a TypeError, and stores nothing");
 
+// A foreign sequence as an array: push, pop, shift, unshift and splice, over ugly_splice.
+const fseq = ugly.eval("python", "[10, 20, 30]");
+ok(fseq.push(40, 50) === 5 && fseq.unshift(5) === 6 && [...fseq].join(",") === "5,10,20,30,40,50",
+	"push and unshift on a Python list give the new length: " + [...fseq].join(","));
+ok(fseq.pop() === 50 && fseq.shift() === 5 && [...fseq].join(",") === "10,20,30,40", "pop and shift: " + [...fseq].join(","));
+const cut = fseq.splice(1, 2, "a", "b", "c");
+ok(Array.isArray(cut) && cut.join(",") === "20,30" && [...fseq].join(",") === "10,a,b,c,40",
+	"splice(1, 2, ...) gives what it removed, as an array: " + [...fseq].join(","));
+ok(fseq.splice(-1).join(",") === "40" && fseq.splice(0).length === 4 && fseq.length === 0, "splice(-1) and splice(0)");
+// A Python list has a pop of its own, which comes first; a Lua table has none, so it gets an array's.
+const ltab = ugly.eval("lua", "return { 7 }");
+ok(ltab.pop() === 7 && ltab.pop() === undefined && ltab.shift() === undefined && ltab.length === 0,
+	"pop and shift on a Lua table, and undefined once it's empty");
+ok(ugly.eval("python", "{'a': 1}").push === undefined, "a foreign value that isn't a sequence has no push");
+
+// delete p.k removes the foreign member; an element isn't deleted (a foreign sequence has no holes).
+const fdict = ugly.eval("lua", "return { a = 1, b = 2 }");
+const deleted = delete fdict.a;
+ok(deleted && fdict.a === undefined && fdict.b === 2, "delete proxy.a removes the member");
+let kept = false;
+try { delete ugly.eval("python", "[1, 2]")[0]; } catch (e) { kept = e instanceof TypeError; }
+ok(kept, "delete proxy[0] is refused (a TypeError in a module)");
+
 console.log("1.." + count);
 if (failures > 0) throw new Error(failures + " test(s) failed");
