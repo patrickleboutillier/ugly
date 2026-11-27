@@ -172,6 +172,36 @@ lines of C, with no interpreter in the way: read it first.
   thread-local) needs a fallback for the host's code: the attached
   runtime.
 
+## Compiled languages
+
+Every interpreter can find a module by name, list an object's members and
+call a function with whatever arguments arrive. A compiled language has
+none of that at run time. Haskell's plugin
+([doc/haskell-bridge.md](haskell-bridge.md)) moved it to compile time, and
+the shape should carry over to the next one:
+
+- **A module is a library built for UGLY.** An export module, written by
+  hand, lists what crosses; code generated at compile time (Template
+  Haskell's `uglyModule`) writes the table: each export as a value with
+  closures for what the protocol may ask (type name, text, members,
+  elements, a call). Nothing is reflected at run time.
+- **Polymorphism becomes overloads.** Each polymorphic export is expanded
+  into one instantiation per instance in scope, and a call picks the
+  cheapest by its arguments' conversions, like Java's overloads. Ties are
+  refused, listing what would decide them; the hint call option is the
+  language's own way to name types (type applications).
+- **Conversions follow the language's literals**: an int goes wherever an
+  integer literal could, at a cost, and is refused rather than wrapped.
+- **The library joins the plugin's runtime.** Module libraries link the
+  plugin's own package and no runtime system of their own; the plugin
+  finds each by a symbol named after its module, longest prefix first on
+  a path. Never close one: the runtime holds pointers into it.
+- **The binding is the package.** A program in the language links the same
+  package, which carries the plugin in binding mode; it attaches to the
+  program's runtime instead of starting one.
+- **Laziness or other deferred evaluation has to be forced inside the
+  entry point's catch**, or an error escapes after it.
+
 ## Performance
 
 Measure with `tests/bench.c` (`meson test -C build --benchmark --verbose`):

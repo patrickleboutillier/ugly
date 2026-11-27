@@ -1,13 +1,14 @@
-# The Haskell bridge: a plan
+# The Haskell bridge: the design
 
-Status: being built in `plugins/haskell/` (the skeleton, values and boxes,
-export tables and calls, module libraries, foreign values in Haskell,
-hint and want for overloads, the conformance suite (all 9 groups, and
-pairwise with every other language), music-diatonic as an example, and
-the binding are done; the language guide is next). Once it works,
-this becomes the language guide (`doc/languages/haskell.md`), Haskell's
-column in contract §10, and a section of the plugin guide. Until then it's
-the place to argue about the design.
+Status: built (2026-11-26), in `plugins/haskell/`: the plugin passes the
+conformance suite and pairwise with every other language, music-diatonic
+is an example, and the binding makes a Haskell program the host. The
+practical side is now the language guide,
+[doc/languages/haskell.md](languages/haskell.md); the mapping is Haskell's
+column in [contract §10](contract.md#10-the-languages); what it taught is
+in the [plugin guide](plugin-guide.md) ("Compiled languages", and the
+lessons marked "Haskell taught this"). This page stays as the design
+record: why it's built this way, in the order it was built.
 
 Haskell is the language that tests the contract's assumptions hardest, as
 TODO.md said. Every other plugin embeds an interpreter that can find a
@@ -262,8 +263,9 @@ the same value read twice is the same handle.
   Element access and iteration are fine: Python's `xs[1000]`,
   `islice(xs, 5)` and `for x in xs` read one element at a time (the proxy
   has no `__iter__`, so iteration goes by index and never asks the
-  length); `list(xs)` and `len(xs)` don't. A cap on `length` (an option,
-  refusing past it) would make it fail cleanly; to decide.
+  length); `list(xs)` and `len(xs)` don't. **No cap on `length`**
+  (decided 2026-11-26): it's already like that in Haskell, where `length`
+  of an infinite list doesn't return either.
   Otherwise: `get_index` walks to the element and forces only it, so
   `[0..]` has a 1000th element, and `[1, error "x", 3]` raises at index 1
   only. Index i costs i steps: iterating is quadratic. Memoizing an array
@@ -486,7 +488,7 @@ import qualified Ugly
 main = Ugly.withUgly $ do
   json <- Ugly.module_ "python" "json"
   xs <- Ugly.invoke json "loads" [Ugly.toValue "[1, 2, 3]"] >>= Ugly.fromValue
-  print (sum xs :: Int)                     -- a Python list, as a [Int]
+  print (sum (xs :: [Int]))                    -- a Python list, as a [Int]
   twice <- Ugly.eval "python" "lambda f, x: f(f(x))"
   print =<< (Ugly.fromValue =<< Ugly.callValue twice
     [Ugly.toValue ((+ 1) :: Int -> Int), Ugly.toValue (40 :: Int)] :: IO Int)   -- 42: Python calls back
@@ -568,9 +570,9 @@ ghc -dynamic -threaded -package-db <libdir>/ugly/haskell/package.db -package ugl
    commented out); a foreign list as a `[Note]` needed `FromUgly [a]` for
    foreign sequences.
 7. **The binding** (done: `binding.c`, `Ugly.withUgly`, test
-   `binding-haskell`), then the docs: the language guide
-   (`doc/languages/haskell.md`), Haskell's column in contract §10, and a
-   section of the plugin guide.
+   `binding-haskell`), then the docs (done): the language guide
+   (`doc/languages/haskell.md`), Haskell's column in contract §10, and the
+   plugin guide's "Compiled languages".
 
 ## Decided (2026-11-26)
 
