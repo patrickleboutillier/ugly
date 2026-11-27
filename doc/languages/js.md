@@ -91,7 +91,9 @@ for (const x of itertools.count(1)) {      // an infinite Python iterator
   language with no `new` constructs it (`Point(3, 4)` in Python or Lua). A
   class is known by its source text; one compiled without it (`qjsc`
   stripping sources) counts as a function, and can't be constructed that
-  way.
+  way. A native constructor that JS won't call (`Map`, `Set`, `Promise`) is
+  constructed when called from another language; one it will call
+  (`String(5)`, `Date()`) is called.
 - `invoke` calls with `this` bound to the object.
 - Iterable is what `for...of` takes: anything with a `Symbol.iterator`
   method (arrays, `Map`, `Set`, generators, iterators). `ugly_iter` calls

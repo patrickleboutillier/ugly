@@ -66,7 +66,11 @@ identity).
   raises an error, even if it has elements: index it with `#p` and `p[i]`.
 - `tostring(p)` is the foreign language's stringification (Python's
   `str()`, Java's `toString()`), or `ugly.proxy(...)` for a value it has
-  none for (a core list).
+  none for (a core list). A foreign function is a real Lua function, so
+  `tostring` of it is Lua's (`function: 0x...`): `ugly.tostring(f)` gives
+  its own language's string, and is `tostring` for everything else.
+- `p[1.0]` is `p[1]`, as in a Lua table: a float with an integer's value
+  is that index.
 
 ```lua
 local itertools = ugly.module("python", "itertools")

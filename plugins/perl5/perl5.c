@@ -504,41 +504,44 @@ static void croak_ugly(pTHX_ ugly_ctx *ctx, plrt *r, ugly_status st){
 
 
 /*
- * A value's string, for an error message. An object's goes through Perl
- * under eval, since an overloaded "" may die; then it is its class's name.
+ * A value's string, for an error message: a temporary's text, good until
+ * the caller's temporaries go. An object's goes through Perl under eval,
+ * since an overloaded "" may die; then it is its class's name.
  */
-static void message_of(pTHX_ SV *sv, char *buf, size_t size){
+static const char *message_of(pTHX_ SV *sv){
+	SV *text ;
 	if (! (SvROK(sv)&&SvOBJECT(SvRV(sv)))){
-		/* Text: a byte string that isn't UTF-8 already is Latin-1, as perl itself reads it. */
-		STRLEN len ;
-		const char *s = SvPV(sv, len) ;
-		if ((! SvUTF8(sv))&&(! valid_utf8((const unsigned char *)s, len))){
-			SV *copy = sv_mortalcopy(sv) ;     /* a variable: SvPVutf8_nolen evaluates its argument twice */
-			s = SvPVutf8_nolen(copy) ;
-		}
-		snprintf(buf, size, "%s", s) ;
-		return ;
-	}
-	ENTER ;
-	SAVETMPS ;
-	dSP ;
-	PUSHMARK(SP) ;
-	XPUSHs(sv) ;
-	PUTBACK ;
-	int count = call_pv("Ugly::_str", G_SCALAR | G_EVAL) ;
-	SPAGAIN ;
-	if (DIED){
-		SP -= count ;
-		sv_setsv(ERRSV, &PL_sv_undef) ;
-		snprintf(buf, size, "%s", HvNAME(SvSTASH(SvRV(sv)))) ;
+		text = sv_mortalcopy(sv) ;
 	}
 	else {
-		SV *s = POPs ;
-		snprintf(buf, size, "%s", SvPV_nolen(s)) ;
+		ENTER ;
+		SAVETMPS ;
+		dSP ;
+		PUSHMARK(SP) ;
+		XPUSHs(sv) ;
+		PUTBACK ;
+		int count = call_pv("Ugly::_str", G_SCALAR | G_EVAL) ;
+		SPAGAIN ;
+		if (DIED){
+			SP -= count ;
+			sv_setsv(ERRSV, &PL_sv_undef) ;
+			text = newSVpv(HvNAME(SvSTASH(SvRV(sv))), 0) ;
+		}
+		else {
+			text = newSVsv(POPs) ;
+		}
+		PUTBACK ;
+		FREETMPS ;
+		LEAVE ;
+		sv_2mortal(text) ;     /* the caller's temporary: it outlives the scope its value was made in */
 	}
-	PUTBACK ;
-	FREETMPS ;
-	LEAVE ;
+	/* Text: a byte string that isn't UTF-8 already is Latin-1, as perl itself reads it. */
+	STRLEN len ;
+	const char *p = SvPV(text, len) ;
+	if ((! SvUTF8(text))&&(! valid_utf8((const unsigned char *)p, len))){
+		p = SvPVutf8_nolen(text) ;     /* a variable: the macro evaluates its argument twice */
+	}
+	return p ;
 }
 
 
@@ -564,18 +567,19 @@ static ugly_status perl_failure(pTHX_ ugly_ctx *ctx, plrt *r){
 	}
 
 	/* An object: its class and its message field; a string: "die" and the string. */
-	char type[128] = "die", message[512] = "" ;
+	char type[128] = "die" ;
+	const char *message = NULL ;
 	if (SvROK(e)&&SvOBJECT(SvRV(e))){
 		snprintf(type, sizeof(type), "%s", HvNAME(SvSTASH(SvRV(e)))) ;
 		if (SvTYPE(SvRV(e)) == SVt_PVHV){
 			SV **m = hv_fetchs((HV *)SvRV(e), "message", 0) ;
 			if ((m != NULL)&&(SvOK(*m))){
-				message_of(aTHX_ *m, message, sizeof(message)) ;
+				message = message_of(aTHX_ *m) ;
 			}
 		}
 	}
-	if (message[0] == '\0'){
-		message_of(aTHX_ e, message, sizeof(message)) ;
+	if ((message == NULL)||(message[0] == '\0')){
+		message = message_of(aTHX_ e) ;     /* whole: a temporary's text, which the core copies */
 	}
 	return ugly_raise_native(ctx, r->urt, type, message, newSVsv(e), identity_of(aTHX_ e)) ;
 }

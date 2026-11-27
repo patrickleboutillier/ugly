@@ -680,37 +680,43 @@ static ugly_status js_failure(ugly_ctx *ctx, jsrt *r){
 	}
 
 	/* A JS exception: an Error's name and message, or the thrown value itself. */
-	char type[96] = "error", message[512] = "" ;
+	char type[96] = "error" ;
+	const char *text = NULL ;     /* the message, whole: JS's own string, which the core copies */
 	if (JS_IsError(c, e)){
 		str_prop(c, e, "name", type, sizeof(type)) ;
-		str_prop(c, e, "message", message, sizeof(message)) ;
+		JSValue m = JS_GetPropertyStr(c, e, "message") ;
+		text = (JS_IsString(m) ? JS_ToCString(c, m) : NULL) ;
+		if (JS_IsException(m)){
+			drop_exception(c) ;
+		}
+		JS_FreeValue(c, m) ;
 		if (type[0] == '\0'){
 			snprintf(type, sizeof(type), "Error") ;
 		}
 	}
 	else {
-		const char *s = JS_ToCString(c, e) ;
-		if (s != NULL){
-			snprintf(message, sizeof(message), "%s", s) ;
-			JS_FreeCString(c, s) ;
-		}
-		else {
+		text = JS_ToCString(c, e) ;
+		if (text == NULL){
 			drop_exception(c) ;
 		}
 		if (! JS_IsString(e)){
 			snprintf(type, sizeof(type), "%s", JS_IsObject(e) ? "object" : "value") ;
 		}
 	}
+	const char *message = (text != NULL ? text : "") ;
+	ugly_status st ;
 	if (JS_IsNull(e)||JS_IsUndefined(e)){
 		JS_FreeValue(c, e) ;
-		return ugly_raise_native(ctx, r->urt, type, message, NULL, 0) ;
+		st = ugly_raise_native(ctx, r->urt, type, message, NULL, 0) ;
 	}
-	uintptr_t identity = (JS_VALUE_HAS_REF_COUNT(e) ? (uintptr_t)JS_VALUE_GET_PTR(e) : 0) ;
-	jsbox *box = new_box(r, e) ;     /* the payload owns the exception's reference */
-	if (box == NULL){
-		return ugly_raise_native(ctx, r->urt, type, message, NULL, 0) ;
+	else {
+		uintptr_t identity = (JS_VALUE_HAS_REF_COUNT(e) ? (uintptr_t)JS_VALUE_GET_PTR(e) : 0) ;
+		jsbox *box = new_box(r, e) ;     /* the payload owns the exception's reference */
+		st = (box == NULL ? ugly_raise_native(ctx, r->urt, type, message, NULL, 0)
+			: ugly_raise_native(ctx, r->urt, type, message, box, identity)) ;
 	}
-	return ugly_raise_native(ctx, r->urt, type, message, box, identity) ;
+	JS_FreeCString(c, text) ;
+	return st ;
 }
 
 
@@ -1974,6 +1980,36 @@ static ugly_status js_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offs
 }
 
 
+/*
+ * Calls f. A native constructor that JS won't call (Map, Set, Promise:
+ * "constructor requires 'new'") is constructed instead: a caller in a
+ * language with no 'new' can only call. Unlike a class written in JS,
+ * describe can't tell such a constructor from one that may be called
+ * (Date, String), so the engine's own refusal decides, which it makes
+ * before the constructor does anything.
+ */
+static JSValue call_or_construct(JSContext *c, JSValueConst f, JSValueConst this_obj, int n, JSValue *a){
+	JSValue v = JS_Call(c, f, this_obj, n, a) ;
+	if ((! JS_IsException(v))||(! JS_IsConstructor(c, f))){
+		return v ;
+	}
+	JSValue e = JS_GetException(c) ;
+	int needs_new = 0 ;
+	if (JS_IsError(c, e)){
+		char name[32], message[64] ;
+		str_prop(c, e, "name", name, sizeof(name)) ;
+		str_prop(c, e, "message", message, sizeof(message)) ;
+		needs_new = (strcmp(name, "TypeError") == 0)
+			&&((strcmp(message, "constructor requires 'new'") == 0)||(strcmp(message, "must be called with new") == 0)) ;
+	}
+	if (! needs_new){
+		return JS_Throw(c, e) ;
+	}
+	JS_FreeValue(c, e) ;
+	return JS_CallConstructor(c, f, n, a) ;
+}
+
+
 static ugly_status js_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 	ugly_kind want, ugly_val *out){
 
@@ -1986,7 +2022,7 @@ static ugly_status js_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val
 	ugly_status st ;
 	JSValue *a = js_values(ctx, r, args, nargs, &st) ;
 	if (a != NULL){
-		st = out_val(ctx, r, JS_Call(r->c, f, JS_UNDEFINED, (int)nargs, a), want, out) ;
+		st = out_val(ctx, r, call_or_construct(r->c, f, JS_UNDEFINED, (int)nargs, a), want, out) ;
 		free_values(r, a, nargs) ;
 	}
 	return leave(r, st) ;
@@ -2019,7 +2055,7 @@ static ugly_status js_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *
 	else {
 		JSValue *a = js_values(ctx, r, args, nargs, &st) ;
 		if (a != NULL){
-			st = out_val(ctx, r, JS_Call(r->c, f, obj, (int)nargs, a), want, out) ;
+			st = out_val(ctx, r, call_or_construct(r->c, f, obj, (int)nargs, a), want, out) ;
 			free_values(r, a, nargs) ;
 		}
 		JS_FreeValue(r->c, f) ;

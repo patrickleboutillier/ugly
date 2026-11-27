@@ -383,7 +383,7 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 	}
 
 	/* type: the metatable's __name, or "error" for a string, or the Lua type. */
-	char type[64], message[512] ;
+	char type[64] ;
 	if (luaL_getmetafield(L, -1, "__name") == LUA_TSTRING){
 		snprintf(type, sizeof(type), "%s", lua_tostring(L, -1)) ;
 		lua_pop(L, 1) ;
@@ -392,15 +392,20 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 		snprintf(type, sizeof(type), "%s", (lua_type(L, -1) == LUA_TSTRING ? "error" : luaL_typename(L, -1))) ;
 	}
 
-	/* message: the string itself, or a 'message' field (raw: no metamethods outside a pcall), or the type. */
-	snprintf(message, sizeof(message), "%s", type) ;
+	/*
+	 * message: the string itself, or a 'message' field (raw: no metamethods
+	 * outside a pcall), or the type. Whole: it points into the error value,
+	 * which stays on the stack (and keeps its field alive) until the error
+	 * is recorded, and the core copies it.
+	 */
+	const char *message = type ;
 	if (lua_type(L, -1) == LUA_TSTRING){
-		snprintf(message, sizeof(message), "%s", lua_tostring(L, -1)) ;
+		message = lua_tostring(L, -1) ;
 	}
 	else if (lua_type(L, -1) == LUA_TTABLE){
 		lua_pushliteral(L, "message") ;
 		if (lua_rawget(L, -2) == LUA_TSTRING){
-			snprintf(message, sizeof(message), "%s", lua_tostring(L, -1)) ;
+			message = lua_tostring(L, -1) ;
 		}
 		lua_pop(L, 1) ;
 	}
@@ -410,11 +415,12 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 	if (p != NULL){
 		ugly_handle h ;
 		ugly_status st = ugly_dup(ctx, p->h, &h) ;
-		lua_pop(L, 1) ;
 		if (st != UGLY_OK){
 			h = UGLY_NO_HANDLE ;
 		}
-		return ugly_raise_handle(ctx, r->urt, type, message, h) ;
+		st = ugly_raise_handle(ctx, r->urt, type, message, h) ;
+		lua_pop(L, 1) ;
+		return st ;
 	}
 
 	/* Anything else: the error value is the payload. */
@@ -425,8 +431,11 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 	int t = lua_type(L, -1) ;
 	uintptr_t identity = (((t == LUA_TTABLE)||(t == LUA_TUSERDATA)||(t == LUA_TFUNCTION)||(t == LUA_TTHREAD))
 		? (uintptr_t)lua_topointer(L, -1) : 0) ;
+	lua_pushvalue(L, -1) ;
 	int ref = luaL_ref(L, LUA_REGISTRYINDEX) ;
-	return ugly_raise_native(ctx, r->urt, type, message, PTR(ref), identity) ;
+	ugly_status st = ugly_raise_native(ctx, r->urt, type, message, PTR(ref), identity) ;
+	lua_pop(L, 1) ;
+	return st ;
 }
 
 
@@ -1109,13 +1118,24 @@ static int proxy_method(lua_State *L){
 }
 
 
+/* Whether the key at idx is an element's index: an integer, or a float with an integer's value (t[1.0] is t[1] in Lua). */
+static int index_key(lua_State *L, int idx, lua_Integer *i){
+	int is = 0 ;
+	if (lua_type(L, idx) == LUA_TNUMBER){
+		*i = lua_tointegerx(L, idx, &is) ;
+	}
+	return is ;
+}
+
+
 static int proxy_index(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
 	ugly_val out = ugly_null() ;
 	ugly_status st ;
-	if (lua_isinteger(L, 2)){
-		st = ugly_get_index(ctx, p->h, (int64_t)lua_tointeger(L, 2) - 1, UGLY_ANY, &out) ;
+	lua_Integer at = 0 ;
+	if (index_key(L, 2, &at)){
+		st = ugly_get_index(ctx, p->h, (int64_t)at - 1, UGLY_ANY, &out) ;
 		if (st == UGLY_ERR_NOT_FOUND){
 			lua_pushnil(L) ;
 			return 1 ;
@@ -1176,12 +1196,13 @@ static int proxy_newindex(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
 	/* The key first: a bad one is a Lua error, which would skip releasing the converted value. */
-	const char *name = (lua_isinteger(L, 2) ? NULL : luaL_checkstring(L, 2)) ;
+	lua_Integer at = 0 ;
+	const char *name = (index_key(L, 2, &at) ? NULL : luaL_checkstring(L, 2)) ;
 	ugly_val v ;
 	ugly_status st = to_val(ctx, R(L), L, 3, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){
 		if (name == NULL){
-			st = ugly_set_index(ctx, p->h, (int64_t)lua_tointeger(L, 2) - 1, v) ;
+			st = ugly_set_index(ctx, p->h, (int64_t)at - 1, v) ;
 		}
 		else {
 			st = ugly_set_member(ctx, p->h, name, v) ;
@@ -1221,8 +1242,30 @@ static int proxy_eq(lua_State *L){
 
 
 /* tostring(p): the value as its language makes it a string (ugly_to_string); where it has none, ugly.proxy(<handle>). */
+/* A foreign value's own string (ugly_to_string), pushed. */
+static int foreign_string(lua_State *L, proxy *p) ;
+
 static int proxy_tostring(lua_State *L){
-	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
+	return foreign_string(L, luaL_checkudata(L, 1, PROXY_MT)) ;
+}
+
+/*
+ * ugly.tostring(v): tostring, and for a foreign function its own language's
+ * string. A foreign function is a real Lua function (a closure, so Lua's
+ * library takes it), and Lua's tostring of one is its address: functions
+ * share one metatable, which isn't ours to give a __tostring.
+ */
+static int api_tostring(lua_State *L){
+	luaL_checkany(L, 1) ;
+	proxy *p = to_proxy(L, 1) ;
+	if (p != NULL){
+		return foreign_string(L, p) ;
+	}
+	luaL_tolstring(L, 1, NULL) ;
+	return 1 ;
+}
+
+static int foreign_string(lua_State *L, proxy *p){
 	ugly_ctx *ctx = need_ctx(L) ;
 	ugly_val v = ugly_null() ;
 	ugly_status st = ugly_to_string(ctx, p->h, &v) ;
@@ -1497,7 +1540,7 @@ static int api_is_proxy(lua_State *L){
 static const luaL_Reg api[] = {
 	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure },
 	{ "shared_by_threads", api_shared_by_threads }, { "kw", api_kw }, { "opts", api_opts }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
-	{ "iter", api_iter },
+	{ "iter", api_iter }, { "tostring", api_tostring },
 	{ NULL, NULL }
 } ;
 

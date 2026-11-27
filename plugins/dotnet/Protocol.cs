@@ -493,7 +493,10 @@ static class Protocol {
         if (a.GetType() == t) return 0;
         if (a is long v) {
             if (Fits(v, t)) return 1;
-            if ((t == typeof(double)) || (t == typeof(float)) || (t == typeof(decimal))) return 3;
+            // double first: Math.Round(5) has double and decimal, Math.Sign and others float too.
+            if (t == typeof(double)) return 3;
+            if (t == typeof(decimal)) return 4;
+            if (t == typeof(float)) return 5;
         }
         if ((a is double) && (t == typeof(float))) return 2;
         if ((a is string s) && (t == typeof(char)) && (s.Length == 1)) return 3;

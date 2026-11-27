@@ -171,6 +171,9 @@ if binding_dirs.has_key('python') and binding_dirs.has_key('lua')
       env.set('LUA_CPATH', binding_dirs['lua' + v] / '?.so;;')
       test('binding-lua' + v, lua_exe, args: files('lua' / 'test_binding.lua'), protocol: 'tap', env: env,
         suite: 'bindings', depends: plugins + bindings)
+      # Python's buffered output, when the plugin started Python and the output is a pipe (Meson's).
+      test('python-output-lua' + v, lua_exe, args: files('lua' / 'test_python_output.lua'), protocol: 'tap', env: env,
+        suite: 'bindings', depends: plugins + bindings)
     endif
   endforeach
 endif

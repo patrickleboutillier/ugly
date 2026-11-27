@@ -114,6 +114,19 @@ else
 	ok(true, "a JS class # SKIP js isn't built")
 end
 
+-- A float with an integer's value is that index, as in a Lua table.
+local pylist = ugly.eval("python", "[10, 20, 30]")
+pylist[2.0] = 21
+ok(pylist[1.0] == 10 and pylist[4 / 2] == 21, "proxy[1.0] is proxy[1]")
+
+-- ugly.tostring: a foreign function's own string (Lua's tostring of it is a Lua function's).
+ok(ugly.tostring(ugly.eval("python", "len")) == "<built-in function len>" and ugly.tostring(42) == "42"
+	and ugly.tostring(c) == tostring(c), "ugly.tostring(f) is Python's str(f): " .. ugly.tostring(ugly.eval("python", "len")))
+
+-- A long Python error message arrives whole.
+local okl, long = pcall(ugly.eval, "python", "(_ for _ in ()).throw(ValueError('v' * 3000))")
+ok(not okl and ugly.is_error(long) and #long.message == 3000, "a 3000-character Python message arrives whole")
+
 -- A key that is neither an integer nor a string: an error, and the value isn't kept.
 local weak = setmetatable({}, { __mode = "v" })
 do

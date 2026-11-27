@@ -304,29 +304,53 @@ def lua_error(code):
 e = lua_error("error('bad \\255 byte', 0)")
 ok(isinstance(e, ugly.Error) and e.language == "lua" and e.message == "bad \ufffd byte",
     f"a Lua error whose message isn't UTF-8 is an ugly.Error: {e!r}")
-e = lua_error("error(string.rep('a', 510) .. 'éé', 0)")
-ok(isinstance(e, ugly.Error) and e.message.startswith("a" * 510) and e.message.isprintable(),
-    f"  ... and so is one cut in the middle of a character: {type(e).__name__}, {len(e.message) if hasattr(e, 'message') else 0} characters")
+e = lua_error("error(string.rep('a', 510) .. 'éé' .. string.rep('b', 2000), 0)")
+ok(isinstance(e, ugly.Error) and e.message == "a" * 510 + "éé" + "b" * 2000,
+    f"  ... and a long one arrives whole: {type(e).__name__}, {len(e.message) if hasattr(e, 'message') else 0} characters")
+
+# A Python exception that crosses another language and comes home keeps where it was raised.
+import traceback
+def deep_raiser(x):
+    raise KeyError("from the inside")
+try:
+    lua.apply(deep_raiser, 1)
+    ok(False, "a Python exception through Lua comes home with its traceback")
+except KeyError as e:
+    frames = [f.name for f in traceback.extract_tb(e.__traceback__)]
+    ok("deep_raiser" in frames, f"a Python exception through Lua comes home with its traceback: {frames}")
 if "perl5" in built:
     try:
         ugly.eval("perl5", 'die "caf\\xe9 broke\\n"')
         ok(False, "a Perl die with a Latin-1 message keeps its text")
     except ugly.Error as e:
         ok(e.message == "café broke\n", f"a Perl die with a Latin-1 message keeps its text: {e.message!r}")
+    try:
+        ugly.eval("perl5", 'die "x" x 3000')
+    except ugly.Error as e:
+        ok(e.message.startswith("x" * 3000), f"  ... and a long one arrives whole: {len(e.message)} characters")
     except Exception as e:
         ok(False, f"a Perl die with a Latin-1 message keeps its text: {e!r}")
 else:
     skip("a Perl die with a Latin-1 message", "perl5")
+    skip("a long Perl die", "perl5")
 if "js" in built:
     try:
         ugly.eval("js", 'throw new RangeError("xx" + "日".repeat(300))')
         ok(False, "a long JS error is still a RangeError")
     except ugly.Error as e:
-        ok(e.type == "RangeError" and e.message.startswith("xx日日"), f"a long JS error is still a RangeError: {e.type}")
+        ok(e.type == "RangeError" and e.message == "xx" + "日" * 300, f"a long JS error is still a RangeError, whole: {e.type}")
     except Exception as e:
         ok(False, f"a long JS error is still a RangeError: {e!r}")
+    # Native constructors that JS won't call are constructed; those it will call are called.
+    g = ugly.eval("js", "globalThis")
+    m = g.Map()
+    m.set("k", 1)
+    ok(m.get("k") == 1 and g.Set([1, 1, 2]).size == 2, "Map() and Set() from Python construct")
+    ok(g.String(5) == "5" and g.Number("7") == 7, "  ... and String(5), Number('7') are still calls")
 else:
     skip("a long JS error", "js")
+    skip("Map() and Set()", "js")
+    skip("String() and Number()", "js")
 
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")

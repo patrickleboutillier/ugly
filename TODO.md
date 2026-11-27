@@ -30,35 +30,16 @@ reading only:
 
 The thirteen are fixed (under "Done"). Seen while fixing them:
 
-- [ ] **JS: a native constructor that can't be called** (`Map`, `Set`)
-  is still CALLABLE and INSTANTIABLE: only classes written in JS are
-  recognized (by their source text), so `Map()` from Python calls it, and
-  JS refuses. `Date` is fine either way.
 - [ ] **Perl: `isa`, `can`, `DOES` and `VERSION`** on a proxy are Perl's
   own, not the foreign value's (Perl code calls them on any object).
 
 ### Smaller
 
-- [ ] **Error messages are cut at 511 bytes** by the plugins' buffers
-  (Lua, Python, Perl, JS). The text is whole characters now, but a long
-  message loses its end: pass the language's own string to
-  `ugly_raise_native` instead of a copy in a buffer.
-- [ ] **Python embedded: buffered stdout is lost at exit** when piped
-  (Python is never finalized). Flush in `py_rt_delete`, or document it.
-- [ ] **Python: a round-tripped exception loses its inner traceback**
-  (`py_failure` drops `tb`).
 - [ ] **Python binding imported first on another thread:** teardown
   (`atexit`, on the main thread) does nothing.
-- [ ] **Lua: `lst[1.0]` is a member lookup** (`lua_isinteger`); plain Lua
-  normalizes it.
-- [ ] **Lua: `tostring` of a foreign function** is the closure's address;
-  the guide says the foreign stringification.
 - [ ] **Lua: an `ugly.error` kept after it escaped once is empty.**
 - [ ] **Lua binding: a `__gc` after the sentinel re-attaches the state**,
   and that attach is never torn down.
-- [ ] **Java and C#: an integer ties between `float` and `double`**
-  (`Math.signum(2)`, `Math.Round(5)`: "ambiguous call"). Rank `double`
-  first.
 - [ ] **Java: lax UTF-8 in `new_string`** (overlongs, encoded surrogates,
   beyond U+10FFFF); `c_string` cuts at a NUL; `getMember(obj, "")` raises;
   attached threads are never detached; `jv_next` drops the rest of a batch
@@ -109,6 +90,21 @@ plugins do.
   the other half of this split: once it exists, a string key of a dict has
   two routes. Decide which is canonical before writing it, and whether
   `get_member` on a dict keeps reaching its keys.
+  *Recommendation (2026-11-27), parked by the author:* split them. A new
+  trait `ENTRIES` with `get_entry`, `set_entry`, `delete_entry` and
+  iteration over keys, the keys any `ugly_val`: this is the hash protocol,
+  one piece of work, not two. `MEMBERS` becomes what the language's dot
+  reaches (attributes, fields, methods), so `get_member` on a dict stops
+  reaching its keys. A Python dict, a Java `Map`, a C# dictionary, a JS
+  `Map`, a Perl hash and a Haskell `Map` report `ENTRIES` for their keys;
+  a Lua table reports both (its string keys are both). Bindings whose
+  syntax tells the two apart use it (`p.k` and `p["k"]` in Python,
+  `$p->m` and `$p->{k}` in Perl); those where it's one thing (Lua, JS) try
+  the member, then the entry, with an explicit `ugly.entry(p, k)` for an
+  entry a method shadows. The fallback is the binding's: the core stays
+  exact or refused. Keys compare by the home language's own rule. About
+  the size of the iteration work: plugin ABI 6, core and mock first, then
+  a language per pull request.
 - [ ] **Deferred release as the core's default.** Rule: `release` "must be
   safe to re-enter, or defer the work itself". JS got it wrong (a
   destructor re-entering inside QuickJS's collection), and the any-thread
@@ -120,7 +116,8 @@ plugins do.
 - [ ] **No fourth thread mode before the races are closed.** Three exist
   (the owner's thread, `UGLY_CAP_ANY_THREAD`, host-serialized), the last on
   a promise the core can't check, and both of the core's open races are
-  here (`ugly_rt_get`, deleting a shared runtime: "Review findings"). Worth
+  here (`ugly_rt_get`, fixed since; deleting a shared runtime, still
+  open: "Review findings"). Worth
   a pass over §6 as one state machine once they're fixed, rather than as
   three relaxations.
 - [ ] **The blocking model is a harder limit than cycles.** Cycles leak, a
@@ -335,5 +332,13 @@ contract and in the pull requests.
   a character cut by the end of the text and puts U+FFFD for other bytes
   that aren't UTF-8), so Python no longer raises `UnicodeDecodeError` in
   place of the error; a Perl `die` with Latin-1 text keeps its characters.
+- **First-hour papercuts** (2026-11-27): Java and C# rank `double` first
+  for an integer (`Math.signum(2)`, `Math.Round(5)` were "ambiguous");
+  Python's buffered output is flushed when its runtime goes and at exit
+  (lost when piped); error messages cross whole (Lua, Python, Perl and JS
+  cut them at 511 bytes); a Python exception that comes home keeps its
+  traceback; `Map()` and `Set()` construct when called from another
+  language; Lua's `ugly.tostring(f)` for a foreign function, and
+  `p[1.0]` is `p[1]`.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).
