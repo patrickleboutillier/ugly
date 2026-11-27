@@ -4,6 +4,172 @@ Open work, roughly in priority order within each section, with the reasons
 behind each item; what's done is listed at the end. The contract,
 [doc/contract.md](doc/contract.md), records every decision taken.
 
+## Review findings (2026-11-27)
+
+A bug hunt over the core and the eight plugins, after 2.7.0. Each was
+confirmed by a repro unless marked *(by reading)*. Line numbers are 2.7.0's.
+Three were fixed at once (PR #74, under "Done").
+
+### Crashes and memory corruption
+
+- [ ] **JS: JS code runs inside a QuickJS finalizer** (`js.c`,
+  `proxy_finalizer`). It releases synchronously; if the released value's
+  destructor re-enters JS (an open generator's `return()` in `js_release`,
+  a Perl `DESTROY`, a Lua `__gc`), JS runs mid-GC: SIGSEGV. `tearing_down`
+  only covers the binding's teardown. Defer releases made from a finalizer
+  (queue, drain in `leave()` or the next `enter`).
+- [ ] **Perl: croaks outside `G_EVAL`.** `hv_store` (`perl5.c:1437`),
+  `hv_delete`, `av_store`, `av_fill`/`av_push` in splice; tied `FETCH`,
+  `FETCHSIZE`, `FIRSTKEY` (`SvGETMAGIC`, `av_len`, `hv_iternext`);
+  overloaded `bool` (`SvTRUE`) and `""` (`SvPV_nolen` in `perl_failure`).
+  Embedded, the process exits (Python storing to a `lock_keys` hash); in the
+  binding the croak longjmps over the core's frames (`rt_leave`, JS's
+  `leave()`, Python's GIL). Needs a `G_EVAL` wrapper around them.
+- [ ] **Haskell: calls out from unbound threads use another thread's ctx**
+  (`Marshal.hs`, `currentCtx`/`operation`; `glue.c`'s `current_rt`). The ctx
+  is read by an `unsafe` import, the operation is a later `safe` call, and a
+  `forkIO` thread can change OS thread in between: `WRONG_THREAD`, then
+  `ugly_take_error` on a ctx it doesn't own (segfault with 16 threads
+  calling Python). The guide implies `forkIO` works. Take the ctx inside the
+  same safe C call, or use `runInBoundThread`.
+- [ ] **Haskell: an exception inside `raise` kills the host**
+  (`Marshal.hs`, `guarded`). `raise` is outside the `catch`: `withUtf8` on a
+  message with a lone surrogate (a non-UTF-8 `FilePath` in an
+  `IOException`), or `newRef` forcing an exception that is itself bottom,
+  escapes the foreign export and the RTS exits. Make `raise` total.
+- [ ] **Haskell: `STACK_CHECK` is off on stacks of 2 MB or less**
+  (`haskell.c`, `stack_left`): the JVM's threads have 1 MB. Deep re-entry
+  segfaults there. Scale the reserve (`min(1 MB, size / 4)`). *(By
+  reading:)* only `call` and `invoke` are checked.
+- [ ] **Haskell: `set_index` on an infinite list** (`Plugin.hs`,
+  `hsSetIndex`) asks for the length before refusing: `naturals[0] = 1`
+  exhausts memory. The 2.6.0 splice hang, still there for `set_index`.
+- [ ] **Perl: `xs_proxy_keys` uses a stale `sp`** (`perl5.c:941`) after a
+  core call that can grow perl's stack (valgrind: invalid write). `SPAGAIN`.
+  *(By reading:)* the same for `&ST(1)` passed to `take_kw`/`xs_args`.
+- [ ] **Perl binding: ithreads.** No `CLONE_SKIP` in `Ugly::Proxy` and
+  `Ugly::Error`: a thread's clone releases the parent's handle at join
+  (and would free an error twice).
+
+### Leaks
+
+- [ ] **Any-thread hosts never drain their release queue.** Releases to an
+  any-thread runtime are always queued, and only the Lua binding calls
+  `ugly_rt_drain`. A Python program that only calls out keeps every object
+  it passes until something calls into Python through the core (300k calls
+  passing a 100-element list: 9 MB to 147 MB). *(By reading:)* the same in
+  the Java, .NET and Haskell bindings. Call `ugly_rt_drain` in their
+  call-out paths (one atomic load when the queue is empty).
+- [ ] **Java: `Foreign.cache` is never pruned** (`Foreign.java`): one map
+  entry per foreign value, forever. Remove it in the Cleaner action if the
+  weak reference is cleared, as C#'s finalizer does.
+- [ ] **Perl: mortals made outside `SAVETMPS`** when the caller isn't Perl
+  (`perl5.c:1659` `invoke_entry`, `:1753` `pl_iter`, `:1286`, `:1383`,
+  `:1389`, `:1405`): an RV per invoke on a package from Python, and an
+  array Python iterated is never destroyed. Each entry point needs its own
+  `ENTER; SAVETMPS ... FREETMPS; LEAVE`.
+- [ ] **Lua: `__newindex` leaks the converted value** when the key is bad
+  (`lua.c`, `luaL_checkstring` after `to_val`).
+
+### Wrong results
+
+- [ ] **Core: `ugly_rt_get` isn't atomic for any-thread languages**
+  (`rt.c`): between `lang_share_rt` and `ugly_rt_new`, threads making their
+  first call together get "python supports one runtime per process" (7 of
+  8 threads, in 1 run of 30).
+- [ ] **Python: a member that is a class becomes a bound method**
+  (`proxy_getattro` tests `CALLABLE` only; Lua also requires not
+  `INSTANTIABLE`): `m.C.s` and `m.C(1)` fail for a JS class.
+- [ ] **Python: `bool(proxy)` raises `TypeError`** for a value without a
+  length (`if callback:` fails), and is `False` for a Lua table with only
+  fields. An `nb_bool`.
+- [ ] **Python: `proxy_traits` caches 0 forever** after one failed
+  `ugly_describe` (a call from the wrong thread). Cache only on `UGLY_OK`.
+- [ ] **Perl: non-ASCII hash keys** are unreachable and stored as bytes:
+  `hv_fetch`/`hv_store`/`hv_delete` get a positive `klen`, and
+  `hv_iterkey` ignores `HeKUTF8`.
+- [ ] **Perl: `!=` and `ne` on proxies are always false** (`helper.pm`
+  overloads `==` and `eq` only, with `fallback`).
+- [ ] **Perl: foreign methods named like `Ugly::Proxy`'s own subs**
+  (`_get`, `isa`, `_release`...) never reach `AUTOLOAD`; `$o->_release`
+  releases the handle. Move the XS functions to another package.
+- [ ] **Java: `coerce()` narrows without a range check** where `score()`
+  didn't run first: `setMember`, `setIndex` on arrays, a foreign
+  function's result for an interface (`2**40+7` into an `int` field
+  stores 7; `'xyz'` into a `char` stores `'x'`).
+- [ ] **Java: a hint on a callable that isn't overloaded is dropped**
+  (`Bridge.call`'s functional-interface path never consumes `HINT`), and
+  the next overload resolution on that thread, a nested call, takes it.
+- [ ] **C#: an object both `IEnumerable` and `IEnumerator`** (`yield`,
+  LINQ) is single-shot once iterated: the second pass is empty, and
+  releasing its iterator doesn't `Dispose()` while the enumerable is held.
+  Hand out a wrapper enumerator when `GetEnumerator()` returns the object
+  itself.
+- [ ] **C#: `want = DOUBLE` on a wide integer that doesn't fit int64**
+  (`Bridge.cs`, `Wide` ignoring `fits`): `ulong.MaxValue` gives -1,
+  `Int128.MaxValue` 0.
+- [ ] **Haskell: identity collides for values sharing a heap object**
+  (`newRef`: the `StableName` alone): a newtype and its contents, empty
+  `Map`s at different types. One comes back with the other's box. Key on
+  the type too.
+- [ ] **JS: a job run in `leave()` erases the failing call's error**, if
+  it makes any core call. Take and restore the error around `run_jobs`.
+- [ ] **JS: symbol-keyed assignment on a proxy** writes a string member
+  (`d[Symbol.iterator] = 2` makes a key "Symbol.iterator").
+
+### Lost errors
+
+- [ ] **Messages cut mid-character, or not UTF-8.** Lua, Python, Perl and
+  JS cut messages at 511 bytes with `snprintf`, and Lua and Perl pass
+  bytes that aren't UTF-8. Python then raises `UnicodeDecodeError` instead
+  of `ugly.Error` (`raise_ugly`), and Haskell an `IOException` instead of
+  `ForeignError` (`failed`): type, language and payload are lost. Sanitize
+  once in the core (`error_new`), and decode leniently in those two.
+- [ ] **Haskell: a member name that isn't UTF-8** is `RAISED`, not
+  `NOT_FOUND` (`peekUtf8` in `hsGetMember`...). *(By reading.)*
+
+### Smaller
+
+- [ ] **Python embedded: buffered stdout is lost at exit** when piped
+  (Python is never finalized). Flush in `py_rt_delete`, or document it.
+- [ ] **Python: a round-tripped exception loses its inner traceback**
+  (`py_failure` drops `tb`).
+- [ ] **Python binding imported first on another thread:** teardown
+  (`atexit`, on the main thread) does nothing.
+- [ ] **Lua: `lst[1.0]` is a member lookup** (`lua_isinteger`); plain Lua
+  normalizes it.
+- [ ] **Lua: `tostring` of a foreign function** is the closure's address;
+  the guide says the foreign stringification.
+- [ ] **Lua: an `ugly.error` kept after it escaped once is empty.**
+- [ ] **Lua binding: a `__gc` after the sentinel re-attaches the state**,
+  and that attach is never torn down.
+- [ ] **Java and C#: an integer ties between `float` and `double`**
+  (`Math.signum(2)`, `Math.Round(5)`: "ambiguous call"). Rank `double`
+  first.
+- [ ] **Java: lax UTF-8 in `new_string`** (overlongs, encoded surrogates,
+  beyond U+10FFFF); `c_string` cuts at a NUL; `getMember(obj, "")` raises;
+  attached threads are never detached; `jv_next` drops the rest of a batch
+  after a failed conversion *(by reading)*.
+- [ ] **C#** *(by reading)*: `Conv.Export` releases again after a failed
+  `ugly_export` (the core already did); `Errors.Fail` can throw out of an
+  `[UnmanagedCallersOnly]` method on a stale payload; multi-dimensional
+  arrays report ELEMENTS.
+- [ ] **Java and C#: a VM thread using a `Foreign` after the runtime was
+  deleted** reaches `ugly_fail(ctx, NULL, ...)`. *(By reading.)*
+- [ ] **Haskell binding:** `withUgly` from two threads at once races
+  (`binding.c`'s `b_depth`, `b_ctx`). *(By reading.)*
+- [ ] **Perl:** a string once used as a number goes out as a number (IOK
+  before POK): a design call, or a pitfall for the guide. An exception
+  object whose `bool` is false counts as success *(by reading)*.
+- [ ] **JS** *(by reading)*: a throwing `done` getter reads as "finished";
+  `ugly.opts({context: 5})` is silently ignored.
+- [ ] **Mock** *(by reading)*: `want = STRING` on BYTES isn't validated as
+  UTF-8.
+- [ ] **Core:** the "c" language's INT to DOUBLE (`host.c`, `load`) says
+  lossless and doesn't check ±2^53; `ugly_ctx_delete` leaves
+  `ugly_ctx_thread`'s pthread key set; deleting a shared any-thread runtime
+  can race with a thread between `h_lookup` and `rt_enter` (teardown only).
+
 ## Embedding in real hosts
 
 The motivating case: an application with Lua built in (HAProxy,
@@ -174,5 +340,10 @@ contract and in the pull requests.
   (`tests/bench.c`, doc/benchmarks.md), which found the core's lock
   serializing every call (now a lock-free lookup), and uncached reflection
   in .NET and Java, and a closure per call in Perl.
+- **Review fixes** (2026-11-27, PR #74): Lua's stack is asked for room
+  before a call's arguments are pushed (a heap overflow past the free
+  slots); Python reads `proxy[key] = v`'s key before releasing the GIL
+  (`proxy[-1] = v` was a segfault); libugly exports only `ugly_*`
+  (`src/ugly.map`), so a host can't interpose its internals.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).
