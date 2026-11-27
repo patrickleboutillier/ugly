@@ -5,7 +5,7 @@
 using Ugly;
 
 static class TestBinding {
-    const int Plan = 43;
+    const int Plan = 44;
     static int count;
     static readonly HashSet<string> langs = new((Environment.GetEnvironmentVariable("UGLY_TEST_LANGS") ?? "").Split(','));
 
@@ -205,6 +205,12 @@ static class TestBinding {
             Ok("[[0, 1, 2], [0, 1, 2]]".Equals(twice.Call(Enumerable.Range(0, 3))), $"Python iterates a LINQ enumerable twice: {twice.Call(Enumerable.Range(0, 3))}");
             var broken = (Foreign)Interop.Eval("python", "lambda xs: str([next(iter(xs)), list(xs)])")!;
             Ok("[0, [0, 1, 2]]".Equals(broken.Call(Enumerable.Range(0, 3))), "  ... and again after an iteration left unfinished");
+        });
+
+        Check("numbers", 1, ["python"], () => {
+            // An integer for a method that takes double, decimal or float: the double one, not a tie.
+            var round = (Foreign)Interop.Eval("python", "lambda: [__import__('ugly').module('dotnet', 'System.Math').Round(5), __import__('ugly').module('dotnet', 'System.MathF').Sqrt(4)] == [5.0, 2.0]")!;
+            Ok(true.Equals(round.Call()), "Math.Round(5) from Python is Round(double), and MathF.Sqrt(4) still takes a float");
         });
 
         Check("leaks", 1, ["lua"], () => {

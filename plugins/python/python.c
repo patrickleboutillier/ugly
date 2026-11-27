@@ -91,7 +91,11 @@ static PyObject *raise_ugly(ugly_ctx *ctx, ugly_status st){
 	void *ref = NULL ;
 	if ((URT() != NULL)&&(ugly_error_payload(ctx, err, &home) == UGLY_OK)&&(home != UGLY_NO_HANDLE)
 		&&(ugly_resolve(ctx, URT(), home, &ref) == UGLY_OK)&&(ref != NULL)&&(PyExceptionInstance_Check((PyObject *)ref))){
-		PyErr_SetObject((PyObject *)Py_TYPE((PyObject *)ref), (PyObject *)ref) ;
+		/* With the traceback it left with: the frames it passes now are added to it. */
+		PyObject *exc = (PyObject *)ref ;
+		Py_INCREF(exc) ;
+		Py_INCREF(Py_TYPE(exc)) ;
+		PyErr_Restore((PyObject *)Py_TYPE(exc), exc, PyException_GetTraceback(exc)) ;
 		ugly_release(ctx, home) ;
 		ugly_error_free(err) ;
 		return NULL ;
@@ -184,22 +188,29 @@ static ugly_status py_failure(ugly_ctx *ctx){
 		const char *dot = strrchr(n, '.') ;
 		snprintf(type, sizeof(type), "%s", dot != NULL ? dot + 1 : n) ;
 	}
-	char message[512] = "" ;
-	if (v != NULL){
-		PyObject *s = PyObject_Str(v) ;
-		if ((s != NULL)&&(PyUnicode_AsUTF8(s) != NULL)){
-			snprintf(message, sizeof(message), "%s", PyUnicode_AsUTF8(s)) ;
-		}
-		Py_XDECREF(s) ;
-		PyErr_Clear() ;
+	/* The message is str(v), whole: the core copies it. */
+	PyObject *text = (v != NULL ? PyObject_Str(v) : NULL) ;
+	const char *message = (text != NULL ? PyUnicode_AsUTF8(text) : NULL) ;
+	PyErr_Clear() ;
+	if (message == NULL){
+		message = "" ;
 	}
 	if (v != NULL){
+		/*
+		 * The traceback stays with the exception: PyErr_Fetch took it off,
+		 * and if the exception comes home (rule 7) it is raised again with
+		 * where it first came from (raise_ugly).
+		 */
+		if ((tb != NULL)&&PyExceptionInstance_Check(v)){
+			PyException_SetTraceback(v, tb) ;
+		}
 		Py_INCREF(v) ;     /* the payload's reference */
 		st = ugly_raise_native(ctx, URT(), type, message, v, (uintptr_t)v) ;
 	}
 	else {
 		st = ugly_raise_native(ctx, URT(), type, message, NULL, 0) ;
 	}
+	Py_XDECREF(text) ;
 	Py_XDECREF(t) ; Py_XDECREF(v) ; Py_XDECREF(tb) ;
 	return st ;
 }
@@ -1846,12 +1857,45 @@ static void fork_safety(void){
 }
 
 
+/*
+ * Python's sys.stdout and sys.stderr are buffered when they aren't a
+ * terminal, and Py_Finalize, which would flush them, never runs for the
+ * Python we started: what a script printed was lost at exit when its output
+ * was a pipe or a file. Flushed when the runtime is deleted, and at exit.
+ */
+static int we_started ;
+
+static void flush_output(void){
+	if (! Py_IsInitialized()){
+		return ;
+	}
+	PyGILState_STATE g = PyGILState_Ensure() ;
+	PyObject *t, *v, *tb ;
+	PyErr_Fetch(&t, &v, &tb) ;
+	const char *names[] = { "stdout", "stderr" } ;
+	size_t i ;
+	for (i = 0 ; i < 2 ; i++){
+		PyObject *f = PySys_GetObject(names[i]) ;     /* borrowed */
+		if ((f != NULL)&&(f != Py_None)){
+			PyObject *r = PyObject_CallMethod(f, "flush", NULL) ;
+			Py_XDECREF(r) ;
+			PyErr_Clear() ;
+		}
+	}
+	PyErr_Restore(t, v, tb) ;
+	PyGILState_Release(g) ;
+}
+
+
 static ugly_status py_init(ugly_ctx *ctx, const char *dir){
 	(void)ctx ; (void)dir ;
 	if (! Py_IsInitialized()){
 		/* We start Python: no signal handlers, and the GIL released for PyGILState_Ensure. */
 		Py_InitializeEx(0) ;
 		PyEval_SaveThread() ;
+		/* And we never finalize it, which is what flushes its buffered output: do that at exit. */
+		we_started = 1 ;
+		atexit(flush_output) ;
 	}
 	ENTER ;
 	fork_safety() ;
@@ -1946,6 +1990,9 @@ static ugly_status py_rt_attach(ugly_ctx *ctx, ugly_rt *rt, void *existing, void
 static ugly_status py_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 	(void)ctx ; (void)rt ;
 	pyrt *r = native ;
+	if (we_started){
+		flush_output() ;
+	}
 	ENTER ;
 	Py_CLEAR(r->globals) ;
 	PyGC_Collect() ;          /* cycles holding proxies release their handles now */

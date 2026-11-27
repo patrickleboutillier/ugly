@@ -135,7 +135,9 @@ Python starts.
 
 - **One Python per process, for good.** Python starts at plugin load and is
   never finalized, so there's no second runtime and no restart. Its memory
-  shows as "still reachable" at exit.
+  shows as "still reachable" at exit. What it printed is flushed when its
+  runtime is deleted and when the process exits, so output sent to a pipe
+  or a file arrives, after the host's own if the host flushed first.
 - **No signal handlers.** The plugin starts Python with
   `Py_InitializeEx(0)`, so Ctrl-C doesn't raise `KeyboardInterrupt` in
   embedded Python: signals belong to the host.

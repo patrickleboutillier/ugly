@@ -175,8 +175,9 @@ abstract method calls the value itself).
 
 - **Overloads** are chosen as in Java, by scoring how well each argument
   converts: an exact type, then an integer narrowed to a parameter it
-  fits, then a supertype, then a conversion to floating point, with
-  `object` last. A tie fails with `UGLY_ERR_TYPE`.
+  fits, then a supertype, then a conversion to floating point (`double`,
+  then `decimal`, then `float`, so `Math.Round(5)` is `Round(double)`),
+  with `object` last. A tie fails with `UGLY_ERR_TYPE`.
 - **Keyword arguments** bind to parameters by name, as C#'s named arguments
   do, and parameters left out keep their defaults. A name no overload has
   fails with `UGLY_ERR_TYPE`.

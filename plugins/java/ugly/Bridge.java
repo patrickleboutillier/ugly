@@ -511,7 +511,9 @@ public final class Bridge {
 		if (a instanceof Long){
 			long v = (Long)a;
 			if (fits(v, t)) return 1;
-			if ((t == Double.class)||(t == Float.class)) return 3;
+			// double before float: Math.signum(2) has both, and a double is the faithful one.
+			if (t == Double.class) return 3;
+			if (t == Float.class) return 4;
 		}
 		if ((a instanceof Double)&&(t == Float.class)) return 2;
 		if ((a instanceof String)&&(t == Character.class)&&(((String)a).length() == 1)) return 3;

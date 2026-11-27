@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 44;
+	static final int PLAN = 45;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -259,6 +259,12 @@ public class test_binding {
 			ok(got.startsWith("refused") && got.contains("no overload"), "a hint a Java lambda doesn't have is refused: " + got);
 			ok("long".equals(hinted.call(through, which, "java.lang.Object")),
 				"  ... and the one it has is taken, without reaching the overload called inside");
+		});
+
+		check("numbers", () -> {
+			// An integer for a method that takes float or double: the double one, not a tie.
+			Foreign signum = (Foreign)Ugly.eval("python", "lambda: __import__('ugly').module('java', 'java.lang.Math').signum(-2)");
+			ok(Double.valueOf(-1.0).equals(signum.call()), "Math.signum(-2) from Python is signum(double): " + signum.call());
 		});
 
 		check("leaks", () -> {

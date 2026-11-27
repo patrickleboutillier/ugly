@@ -110,7 +110,8 @@ The plugin creates the JVM when it loads, with `-Xrs`, its class path being
 
 **Overloads** are chosen by scoring how well each argument converts: an
 exact type is best, then an integer narrowed to a parameter it fits, then a
-supertype, then a conversion to floating point, with `Object` last. A tie
+supertype, then a conversion to floating point (`double` before `float`, so
+`Math.signum(2)` is `signum(double)`), with `Object` last. A tie
 fails with `UGLY_ERR_TYPE` ("ambiguous call"). An overload hint names the
 one to use, by the parameter types' `Class.getName()` names, comma-separated
 (`"int,java.lang.String"`; `char[]` is `"[C"`). A callable that isn't
