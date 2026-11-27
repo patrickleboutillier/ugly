@@ -18,7 +18,7 @@ libugly = shared_library('ugly',
   dependencies: [threads, libdl, libm],
   link_args: ['-Wl,--version-script=' + ugly_map],
   link_depends: 'ugly.map',
-  version: '2.7.0',
+  version: '2.8.0',
   install: true,
 )
 

@@ -275,7 +275,7 @@ ugly_status ugly_same(ugly_ctx *ctx, ugly_handle a, ugly_handle b, bool *out) ;
 /* ------------------------------------------------------------------ */
 
 /* What a handle supports. A value can have several traits (a Python list has ELEMENTS and MEMBERS). */
-#define UGLY_TRAIT_MEMBERS       (1u << 0)  /* string-keyed: fields, methods, dict/hash/table entries */
+#define UGLY_TRAIT_MEMBERS       (1u << 0)  /* named: what the language's dot reaches (fields, attributes, methods) */
 #define UGLY_TRAIT_ELEMENTS      (1u << 1)  /* integer-indexed, with a length */
 #define UGLY_TRAIT_CALLABLE      (1u << 2)  /* ugly_call */
 #define UGLY_TRAIT_INSTANTIABLE  (1u << 3)  /* ugly_new: classes, constructors */
@@ -290,6 +290,12 @@ ugly_status ugly_same(ugly_ctx *ctx, ugly_handle a, ugly_handle b, bool *out) ;
  * for over a function, Java's for-each, C# foreach): ugly_iter (libugly 2.7).
  */
 #define UGLY_TRAIT_ITERABLE      (1u << 5)
+/*
+ * A keyed collection: a Python dict, a Lua table, a Perl hash, a JS Map, a
+ * Java Map, a C# dictionary (libugly 2.8). Its entries are apart from its
+ * members: a dict's key "get" is an entry, its method get a member.
+ */
+#define UGLY_TRAIT_ENTRIES       (1u << 6)
 
 /* Traits, plus the type name in the home language's terms ("dict", "HASH", "table"). */
 ugly_status ugly_describe(ugly_ctx *ctx, ugly_handle h, uint32_t *traits, ugly_val *type_name) ;
@@ -304,6 +310,26 @@ ugly_status ugly_set_member(ugly_ctx *ctx, ugly_handle h, const char *name, ugly
 ugly_status ugly_delete_member(ugly_ctx *ctx, ugly_handle h, const char *name) ;
 /* The member names, as a core list handle of strings. */
 ugly_status ugly_member_names(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
+
+/*
+ * Entries (contract §2, libugly 2.8): a keyed collection's, by key. A key is
+ * any value, compared as the collection's own language compares keys; one it
+ * can't hold (a Perl hash takes strings) isn't there to get or delete
+ * (UGLY_ERR_NOT_FOUND, and nothing to delete), and is UGLY_ERR_TYPE to set.
+ * Deleting an entry that isn't there is not an error. UGLY_ERR_NOT_CAPABLE
+ * for a value without UGLY_TRAIT_ENTRIES, or one whose entries can't change.
+ */
+ugly_status ugly_get_entry(ugly_ctx *ctx, ugly_handle h, ugly_val key, ugly_kind want, ugly_val *out) ;
+ugly_status ugly_set_entry(ugly_ctx *ctx, ugly_handle h, ugly_val key, ugly_val v) ;
+ugly_status ugly_delete_entry(ugly_ctx *ctx, ugly_handle h, ugly_val key) ;
+/* How many entries. */
+ugly_status ugly_entry_count(ugly_ctx *ctx, ugly_handle h, int64_t *out) ;
+/*
+ * An iterator over the keys, for ugly_next: an owned handle, in the
+ * collection's own order. What changing the collection meanwhile does is its
+ * language's rule (Python raises, Lua's next is undefined for a new key).
+ */
+ugly_status ugly_entry_keys(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
 
 /*
  * A sequence may be unbounded (a lazy Haskell list): its length then doesn't

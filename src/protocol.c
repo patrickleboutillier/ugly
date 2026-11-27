@@ -238,6 +238,88 @@ ugly_status ugly_splice(ugly_ctx *ctx, ugly_handle h, int64_t offset, int64_t re
 
 
 /* ---------------------------------------------------------------- */
+/* Entries (ABI 6)                                                  */
+/* ---------------------------------------------------------------- */
+
+ugly_status ugly_get_entry(ugly_ctx *ctx, ugly_handle h, ugly_val key, ugly_kind want, ugly_val *out){
+	call c ;
+	ugly_status st = begin(&c, ctx, h, &key, 1, out) ;
+	if (st == UGLY_OK){
+		if (out == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_get_entry: out is required") ;
+		}
+		else if ((st = NOT_IMPL(c.p->get_entry)) == UGLY_OK){
+			st = c.p->get_entry(ctx, c.rt, c.ref, c.bargs[0], want, out) ;
+		}
+	}
+	return end(&c, st, "get_entry", want, out) ;
+}
+
+
+ugly_status ugly_set_entry(ugly_ctx *ctx, ugly_handle h, ugly_val key, ugly_val v){
+	call c ;
+	ugly_val kv[2] = { key, v } ;
+	ugly_status st = begin(&c, ctx, h, kv, 2, NULL) ;
+	if ((st == UGLY_OK)&&((st = NOT_IMPL(c.p->set_entry)) == UGLY_OK)){
+		st = c.p->set_entry(ctx, c.rt, c.ref, c.bargs[0], c.bargs[1]) ;
+	}
+	return end(&c, st, "set_entry", UGLY_ANY, NULL) ;
+}
+
+
+ugly_status ugly_delete_entry(ugly_ctx *ctx, ugly_handle h, ugly_val key){
+	call c ;
+	ugly_status st = begin(&c, ctx, h, &key, 1, NULL) ;
+	if ((st == UGLY_OK)&&((st = NOT_IMPL(c.p->delete_entry)) == UGLY_OK)){
+		st = c.p->delete_entry(ctx, c.rt, c.ref, c.bargs[0]) ;
+	}
+	return end(&c, st, "delete_entry", UGLY_ANY, NULL) ;
+}
+
+
+ugly_status ugly_entry_count(ugly_ctx *ctx, ugly_handle h, int64_t *out){
+	call c ;
+	ugly_status st = begin(&c, ctx, h, NULL, 0, NULL) ;
+	if (st == UGLY_OK){
+		if (out == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_entry_count: out is required") ;
+		}
+		else if ((st = NOT_IMPL(c.p->entry_count)) == UGLY_OK){
+			st = c.p->entry_count(ctx, c.rt, c.ref, out) ;
+		}
+	}
+	return end(&c, st, "entry_count", UGLY_ANY, NULL) ;
+}
+
+
+ugly_status ugly_entry_keys(ugly_ctx *ctx, ugly_handle h, ugly_handle *out){
+	call c ;
+	ugly_val v = ugly_null() ;
+	if (out != NULL){
+		*out = UGLY_NO_HANDLE ;
+	}
+	ugly_status st = begin(&c, ctx, h, NULL, 0, NULL) ;
+	if (st == UGLY_OK){
+		if (out == NULL){
+			st = ctx_fail(ctx, UGLY_ERR_USAGE, "core", "", "ugly_entry_keys: out is required") ;
+		}
+		else if ((st = NOT_IMPL(c.p->entry_keys)) == UGLY_OK){
+			ugly_handle it = UGLY_NO_HANDLE ;
+			st = c.p->entry_keys(ctx, c.rt, c.ref, &it) ;
+			if (st == UGLY_OK){
+				v = ugly_hval(it) ;
+			}
+		}
+	}
+	st = end(&c, st, "entry_keys", UGLY_HANDLE, &v) ;
+	if (st == UGLY_OK){
+		*out = v.as.h ;
+	}
+	return st ;
+}
+
+
+/* ---------------------------------------------------------------- */
 /* Iteration and stringification (ABI 5)                            */
 /* ---------------------------------------------------------------- */
 

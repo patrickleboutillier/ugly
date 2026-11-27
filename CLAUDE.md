@@ -10,9 +10,9 @@ Treat the author as a domain expert on language interop. Discuss design tradeoff
 
 - `doc/contract.md` is the spec. Its "Decisions" and "Clarifications" sections record everything settled. Every rule in it should be a test in `tests/`.
 - `include/ugly.h` is the public API, and `include/ugly_plugin.h` the plugin contract (the plugin rules plus the core services).
-- `src/` is the core (libugly 2.7.0, plugin ABI 5). Notes: `src/CLAUDE.md`.
+- `src/` is the core (libugly 2.8.0, plugin ABI 6). Notes: `src/CLAUDE.md`.
 - `plugins/<lang>/` holds the plugins (mock, lua, python, js, perl5, java, dotnet, haskell), each with its binding in `binding/`. Notes: `plugins/CLAUDE.md` and `plugins/<lang>/CLAUDE.md`. Read a plugin's notes before changing it.
-- `tests/` is the conformance suite (10 groups × 8 plugins), pairwise, the binding tests and the benchmarks; `examples/` are programs run as tests. Notes: `tests/CLAUDE.md`.
+- `tests/` is the conformance suite (11 groups × 8 plugins), pairwise, the binding tests and the benchmarks; `examples/` are programs run as tests. Notes: `tests/CLAUDE.md`.
 - `doc/languages/<lang>.md` are the user guides, `doc/plugin-guide.md` is for plugin authors, `doc/benchmarks.md` has the measurements, and `doc/design-essay.md` is in the author's first-person voice. `README.md` is the only README.
 - `TODO.md` has the open work, the 2026-11-27 review's findings, and what's done. `doc/history.md` has the tags, the releases and how to make one, decisions revised, and the 2026 landscape.
 
