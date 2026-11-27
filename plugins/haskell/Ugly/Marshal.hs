@@ -16,11 +16,12 @@ module Ugly.Marshal
   ( -- * Strings
     withUtf8, peekUtf8, validText
     -- * Refs
-  , Ref (..), newRef, deref, liveRefs, liveForeign
+  , Ref (..), newRef, deref, export, liveRefs, liveForeign
     -- * Entry points
   , guarded, failWith, put, setText, readArg, exceptionValue, rethrowValue
     -- * Calling out
   , foreignCall, foreignInvoke, foreignGet, foreignIndex, foreignLength, foreignNames, foreignType
+  , foreignTraits, foreignIter, foreignNext, foreignList, foreignString
   , throwConv
     -- * The binding
   , attach, detach, moduleIn, evalIn
@@ -49,7 +50,7 @@ import Foreign.StablePtr
 import Foreign.Storable
 import qualified GHC.Foreign as GF
 import GHC.IO.Encoding (utf8)
-import System.IO.Unsafe (unsafePerformIO)
+import System.IO.Unsafe (unsafeInterleaveIO, unsafePerformIO)
 import System.Mem.StableName
 
 import Ugly.Native
@@ -168,7 +169,7 @@ exceptionBox e = do
         Nothing -> (case e of SomeException inner -> show (typeOf inner), Nothing)
   msg <- evaluate (force (displayException e)) `catch` \(_ :: SomeException) -> return ty
   let base = maybe (info ty) id own
-  return (Box e base { infoType = ty, infoShow = Just msg }, ty, msg)
+  return (Box e base { infoType = ty, infoShow = Just (return msg) }, ty, msg)
 
 -- | Raises a value again: an exception that came home (a box of a
 -- SomeException) as itself; a foreign value as an error whose payload is
@@ -228,7 +229,9 @@ put ctx rt want v out = case v of
     | want `elem` [kAny, kHandle] -> alloca $ \hp -> do
         st <- export ctx rt b hp
         if st == ok then peek hp >>= c_set_handle out >> return ok else return st
-    | want == kString, Just s <- infoShow inf, validText s -> setText ctx out (T.pack s)
+    | want == kString, Just text <- infoShow inf -> do
+        s <- text
+        if validText s then setText ctx out (T.pack s) else failWith ctx rt errType "TypeError" "its text isn't valid Unicode"
   VForeign f
     | want `elem` [kAny, kHandle] -> withHandle f $ \h -> alloca $ \hp -> do
         st <- c_ugly_dup ctx h hp
@@ -453,6 +456,53 @@ foreignType f = do
   v <- operation f $ \c h out -> alloca $ \(traits :: Ptr Word32) -> c_ugly_describe c h traits out
   case v of
     VString t -> return (T.unpack t)
+    _ -> return "?"
+
+-- | Its traits (describe).
+foreignTraits :: Foreign -> IO Word32
+foreignTraits f = do
+  ctx <- currentCtx
+  size <- fromIntegral <$> c_val_size
+  withHandle f $ \h -> alloca $ \tp -> allocaBytes size $ \out -> do
+    c_set_null out
+    st <- c_ugly_describe ctx h tp out
+    if st /= ok then failed ctx st else c_ugly_val_release ctx out >> peek tp
+
+-- | Its own iterator (ugly_iter): on an iterator, itself.
+foreignIter :: Foreign -> IO Foreign
+foreignIter f = do
+  ctx <- currentCtx
+  withHandle f $ \h -> alloca $ \hp -> do
+    st <- c_ugly_iter ctx h hp
+    if st /= ok then failed ctx st else peek hp >>= newForeign
+
+-- | One step of a foreign iterator (ugly_next, one value): Nothing at the end.
+foreignNext :: Foreign -> IO (Maybe Value)
+foreignNext f = do
+  ctx <- currentCtx
+  size <- fromIntegral <$> c_val_size
+  withHandle f $ \h -> allocaBytes size $ \out -> alloca $ \gp -> do
+    c_set_null out
+    poke gp 0
+    st <- c_ugly_next ctx h kAny out 1 gp
+    got <- peek gp
+    if st /= ok then failed ctx st
+      else if got == 0 then return Nothing else Just <$> readResult ctx out
+
+-- | A foreign iterable as a lazy list, like hGetContents: each cell, when
+-- forced, is one step of its own iteration, and an error is thrown from
+-- there.
+foreignList :: Foreign -> IO [Value]
+foreignList f = foreignIter f >>= steps
+  where steps it = unsafeInterleaveIO (foreignNext it >>= maybe (return []) (\v -> (v :) <$> steps it))
+
+-- | Its own language's string for it (ugly_to_string; bytes decoded leniently).
+foreignString :: Foreign -> IO String
+foreignString f = do
+  v <- operation f $ \c h out -> c_ugly_to_string c h out
+  case v of
+    VString t -> return (T.unpack t)
+    VBytes b -> return (T.unpack (TE.decodeUtf8With TEE.lenientDecode b))
     _ -> return "?"
 
 -- | A refused conversion, thrown (Control.Exception's TypeError).

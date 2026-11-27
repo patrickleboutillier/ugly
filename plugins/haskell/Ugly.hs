@@ -24,6 +24,8 @@ module Ugly
   , Value (..), Foreign, ToUgly (..), FromUgly, toValue, fromValue
     -- * Operations on a foreign value
   , call, call_, invoke, invoke_, get, index, size, members, typeOf
+    -- * Iteration and strings
+  , toList, iter, next, toString
     -- * Any callable value, Haskell's own or foreign
   , callValue, callValue_
     -- * Errors
@@ -32,6 +34,7 @@ module Ugly
   ) where
 
 import Control.Exception (bracket_, throwIO, ErrorCall (..))
+import System.IO.Unsafe (unsafeInterleaveIO)
 
 import Ugly.Marshal
 import Ugly.Value hiding (callValue)
@@ -121,6 +124,37 @@ members = foreignNames
 -- | Its type's name, in its own language.
 typeOf :: Foreign -> IO String
 typeOf = foreignType
+
+-- | Its own iteration (ugly_iter, contract §2) as a lazy list, like
+-- hGetContents: each cell, when forced, is one step, its element converted
+-- then (a refusal is a TypeError thrown from there). An infinite one is
+-- fine as long as it isn't forced to the end; an error of the iterator is
+-- thrown from the cell that ran into it.
+--
+-- > gen <- Ugly.eval "python" "(x * x for x in range(10))"
+-- > squares <- Ugly.toList gen
+-- > print (take 3 squares :: [Int])      -- runs the generator three steps
+toList :: FromUgly a => Foreign -> IO [a]
+toList f = foreignList f >>= mapM' fromValue
+  where
+    mapM' conv xs = unsafeInterleaveIO $ case xs of
+      [] -> return []
+      v : vs -> do
+        y <- unsafeInterleaveIO (conv v)
+        (y :) <$> mapM' conv vs
+
+-- | Its iterator, for stepping it by hand with 'next' (on an iterator, itself).
+iter :: Foreign -> IO Foreign
+iter = foreignIter
+
+-- | The iterator's next value, or Nothing at the end.
+next :: FromUgly r => Foreign -> IO (Maybe r)
+next it = foreignNext it >>= traverse fromValue
+
+-- | Its own language's string for it (ugly_to_string): Python's str(),
+-- Lua's tostring, Java's toString().
+toString :: Foreign -> IO String
+toString = foreignString
 
 -- | Raises a value again: an exception that came home (as a value, from
 -- 'exceptionValue' or a payload) as itself, or a foreign value as an error

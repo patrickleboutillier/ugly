@@ -78,6 +78,28 @@ main = do
         (Ugly.callValue_ call0 [Ugly.toValue ((\x -> if x == 0 then error "zero" else x) :: Int -> Int)])
       ok tap home "a Haskell error raised through Python comes home as itself (an ErrorCall)"
 
+      -- Iteration (contract §2): a Python generator as a lazy Haskell list, and stepped by hand.
+      gen <- Ugly.eval "python" "(x * x for x in __import__('itertools').count())"
+      squares <- Ugly.toList gen
+      ok tap (take 4 squares == [0, 1, 4, 9 :: Int]) "Ugly.toList: an infinite Python generator as a lazy [Int]"
+      it <- Ugly.iter gen
+      n1 <- Ugly.next it
+      ok tap (n1 == Just (16 :: Int)) "Ugly.iter and Ugly.next: the same generator, from where the list left it"
+      short <- Ugly.eval "python" "iter([1])"
+      ends <- (,) <$> Ugly.next short <*> Ugly.next short
+      ok tap (ends == (Just (1 :: Int), Nothing :: Maybe Int)) "  ... and Nothing at the end"
+      failing <- Ugly.eval "python" "(1 / x for x in [1, 0])"
+      xs' <- Ugly.toList failing
+      errored <- throws (\(e :: Ugly.ForeignError) -> Ugly.errorType e == "ZeroDivisionError")
+        (evaluate (sum (xs' :: [Double])))
+      ok tap errored "a generator's error is thrown from the cell that ran into it"
+      d <- Ugly.eval "python" "{'a': 1}"
+      txt <- Ugly.toString d
+      ok tap (txt == "{'a': 1}") "Ugly.toString: Python's str() of a dict"
+      total <- Ugly.eval "python" "lambda xs: sum(xs)"
+      s' <- Ugly.callValue total [Ugly.toValue [1 .. 4 :: Int]]
+      ok tap (s' == (10 :: Int)) "Python's sum() over a Haskell list: its iteration"
+
       own <- Ugly.eval "python" "__import__('ugly').module('haskell', 'TestBinding').double(21)"
       ok tap (own == (42 :: Int)) "Python uses this program's own export module (found in the process)"
       g <- Ugly.eval "python" "__import__('ugly').module('haskell', 'TestBinding').greet('python')"
@@ -89,6 +111,8 @@ main = do
       ok tap (u == ("ABC" :: String)) "string.upper \"abc\": a Lua module from Haskell, on this thread"
       rep <- Ugly.invoke str "rep" ["ab", 3]
       ok tap (rep == ("ababab" :: String)) "string.rep \"ab\" 3: string and number literals as Values"
+      ws <- Ugly.invoke str "gmatch" ["one two three", "%a+"] >>= Ugly.toList
+      ok tap (ws == ["one", "two", "three" :: String]) "Ugly.toList over string.gmatch: a Lua iterator function"
       wrong <- throws (\(_ :: TypeError) -> True) (Ugly.invoke str "upper" ["abc"] >>= \(i :: Int) -> return i)
       ok tap wrong "a result that isn't the type asked for: a TypeError"
 

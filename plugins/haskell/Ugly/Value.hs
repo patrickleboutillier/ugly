@@ -27,15 +27,17 @@
 -- are refused, never wrapped; Maybe is flattened unless Just x is itself
 -- null.
 module Ugly.Value
-  ( Value (..), Box (..), Info (..), Members (..), Elems (..), Arg (..), Conv
+  ( Value (..), Box (..), Info (..), Members (..), Elems (..), Iteration (..), Arg (..), Conv
   , Foreign, ForeignError (..), Want (..), Call (..), Refused (..), plainCall
   , ToUgly (..), FromUgly (..), Result (..), Collect (..)
   , Instance, instantiation, overloaded, parseHint
   , info, boxShow, boxOpaque, boxWith, boxRecord, constructor, moduleBox, fixedMembers, fixedElems
+  , iterator, iterSteps
   , typeName, validText, describeArg, home, fromValue, valueArg, callValue
   , UglyException, uglyToException, uglyFromException
   ) where
 
+import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception (Exception, SomeException, evaluate, fromException, toException)
 import qualified Data.ByteString as B
 import Data.Char (isAlphaNum, isSpace)
@@ -48,7 +50,9 @@ import Data.Word
 import Numeric.Natural (Natural)
 import System.IO.Unsafe (unsafeInterleaveIO, unsafePerformIO)
 
-import Ugly.Marshal (foreignCall, foreignIndex, foreignLength, throwConv, validText)
+import Ugly.Marshal (foreignCall, foreignIndex, foreignLength, foreignList, foreignTraits, throwConv, validText)
+import Ugly.Native (traitElements, traitIterable)
+import Data.Bits ((.&.))
 import Ugly.Types
 
 -- | How a Haskell type crosses out. Every type is 'Typeable', for its name.
@@ -123,7 +127,7 @@ describeArg a = case a of
 
 -- | A value of a type with 'Show': a box with a type name and a text.
 boxShow :: (Typeable a, Show a) => a -> Value
-boxShow x = VBox (Box x (info (typeName x)) { infoShow = Just (show x) })
+boxShow x = VBox (Box x (info (typeName x)) { infoShow = Just (return (show x)) })
 
 -- | A value with nothing to ask but its type.
 boxOpaque :: Typeable a => a -> Value
@@ -131,13 +135,13 @@ boxOpaque x = VBox (Box x (info (typeName x)))
 
 -- | A value with a text (if any) and methods: what uglyModule gives the types it exports.
 boxWith :: Typeable a => Maybe String -> (String -> Maybe Value) -> a -> Value
-boxWith txt methods x = VBox (Box x (info (typeName x)) { infoShow = txt, infoMethods = Just methods })
+boxWith txt methods x = VBox (Box x (info (typeName x)) { infoShow = return <$> txt, infoMethods = Just methods })
 
 -- | A record's box: a text, methods, and its fields as read-only members
 -- (what uglyModule gives a listed type with one record constructor).
 boxRecord :: Typeable a => Maybe String -> (String -> Maybe Value) -> [(String, a -> Value)] -> a -> Value
 boxRecord txt methods fields x = VBox (Box x (info (typeName x))
-  { infoShow = txt, infoMethods = Just methods
+  { infoShow = return <$> txt, infoMethods = Just methods
   , infoMembers = Just (fixedMembers (map fst fields) (\n -> ($ x) <$> lookup n fields)) })
 
 -- | A data constructor: a function that new calls too (INSTANTIABLE).
@@ -149,7 +153,7 @@ constructor v = v
 -- module is the same handle while one is live.
 moduleBox :: String -> [(String, Value)] -> Box
 moduleBox name entries = Box entries (info "module")
-  { infoShow = Just ("module " ++ name)
+  { infoShow = Just (return ("module " ++ name))
   , infoMembers = Just (fixedMembers (map fst entries) (`lookup` entries))
   }
 
@@ -337,9 +341,40 @@ instance ToUgly B.ByteString where
   toUgly = VBytes
   textOf = shown
 
--- | Lists are read-only elements. Reading element i walks i cells.
+-- | An iterator over a lazy list: each step forces one cell, so an infinite
+-- list is fine and nothing runs ahead. Its state is an MVar (a step that
+-- throws leaves it as it was), whose identity is the iterator's.
+iterator :: [Value] -> IO Box
+iterator xs = do
+  cells <- newMVar xs
+  let step = modifyMVar cells $ \cur -> case cur of
+        [] -> return ([], Nothing)
+        y : ys -> return (ys, Just y)
+  return (Box cells (info "iterator") { infoIter = Just (Iterator step) })
+
+-- | An iteration as a lazy list: each cell, when forced, is one step.
+iterSteps :: Iteration -> IO [Value]
+iterSteps (Iterable make) = do
+  Box _ i <- make
+  maybe (return []) iterSteps (infoIter i)
+iterSteps (Iterator step) = go
+  where go = unsafeInterleaveIO (step >>= maybe (return []) (\v -> (v :) <$> go))
+
+-- | Values converted as they're forced, so a lazy list stays lazy.
+convertLazily :: (Value -> IO a) -> [Value] -> IO [a]
+convertLazily conv = go
+  where
+    go xs = unsafeInterleaveIO $ case xs of
+      [] -> return []
+      v : vs -> do
+        y <- unsafeInterleaveIO (conv v)
+        (y :) <$> go vs
+
+-- | Lists are read-only elements, and iterable. Reading element i walks i
+-- cells; iterating walks each once.
 instance {-# OVERLAPPABLE #-} ToUgly a => ToUgly [a] where
-  toUgly xs = VBox (Box xs (info (typeName xs)) { infoShow = textOf xs, infoElems = Just elems })
+  toUgly xs = VBox (Box xs (info (typeName xs))
+    { infoShow = return <$> textOf xs, infoElems = Just elems, infoIter = Just (Iterable (iterator (map toUgly xs))) })
     where
       elems = fixedElems (length xs) at
       at i
@@ -355,7 +390,7 @@ instance ToUgly a => ToUgly (Maybe a) where
   wantCost _ w = if w == WantNull then Just 0 else wantCost (Proxy :: Proxy a) w
   toUgly Nothing = VNull
   toUgly m@(Just x) = case toUgly x of
-    VNull -> VBox (Box m (info (typeName m)) { infoShow = textOf m, infoElems = Just (fixedElems 1 one) })
+    VNull -> VBox (Box m (info (typeName m)) { infoShow = return <$> textOf m, infoElems = Just (fixedElems 1 one) })
     v -> v
     where one i = if i == 0 then Just VNull else Nothing
   textOf Nothing = Just "Nothing"
@@ -364,12 +399,12 @@ instance ToUgly a => ToUgly (Maybe a) where
 
 -- | Tuples are read-only elements.
 instance (ToUgly a, ToUgly b) => ToUgly (a, b) where
-  toUgly p@(a, b) = VBox (Box p (info (typeName p)) { infoShow = textOf p, infoElems = Just (fixedElems 2 at) })
+  toUgly p@(a, b) = VBox (Box p (info (typeName p)) { infoShow = return <$> textOf p, infoElems = Just (fixedElems 2 at) })
     where at i = lookup i [(0, toUgly a), (1, toUgly b)]
   textOf (a, b) = (\x y -> "(" ++ x ++ "," ++ y ++ ")") <$> textOf a <*> textOf b
 
 instance (ToUgly a, ToUgly b, ToUgly c) => ToUgly (a, b, c) where
-  toUgly t@(a, b, c) = VBox (Box t (info (typeName t)) { infoShow = textOf t, infoElems = Just (fixedElems 3 at) })
+  toUgly t@(a, b, c) = VBox (Box t (info (typeName t)) { infoShow = return <$> textOf t, infoElems = Just (fixedElems 3 at) })
     where at i = lookup i [(0, toUgly a), (1, toUgly b), (2, toUgly c)]
   textOf (a, b, c) = (\x y z -> "(" ++ x ++ "," ++ y ++ "," ++ z ++ ")") <$> textOf a <*> textOf b <*> textOf c
 
@@ -523,32 +558,49 @@ instance FromUgly a => FromUgly (Maybe a) where
     Right r -> Right r
     Left _ -> fmap (fmap (fmap Just)) (fromUgly arg)
 
--- | A list: a Haskell list coming home, or a foreign sequence, converted
--- element by element when the call runs (its length, then each element:
--- one that doesn't convert is a TypeError). At cost 3, below [Value]'s 4.
+-- | A list: a Haskell list coming home; another Haskell iterable, read
+-- lazily; or a foreign value. A foreign sequence is converted element by
+-- element when the call runs (its length, then each element: one that
+-- doesn't convert is a TypeError); a foreign iterable that isn't one (a
+-- generator, a Lua function) is a lazy list read as it's forced, its
+-- elements converted as they are. At cost 3, below [Value]'s 4.
 instance {-# OVERLAPPABLE #-} FromUgly a => FromUgly [a] where
   fromUgly (AForeign take') = Right (3, do
     f <- take'
-    n <- foreignLength f
-    mapM (\i -> foreignIndex f i >>= fromValue) [0 .. n - 1])
+    traits <- foreignTraits f
+    if traits .&. traitIterable /= 0 && traits .&. traitElements == 0
+      then foreignList f >>= convertLazily fromValue
+      else do
+        n <- foreignLength f
+        mapM (\i -> foreignIndex f i >>= fromValue) [0 .. n - 1])
+  fromUgly arg@(AHome (Box _ i)) = case (home arg, infoIter i) of
+    (Right r, _) -> Right r
+    (_, Just it) -> Right (3, iterSteps it >>= convertLazily fromValue)
+    _ -> home arg
   fromUgly arg = home arg
 
--- | [Value] (what an unconstrained [a] becomes) takes any sequence that
--- comes home, read lazily through its elements, and any foreign value,
--- read through its elements too: its length when the call takes it, each
--- element when it's forced.
+-- | [Value] (what an unconstrained [a] becomes) takes any iterable or
+-- sequence that comes home, read lazily (by its iteration, else through its
+-- elements), and any foreign value: a foreign iterable that isn't a
+-- sequence by its iteration, lazily; anything else through its elements,
+-- its length when the call takes it, each element when it's forced.
 instance {-# OVERLAPPING #-} FromUgly [Value] where
-  fromUgly arg@(AHome (Box _ i)) = case (home arg, infoElems i) of
-    (Right r, _) -> Right r
-    (_, Just es) -> Right (4, walk es 0)
+  fromUgly arg@(AHome (Box _ i)) = case (home arg, infoIter i, infoElems i) of
+    (Right r, _, _) -> Right r
+    (_, Just it, _) -> Right (4, iterSteps it)
+    (_, _, Just es) -> Right (4, walk es 0)
     _ -> Left (describeArg arg ++ " isn't a sequence")
     where walk es n = unsafeInterleaveIO $ do
             v <- elemsIndex es n
             maybe (return []) (\x -> (x :) <$> walk es (n + 1)) v
   fromUgly (AForeign take') = Right (4, do
     f <- take'
-    n <- foreignLength f
-    return [ unsafePerformIO (foreignIndex f i) | i <- [0 .. n - 1] ])
+    traits <- foreignTraits f
+    if traits .&. traitIterable /= 0 && traits .&. traitElements == 0
+      then foreignList f
+      else do
+        n <- foreignLength f
+        return [ unsafePerformIO (foreignIndex f i) | i <- [0 .. n - 1] ])
   fromUgly arg = home arg
 instance (Typeable a, Typeable b) => FromUgly (a, b)
 instance (Typeable a, Typeable b, Typeable c) => FromUgly (a, b, c)
