@@ -84,6 +84,13 @@ needs.
     wrong for one or the other.
 - This is essay point 1 (types flow from the static side), with the caller
   as the static side.
+- The home plugin may also use `want` to **choose what runs**, where its
+  language resolves on the result type. Haskell picks among a polymorphic
+  function's instantiations by the result each can give (as `read` is
+  resolved), and refuses with `UGLY_ERR_TYPE` before running anything when
+  none can give `want`. Here the callee is a static side too. `want` still
+  means "the kind I need back": choosing with it never returns another
+  kind.
 
 v1's `hint` (a string to choose between overloads) wasn't in v2.0: none of
 the four planned languages has overloading. It came back with Java, as the
@@ -138,6 +145,28 @@ Modules are just handles. `ugly_rt_import("calc")` returns a handle with
 members, and v1's `call_function("calc::add")` becomes "get member `add`,
 then call it". `ugly_rt_globals` gives the global namespace.
 
+**How a module comes to exist is the language's business.** The contract
+asks only that `import` turn a name into a handle. An interpreter finds the
+source and loads it. A compiled language has nothing to find at run time
+unless it was built for it: Haskell's modules are libraries compiled ahead
+of time with an export table (`uglyModule`), found by the name's longest
+prefix on a path. Such a language may leave out `UGLY_CAP_EVAL` and refuse
+`globals` (`UGLY_ERR_NOT_SUPPORTED`), and its users have a build step the
+contract doesn't describe. The plugin guide's "Compiled languages" has the
+shape.
+
+**A sequence may be unbounded.** A lazy sequence (a Haskell list) has
+`ELEMENTS`, and `get_index` reads it only as far as asked. Its `length`
+doesn't return when it's infinite, as in its own language, and nothing
+caps it. So code that walks a foreign sequence reads by index until
+`UGLY_ERR_NOT_FOUND`, and asks for the length only when its caller did. A
+binding whose language needs a size to iterate (a Perl tied array's
+`FETCHSIZE`, JS's `.length`, Lua's `#`) inherits the non-termination, as
+that language would with an infinite list. The core asks for the length on
+its own in one place, `splice`'s range check, which runs before a plugin
+can refuse the call with `UGLY_ERR_NOT_CAPABLE`. That check doesn't return
+on an infinite list either, which is open in TODO.md.
+
 ## 3. Ownership
 
 This follows the Component Model's resources, adapted to a shared address
@@ -181,6 +210,15 @@ space. It is essay point 2.
     live handle has the same key, `ugly_export` returns that handle.
   - So exporting the same object twice gives handles that `ugly_same`
     reports as identical.
+  - Identity is the home language's notion, and **best effort in a language
+    that has none**. Haskell values have no identity, so the plugin derives
+    a key from what the runtime can observe: GHC's `StableName`, taken after
+    forcing the value to WHNF and kept alive with the ref. One value
+    exported twice gives one handle, which is what the suite checks. Two
+    equal values built separately give two, and a runtime may hide that two
+    things are one: GHC 9.10's `throwIO` wraps an exception anew on every
+    throw, so the key is the exception inside the `SomeException`. Identity
+    0 ("none", always a new handle) remains allowed.
 - **Releasing from any thread.** Finalizers run whenever, and on whichever
   thread, the runtime's GC chooses. `ugly_release` is therefore
   thread-safe.
@@ -896,6 +934,14 @@ All of them are in the headers and covered by the conformance suite.
 - **The mock plugin** (`plugins/mock/`) is a small language written in C,
   with lenient, Perl-like conversions. It implements every rule of
   `ugly_plugin.h` and every conformance fixture.
+- **What Haskell made explicit** (2026-11-26). Haskell needed no change to
+  the core or the plugin ABI, but it broke four assumptions the contract had
+  made without stating them. Each is now stated where it belongs:
+  - `want` may choose what runs, not only convert what comes back (§1).
+  - A module may need building before it can be imported, and `eval` and
+    `globals` may be absent (§2).
+  - A sequence may be infinite, so its `length` may not return (§2).
+  - Identity is best effort where the language has none (§3).
 
 ## Order of work
 

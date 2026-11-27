@@ -237,7 +237,11 @@ ugly_status ugly_rt_get(ugly_ctx *ctx, const char *name, ugly_rt **out) ;
 /* The oldest live runtime of lang owned by the calling thread, or NULL. */
 ugly_rt *ugly_rt_find(ugly_ctx *ctx, ugly_lang *lang) ;
 
-/* Loads a library/module ("calc", "os.path", "./x.js") and returns it as a handle. */
+/*
+ * Loads a library/module ("calc", "os.path", "./x.js") and returns it as a
+ * handle. A compiled language finds only modules built for it (Haskell's
+ * module libraries), and may refuse globals with UGLY_ERR_NOT_SUPPORTED.
+ */
 ugly_status ugly_rt_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_handle *out) ;
 /* The runtime's global namespace (Lua _G, Python __main__, JS globalThis, Perl main::). */
 ugly_status ugly_rt_globals(ugly_ctx *ctx, ugly_rt *rt, ugly_handle *out) ;
@@ -285,6 +289,10 @@ ugly_status ugly_delete_member(ugly_ctx *ctx, ugly_handle h, const char *name) ;
 /* The member names, as a core list handle of strings. */
 ugly_status ugly_member_names(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
 
+/*
+ * A sequence may be unbounded (a lazy Haskell list): its length then doesn't
+ * return. To walk one, read by index until UGLY_ERR_NOT_FOUND.
+ */
 ugly_status ugly_length(ugly_ctx *ctx, ugly_handle h, int64_t *out) ;
 ugly_status ugly_get_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_kind want, ugly_val *out) ;
 ugly_status ugly_set_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_val v) ;
@@ -302,7 +310,9 @@ ugly_status ugly_splice(ugly_ctx *ctx, ugly_handle h, int64_t offset, int64_t re
  * 'want' is the kind the caller needs back. UGLY_ANY lets the home language
  * pick its natural kind; anything else is converted by the home plugin with
  * that language's own rules (a Perl "42" becomes INT; a Python "42" is
- * UGLY_ERR_TYPE).
+ * UGLY_ERR_TYPE). A plugin may also use it to choose what runs (Haskell: a
+ * polymorphic function's instantiation, by its result), never to return
+ * another kind.
  */
 ugly_status ugly_call(ugly_ctx *ctx, ugly_handle fn, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out) ;
 /* A method call, with the language's own receiver semantics (self, this, invocant, ':'). */
