@@ -230,7 +230,7 @@ contract §10 records each as it's done):
 | Python | what `iter()` accepts (`__iter__`, or the sequence protocol) | what `for` gives (a dict's keys) | drops it; a generator closes |
 | JS | objects with `Symbol.iterator`: arrays, `Map`, `Set`, generators | `value` until `done` (a `Map`: `[k, v]` arrays) | `return()`, if not done |
 | Lua | functions, as `for v in f do`; tables are not | the first value returned, until `nil` | nothing |
-| Perl 5 | arrays | elements | nothing |
+| Perl 5 | arrays, and iterators: objects with a `next` method | elements; what `next` returns, until the empty list | drops it (`DESTROY`, if it was the last reference) |
 | Java | `Iterable`, arrays, `Iterator`, `BaseStream` | elements (a `Map` isn't iterable, as in Java) | closes a stream |
 | C# | `IEnumerable`, `IEnumerator` | elements (a dictionary: `KeyValuePair`s) | `Dispose()` |
 | Haskell | lists, lazy (infinite ones too), and boxes that declare it | elements | nothing |
@@ -242,8 +242,13 @@ Lua's iterators are functions (`gmatch`, `io.lines`, `coroutine.wrap`).
 That includes functions that never return `nil`: a caller iterates only
 when its own code loops, so that is Lua's meaning, not a hazard the core
 adds. Perl has no iteration protocol: a hash has three readings (`keys`,
-`values`, `each`) and iterator objects are a convention, so only arrays
-are iterable.
+`values`, `each`), so hashes aren't iterable. Iterator objects are a
+convention, and UGLY takes the most common shape of it (decision 21): an
+object with a `next` method is an iterator, and `next` returns the next
+value or the empty list at the end (several values collapse into an array,
+as a call's do). It is also the shape of `Ugly::iter`'s iterators, so a
+Perl iterator and a foreign one are used the same way, and an array's
+iterator (an `Ugly::Iterator`) is one too.
 
 Each plugin's proxies take part in their language's loop when the foreign
 value is `ITERABLE`: Python's `__iter__`, JS's `[Symbol.iterator]`, Java's
@@ -264,7 +269,8 @@ aren't UTF-8 (Lua, Perl). A value its language can't stringify refuses with
 since C has no stringification. This is not `want = STRING`, which converts
 only what the language converts implicitly (Python refuses an object).
 Proxies use it for their language's stringification; each language's
-debug form (`repr`, Perl's `Ugly::Proxy=SCALAR(...)`) stays its own.
+debug form (`repr`) stays its own. Perl has only `""`, which falls back to
+`Ugly::Proxy(<handle>)` for a value that has no string.
 
 ## 3. Ownership
 
@@ -683,8 +689,8 @@ language, in `tests/<lang>/` (the mock's are built in). v1's
   `ConformanceError`; `produced()` is how many values the last of them
   made. `sum_iter(xs)` sums xs with the language's own loop, and
   `take_iter(xs, n)` returns the first n values as a list, its loop
-  stopping there. `naturals` and `produced` are optional (Perl has nothing
-  lazy): the tests SKIP without them.
+  stopping there. `naturals` and `produced` are optional: the tests SKIP
+  without them.
 - `stringify(x)` is the language's stringification of x, and a counter's
   is `counter(<count>)` (§2).
 
@@ -723,8 +729,8 @@ releases its handle reference.
 | string vs bytes | strings are bytes: STRING if valid UTF-8, else BYTES | `str` / `bytes` | string (STRING if valid UTF-8, no lone surrogates) / `ArrayBuffer` | UTF-8 flag on → STRING; off → STRING if valid UTF-8, else BYTES; `want = STRING` decodes unflagged strings as Latin-1 (see decision 6) | `String`/`Character` / `byte[]`; strings are converted from UTF-16 by the plugin, not with JNI's modified UTF-8 | `string`/`char` / `byte[]`; converted strictly: invalid UTF-8 going in, or a lone surrogate coming out, is `TYPE` | `String`, `Text`, `Char` / `ByteString`; a `String` holding a lone surrogate is a box |
 | members | table string keys; metatable `__index`. Every table has both MEMBERS and ELEMENTS; INSTANTIABLE if `t.new` is a function; type name from `__name` | `getattr`, or dict keys for a dict | properties, own or inherited; type name is the constructor's name, `module` for a namespace | a hash's keys, then an object's methods; a package's subs and nested packages. Modules and classes are packages (`Ugly::Package`); `new` instantiates | public fields and methods, then bean getters (`getX`, `isX`); a `Map`'s keys. Classes are imported by name; a class with a public constructor is INSTANTIABLE (`class`), else `module` | public fields, properties and methods; a dictionary's string keys (`IDictionary`, `ExpandoObject`). Types are imported by full name, from loaded assemblies or the module path; a static class is a `module`, a type with a public constructor a `class` (INSTANTIABLE) | a module's exports, listed in an export module (`uglyModule`); a record's fields; read only (a mutable value a module makes may set them). Types aren't members; a data constructor is INSTANTIABLE (`new` calls it) |
 | elements | sequence `1..#t`, shown 0-based | sequence protocol | arrays | arrays | arrays and `List`s | arrays and `IList`s | lists and tuples, read only and lazy |
-| iteration (§2) | every function, as `for v in f do`: a step is `f(nil, control)`, the first value until `nil`; tables aren't iterable. In Lua, `for v in ugly.iter(p) do` | what `iter()` takes; a step is `next()`. Proxies take part in `for`, `iter()` and `next()`; a foreign value its language doesn't iterate but with elements gets Python's sequence protocol | what `for...of` takes (`Symbol.iterator`); a step is `next()` until `done`; release calls `return()` if not done. Proxies take part in `for...of` and spread; a foreign value its language doesn't iterate but with elements iterates as an array-like | not yet (refused) | what for-each takes (`Iterable`, arrays), an `Iterator` (itself) and streams; a step is `hasNext()`/`next()`, batched once per 256 across JNI; release of a stream's iterator closes the stream. `ugly.Foreign` is an `Iterable<Object>`; a foreign value its language doesn't iterate but with elements is walked by index | what `foreach` takes (`IEnumerable`, `IEnumerator`); a step is `MoveNext()`; release of an enumerator `ugly_iter` gave calls `Dispose()`. `Ugly.Foreign` is an `IEnumerable<object?>` (`foreach`, LINQ), and becomes an `IEnumerable<T>` parameter; a foreign value its language doesn't iterate but with elements is walked by index | lists, lazily: a step forces one cell; a box declares it (`infoIter`). A foreign iterable that isn't a sequence is a lazy list where a list is wanted; `Ugly.toList`, `Ugly.iter`, `Ugly.next` |
-| stringification (§2) | `tostring`: STRING if valid UTF-8, else BYTES; a proxy's `tostring` is its language's | `str()`; a proxy's `str()` is its language's, its `repr()` stays the proxy's | `String()`; a proxy's `toString()` (so `String(p)`, templates) is its language's | not yet | `toString()`; `ugly.Foreign.toString()` is its language's | `ToString()`; `Ugly.Foreign.ToString()` is its language's | `show` (`NOT_SUPPORTED` without `Show`); `Ugly.toString` |
+| iteration (§2) | every function, as `for v in f do`: a step is `f(nil, control)`, the first value until `nil`; tables aren't iterable. In Lua, `for v in ugly.iter(p) do` | what `iter()` takes; a step is `next()`. Proxies take part in `for`, `iter()` and `next()`; a foreign value its language doesn't iterate but with elements gets Python's sequence protocol | what `for...of` takes (`Symbol.iterator`); a step is `next()` until `done`; release calls `return()` if not done. Proxies take part in `for...of` and spread; a foreign value its language doesn't iterate but with elements iterates as an array-like | arrays (an `Ugly::Iterator` walking the indices) and objects with a `next` method, which are their own iterators; a step is `next` in list context, the empty list ending it. In Perl, `Ugly::iter($p)` gives such an object over a foreign iterable (or a foreign value with elements, walked by index), a Perl array, or an iterator itself: `while (my ($x) = $it->next)` | what for-each takes (`Iterable`, arrays), an `Iterator` (itself) and streams; a step is `hasNext()`/`next()`, batched once per 256 across JNI; release of a stream's iterator closes the stream. `ugly.Foreign` is an `Iterable<Object>`; a foreign value its language doesn't iterate but with elements is walked by index | what `foreach` takes (`IEnumerable`, `IEnumerator`); a step is `MoveNext()`; release of an enumerator `ugly_iter` gave calls `Dispose()`. `Ugly.Foreign` is an `IEnumerable<object?>` (`foreach`, LINQ), and becomes an `IEnumerable<T>` parameter; a foreign value its language doesn't iterate but with elements is walked by index | lists, lazily: a step forces one cell; a box declares it (`infoIter`). A foreign iterable that isn't a sequence is a lazy list where a list is wanted; `Ugly.toList`, `Ugly.iter`, `Ugly.next` |
+| stringification (§2) | `tostring`: STRING if valid UTF-8, else BYTES; a proxy's `tostring` is its language's | `str()`; a proxy's `str()` is its language's, its `repr()` stays the proxy's | `String()`; a proxy's `toString()` (so `String(p)`, templates) is its language's | `"$x"`, overloads included (STRING if valid UTF-8, else BYTES); a package is its name. A proxy's `""` is its language's, or `Ugly::Proxy(<handle>)` if it has none | `toString()`; `ugly.Foreign.toString()` is its language's | `ToString()`; `Ugly.Foreign.ToString()` is its language's | `show` (`NOT_SUPPORTED` without `Show`); `Ugly.toString` |
 | `invoke` receiver | `obj:m()` for a method found through the metatable; `obj.f()` for a plain field (a module's function) | bound method | `this` | invocant for an object; none for a package's function | the object for an instance method; none for a class's static method. Overloads are chosen by scoring how well the arguments convert | the object for an instance method; none for a type's static method. Overloads are chosen by score, as in Java; a member holding a delegate is called | none on a module; on a value, a function of the module that exported its type, with the receiver **last** (`x.m(a)` is `m a x`). Polymorphic functions are expanded per instance at compile time and chosen by cost; a hint is type arguments |
 | proxy finalizer | userdata `__gc` (a foreign function is a C closure over that userdata, so Lua's C library takes it) | `tp_dealloc` of `ugly.Proxy` | class finalizer of the proxy classes (exotic properties; `call` for functions and constructors) | `DESTROY` | a `Cleaner` on `ugly.Foreign`; a foreign value passed where an interface is expected becomes a dynamic proxy (the single abstract method calls it) | the finalizer of `Ugly.Foreign`; a foreign value passed for a delegate type becomes a delegate (compiled once per delegate type), and for an interface a `DispatchProxy` | a `Foreign`'s finalizer (`Foreign.Concurrent`, on the RTS's finalizer thread); a foreign callable passed for a function type becomes a Haskell function, pure unless its result is in `IO` |
 | foreign method call | `obj:m(x)` and `obj.m(x)` both invoke `m` when the member is callable | `obj.m(x)` invokes `m` when the member is callable | | | `f.invoke("m", x)` on `ugly.Foreign`, or through the interface it was passed as | `f.Invoke("m", x)`, or `((dynamic)f).m(x, name: y)`: `Ugly.Foreign` is a `DynamicObject`, and named arguments are keyword arguments | `Ugly.invoke f "m" args`, or through the function type it was passed as |
@@ -865,8 +871,14 @@ recommendations were taken):
     the plugin's `next`, so the plugin ABI changes once.
 20. **Every Lua function is iterable**, with the generic `for`'s meaning.
     Tables are not.
-21. **Perl iterates arrays only.** Hashes, code refs and objects are
-    refused.
+21. ~~**Perl iterates arrays only.** Hashes, code refs and objects are
+    refused.~~ **Revised when Perl's iteration was written (2026-11-27, the
+    author's choice):** arrays, and objects with a `next` method, which
+    are iterators (`next` returns the empty list at the end). Arrays alone
+    left Perl nothing lazy to offer, so the checks of laziness and of an
+    infinite sequence would have been SKIPs, and hand-written Perl
+    iterators couldn't be used from other languages. Hashes and code refs
+    are still refused.
 22. **One value per step.** Pairs are the language's own values; Lua's
     extra return values are dropped, as `for v in f` drops them. A
     key-value form can come with the hash protocol.

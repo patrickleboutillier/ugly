@@ -25,6 +25,10 @@
  * identity, DESTROY releases. Modules and classes are Ugly::Package objects
  * (a scalar ref holding the package name): their members are subs and
  * nested packages, and new() instantiates.
+ *
+ * Iteration (contract §2, decision 21): arrays, and iterators, which are
+ * objects with a next method returning the empty list at the end.
+ * Ugly::iter($x) gives one over anything iterable, foreign values too.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -180,6 +184,20 @@ static SV *new_package(pTHX_ const char *name){
 	SV *rv = newRV_noinc(newSVpv(name, 0)) ;
 	sv_bless(rv, gv_stashpv("Ugly::Package", GV_ADD)) ;
 	return rv ;
+}
+
+
+/*
+ * An iterator (contract §2): an object with a next method, which returns the
+ * next value, or the empty list at the end (and again after). Perl has no
+ * iteration protocol; this is the shape of Ugly::iter's iterators, and of
+ * most hand-written ones.
+ */
+static int is_iterator(pTHX_ SV *sv){
+	if ((! SvROK(sv))||(! SvOBJECT(SvRV(sv)))||IS_PACKAGE(sv)||IS_PROXY(sv)){
+		return 0 ;
+	}
+	return gv_fetchmethod_autoload(SvSTASH(SvRV(sv)), "next", FALSE) != NULL ;
 }
 
 
@@ -1008,6 +1026,70 @@ XS(xs_proxy_held){
 }
 
 
+/*
+ * Ugly::Proxy::_iter($proxy): an iterator over a foreign value, as a proxy;
+ * undef if its language doesn't iterate it (Ugly::iter then walks its
+ * elements, if it has any).
+ */
+XS(xs_proxy_iter){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 1)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_iter(ctx, PROXY_HANDLE(ST(0)), &it) ;
+	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
+		XSRETURN_UNDEF ;
+	}
+	ugly_val v = ugly_hval(it) ;
+	ST(0) = xs_result(aTHX_ ctx, r, st, &v) ;
+	XSRETURN(1) ;
+}
+
+
+/* Ugly::Proxy::_next($iterator): its next value, or the empty list at the end. One at a time: never ahead. */
+XS(xs_proxy_next){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 1)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_val v = ugly_null() ;
+	size_t got = 0 ;
+	ugly_status st = ugly_next(ctx, PROXY_HANDLE(ST(0)), UGLY_ANY, &v, 1, &got) ;
+	if ((st == UGLY_OK)&&(got == 0)){
+		XSRETURN_EMPTY ;
+	}
+	ST(0) = xs_result(aTHX_ ctx, r, st, &v) ;
+	XSRETURN(1) ;
+}
+
+
+/*
+ * Ugly::Proxy::_str($proxy): its language's stringification (ugly_to_string);
+ * undef if it has none, or if no ctx is left (global destruction), so that
+ * "" falls back to Ugly::Proxy(<handle>). An exception dies.
+ */
+XS(xs_proxy_str){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = ugly_current_ctx() ;
+	if ((items < 1)||(! IS_PROXY(ST(0)))||(ctx == NULL)||(r == NULL)){
+		XSRETURN_UNDEF ;
+	}
+	ugly_val v = ugly_null() ;
+	ugly_status st = ugly_to_string(ctx, PROXY_HANDLE(ST(0)), &v) ;
+	if ((st == UGLY_ERR_NOT_SUPPORTED)||(st == UGLY_ERR_NOT_IMPLEMENTED)||(st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_STALE_HANDLE)){
+		XSRETURN_UNDEF ;
+	}
+	ST(0) = xs_result(aTHX_ ctx, r, st, &v) ;
+	XSRETURN(1) ;
+}
+
+
 /* Ugly::Error::_free($error): from DESTROY, for an error that never escaped. */
 XS(xs_error_free){
 	dXSARGS ;
@@ -1104,6 +1186,9 @@ static void register_xs(pTHX){
 	newXS("Ugly::Proxy::_same", xs_proxy_same, file) ;
 	newXS("Ugly::Proxy::_release", xs_proxy_release, file) ;
 	newXS("Ugly::Proxy::_held", xs_proxy_held, file) ;
+	newXS("Ugly::Proxy::_iter", xs_proxy_iter, file) ;
+	newXS("Ugly::Proxy::_next", xs_proxy_next, file) ;
+	newXS("Ugly::Proxy::_str", xs_proxy_str, file) ;
 	newXS("Ugly::Error::_free", xs_error_free, file) ;
 	newXS("Ugly::module", xs_module, file) ;
 	newXS("Ugly::eval", xs_eval, file) ;
@@ -1273,6 +1358,9 @@ static ugly_status pl_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *
 			t |= UGLY_TRAIT_MEMBERS ;     /* methods */
 			snprintf(buf, sizeof(buf), "%s", HvNAME(SvSTASH(target))) ;
 			name = buf ;
+		}
+		if ((SvTYPE(target) == SVt_PVAV)||is_iterator(aTHX_ sv)){
+			t |= UGLY_TRAIT_ITERABLE ;
 		}
 	}
 	*traits = t ;
@@ -1645,6 +1733,131 @@ static ugly_status pl_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly
 }
 
 
+/*
+ * Iteration (contract §2): an iterator is itself; an array gets an
+ * Ugly::Iterator over it (helper.pm), an object whose next walks its
+ * indices, so it sees the array as it is when each value is asked for.
+ */
+static ugly_status pl_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	plrt *r = RT(rt) ;
+	ENTER_PERL(r) ;
+	SV *sv = ref ;
+	ugly_status st ;
+	if (is_iterator(aTHX_ sv)){
+		st = export_sv(aTHX_ ctx, r, sv, out) ;
+	}
+	else if (array_of(aTHX_ sv) != NULL){
+		HV *hv = newHV() ;
+		hv_stores(hv, "of", newSVsv(sv)) ;
+		hv_stores(hv, "at", newSViv(0)) ;
+		SV *it = sv_2mortal(newRV_noinc((SV *)hv)) ;
+		sv_bless(it, gv_stashpv("Ugly::Iterator", GV_ADD)) ;
+		st = export_sv(aTHX_ ctx, r, it, out) ;
+	}
+	else {
+		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not iterable (an array, or an object with a next method)") ;
+	}
+	LEAVE_PERL() ;
+	return st ;
+}
+
+
+/* $it->next, in list context, up to max times: the empty list is the end; several values collapse into an array. */
+static ugly_status pl_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max, size_t *got){
+	plrt *r = RT(rt) ;
+	ENTER_PERL(r) ;
+	SV *sv = ref ;
+	ugly_status st = UGLY_OK ;
+	size_t n = 0 ;
+	if (! is_iterator(aTHX_ sv)){
+		st = fail(ctx, r, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not an iterator (an object with a next method)") ;
+	}
+	while ((st == UGLY_OK)&&(n < max)){
+		ENTER ;
+		SAVETMPS ;
+		dSP ;
+		PUSHMARK(SP) ;
+		XPUSHs(sv) ;
+		PUTBACK ;
+		int count = call_method("next", G_LIST | G_EVAL) ;
+		SPAGAIN ;
+		int end = 0 ;
+		if (SvTRUE(ERRSV)){
+			SP -= count ;
+			PUTBACK ;
+			st = perl_failure(aTHX_ ctx, r) ;
+		}
+		else if (count == 0){
+			end = 1 ;
+		}
+		else {
+			SV *result ;
+			if (count == 1){
+				result = POPs ;
+			}
+			else {
+				AV *av = newAV() ;
+				int k ;
+				for (k = count - 1 ; k >= 0 ; k--){
+					av_store(av, k, newSVsv(POPs)) ;
+				}
+				result = sv_2mortal(newRV_noinc((SV *)av)) ;
+			}
+			PUTBACK ;
+			st = to_val(aTHX_ ctx, r, result, want, &out[n]) ;
+			if (st == UGLY_OK){
+				n++ ;
+			}
+		}
+		FREETMPS ;
+		LEAVE ;
+		if (end){
+			break ;
+		}
+	}
+	*got = n ;
+	LEAVE_PERL() ;
+	return st ;
+}
+
+
+/* "$x", overloading included; a package is its name. */
+static ugly_status pl_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	plrt *r = RT(rt) ;
+	ENTER_PERL(r) ;
+	SV *sv = ref ;
+	ugly_status st ;
+	ENTER ;
+	SAVETMPS ;
+	if (IS_PACKAGE(sv)){
+		st = to_val(aTHX_ ctx, r, sv_2mortal(newSVpv(PACKAGE_NAME(sv), 0)), UGLY_ANY, out) ;
+	}
+	else {
+		/* Through Perl, under eval: an overloaded "" may die. */
+		dSP ;
+		PUSHMARK(SP) ;
+		XPUSHs(sv) ;
+		PUTBACK ;
+		int count = call_pv("Ugly::_str", G_SCALAR | G_EVAL) ;
+		SPAGAIN ;
+		if (SvTRUE(ERRSV)){
+			SP -= count ;
+			PUTBACK ;
+			st = perl_failure(aTHX_ ctx, r) ;
+		}
+		else {
+			SV *s = POPs ;
+			PUTBACK ;
+			st = to_val(aTHX_ ctx, r, s, UGLY_ANY, out) ;
+		}
+	}
+	FREETMPS ;
+	LEAVE ;
+	LEAVE_PERL() ;
+	return st ;
+}
+
+
 static void pl_release(ugly_rt *rt, void *ref){
 	plrt *r = RT(rt) ;
 	ENTER_PERL(r) ;
@@ -1822,6 +2035,9 @@ static const ugly_plugin plugin = {
 	.invoke = pl_invoke,
 	.new_instance = pl_new_instance,
 	.release = pl_release,
+	.iter = pl_iter,
+	.next = pl_next,
+	.to_string = pl_to_string,
 } ;
 
 

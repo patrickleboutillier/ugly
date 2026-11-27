@@ -49,6 +49,44 @@ sub finalized { return $finalized }
 sub kw { my ($a, %o) = @_ ; return join(' ', $a, $o{b} // 0, $o{c} // 0) }
 sub context { return wantarray ? 'list' : defined(wantarray) ? 'scalar' : 'void' }
 
+# Iteration (contract §2): iterators are objects with a next method, which
+# returns the empty list at the end. These are generators over closures.
+our $produced = 0 ;
+sub count_to {
+	my ($n) = @_ ;
+	my $i = 0 ;
+	$produced = 0 ;
+	return generator->new(sub { return if $i >= $n ; $produced++ ; return $i++ }) ;
+}
+sub naturals { my $i = 0 ; return generator->new(sub { return $i++ }, sub { $finalized++ }) }
+sub fail_after {
+	my ($n) = @_ ;
+	my $i = 0 ;
+	return generator->new(sub { die ConformanceError->new("fail_after($n)") if $i >= $n ; return $i++ }) ;
+}
+sub produced { return $produced }
+
+# Perl's loop over anything iterable: Ugly::iter, then next until the empty list.
+sub sum_iter {
+	my $it = Ugly::iter($_[0]) ;
+	my $total = 0 ;
+	while (my ($x) = $it->next){
+		$total += $x ;
+	}
+	return $total ;
+}
+sub take_iter {
+	my ($xs, $n) = @_ ;
+	my @taken ;
+	my $it = Ugly::iter($xs) ;
+	while (@taken < $n){
+		my ($x) = $it->next or last ;
+		push @taken, $x ;
+	}
+	return \@taken ;
+}
+sub stringify { return "$_[0]" }
+
 
 package conformance::Point ;
 
@@ -62,7 +100,17 @@ sub new { my ($class, %o) = @_ ; return bless { value => $o{value} // 0 }, $clas
 sub add { my ($self, %o) = @_ ; return $self->{value} + ($o{n} // 1) }
 
 
+package generator ;
+
+# A step closure, and an optional one run when the generator is freed.
+sub new { my ($class, $step, $done) = @_ ; return bless { step => $step, done => $done }, $class }
+sub next { return $_[0]{step}->() }
+sub DESTROY { $_[0]{done}->() if $_[0]{done} }
+
+
 package counter ;
+
+use overload '""' => sub { "counter($_[0]{count})" }, fallback => 1 ;
 
 sub new { return bless { count => 0, items => list->new() }, shift }
 sub inc { my $self = shift ; $self->{count}++ ; push @{ $self->{items} }, $self->{count} ; return $self->{count} }

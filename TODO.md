@@ -20,21 +20,12 @@ already written in Python. HAProxy works, in both of its Lua modes
 
 All additive: none of it breaks existing plugins (contract, "Scope").
 
-- [ ] **Iterators and generators** (contract §2, decisions 18 to 25): the
-  core (`ugly_iter`, `ugly_next`; libugly 2.7, plugin ABI 5), core lists,
-  the mock, the `iterators` group, Python, Lua, Haskell, JS, C# and Java
-  (with their bindings' syntax, and the pairwise checks) are done. Next,
-  Perl, the last, with its binding's `Ugly::iter`, guide and §10 row (and
-  Perl's `each`).
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
   Python dicts keyed by tuples, JS `Map`.
 - [ ] **Resizing and deleting in the other bindings.** `ugly_splice` and
   `ugly_delete_member` exist, and Perl's ties use them. Python proxies
   could too (`del p[k]`, `p.append(x)`, slice assignment), and so could JS
   (`delete`, `push`). In Lua, a `__newindex` past the end already appends.
-- [ ] **"To string"** (`ugly_to_string`, contract §2): in the core, the
-  mock, Python, Lua, Haskell, JS, C# and Java; Perl implements it, and its
-  proxies use it, with iteration.
 - [ ] **Async and coroutines across runtimes.** Hard; probably needs each
   plugin to expose its scheduler.
 - [ ] **Python subinterpreters** (a GIL per interpreter, 3.12+), which would
@@ -46,9 +37,8 @@ All additive: none of it breaks existing plugins (contract, "Scope").
 ## Languages
 
 - [ ] **Perl's remaining sugar**: `0+`, `<=>` and `cmp` overloads (today
-  `fallback => 1` turns `$p + 1` into arithmetic on the debug string),
-  `each` over foreign iterators (needs the iterator protocol), and
-  instances blessed into the packages `use Ugly` makes (`ref($obj)` is
+  `fallback => 1` turns `$p + 1` into arithmetic on the foreign value's
+  string), and instances blessed into the packages `use Ugly` makes (`ref($obj)` is
   `Ugly::Proxy`). Also `ugly_configure("perl5", "modules", ...)`, to load
   modules first.
 - [ ] **Perl booleans** use a heuristic before perl 5.36 (no `SvIsBOOL`).
@@ -173,6 +163,12 @@ contract and in the pull requests.
   `UGLY_TRAIT_FIXED_SIZE`, so splicing an infinite list is refused rather
   than hanging), foreign functions as
   real Lua functions, classes that construct when called.
+- **Iteration and stringification** (contract §2, decisions 18 to 25;
+  libugly 2.7, plugin ABI 5; 2026-11-27): `ugly_iter`, `ugly_next` (batches
+  that never run ahead) and `ugly_to_string`, in the core, core lists, the
+  mock and all eight languages, each binding hooking proxies into its own
+  loop (Perl: `Ugly::iter`, objects with a `next` method), with the
+  `iterators` group and pairwise checks for every pair.
 - **Engineering:** CI (two Ubuntu releases, valgrind, helgrind, a build
   without each language, Lua 5.3), source releases from a tag. Benchmarks
   (`tests/bench.c`, doc/benchmarks.md), which found the core's lock

@@ -20,12 +20,17 @@ use overload
 	'==' => sub { Ugly::Proxy::_same($_[0], $_[1]) },
 	'eq' => sub { Ugly::Proxy::_same($_[0], $_[1]) },
 	'bool' => sub { 1 },
-	'""' => sub { 'Ugly::Proxy(' . ${$_[0]} . ')' },
+	'""' => sub { my $s = Ugly::Proxy::_str($_[0]) ; defined($s) ? $s : 'Ugly::Proxy(' . ${$_[0]} . ')' },
 	fallback => 1 ;
 
 our $AUTOLOAD ;
 sub AUTOLOAD { my $s = shift ; (my $m = $AUTOLOAD) =~ s/.*:// ; Ugly::Proxy::_invoke($s, $m, @_) }
-sub can { my ($s, $m) = @_ ; ref($s) ? sub { Ugly::Proxy::_invoke(shift, $m, @_) } : UNIVERSAL::can($s, $m) }
+# A sub for a member that exists (Carp asks every argument for CARP_TRACE).
+sub can {
+	my ($s, $m) = @_ ;
+	return UNIVERSAL::can($s, $m) unless ref($s) ;
+	Ugly::Proxy::_has($s, $m) ? sub { Ugly::Proxy::_invoke(shift, $m, @_) } : undef
+}
 sub DESTROY { delete $code{${$_[0]}} ; Ugly::Proxy::_release($_[0]) }
 
 # %$proxy: the members (fields, methods, dict/hash/table entries).
@@ -97,6 +102,21 @@ sub SPLICE {
 }
 
 # ------------------------------------------------------------------
+# Ugly::Iterator: what Ugly::iter gives, and what another language gets
+# for a Perl array. next returns the next value, or the empty list at the
+# end (and again after): while (my ($x) = $it->next){ ... }. It holds a
+# foreign iterator ({ of => $proxy }), or walks the indices of an array, a
+# Perl one or a foreign one through its tie ({ of => $array, at => $i }).
+# ------------------------------------------------------------------
+package Ugly::Iterator ;
+sub next {
+	my $s = shift ;
+	return Ugly::Proxy::_next($s->{of}) unless defined $s->{at} ;
+	return if $s->{at} > $#{ $s->{of} } ;
+	$s->{of}[ $s->{at}++ ]
+}
+
+# ------------------------------------------------------------------
 # Ugly::Error: an error from another language.
 # ------------------------------------------------------------------
 package Ugly::Error ;
@@ -115,6 +135,10 @@ sub name { ${$_[0]} }
 # ------------------------------------------------------------------
 package Ugly ;
 use Carp () ;
+
+sub ELEMENTS () { 2 }        # UGLY_TRAIT_ELEMENTS
+sub CALLABLE () { 4 }        # UGLY_TRAIT_CALLABLE
+sub INSTANTIABLE () { 8 }    # UGLY_TRAIT_INSTANTIABLE
 
 # Ugly::configure(java => { classpath => [ ... ], options => '-Xmx512m' }, python => { path => './py' }) ;
 # Options for languages that haven't started yet (in a BEGIN block, before
@@ -149,11 +173,30 @@ sub opts {
 	bless { %o }, 'Ugly::Opts'
 }
 
+# Ugly::iter($x): an iterator over $x (contract §2), an object whose next
+# returns the next value, or the empty list at the end. $x may be a foreign
+# iterable (a Python generator, a JS array...), a Perl array, or already an
+# iterator (an object with a next method), which is returned as is.
+sub iter {
+	my ($x) = @_ ;
+	if (is_proxy($x)){
+		my $it = Ugly::Proxy::_iter($x) ;
+		return bless { of => $it }, 'Ugly::Iterator' if defined $it ;
+		return bless { of => $x, at => 0 }, 'Ugly::Iterator' if Ugly::Proxy::_traits($x) & ELEMENTS ;
+	}
+	elsif (ref($x) && ref($x) ne 'Ugly::Package'){
+		return $x if UNIVERSAL::can($x, 'next') ;
+		return bless { of => $x, at => 0 }, 'Ugly::Iterator' if UNIVERSAL::isa($x, 'ARRAY') ;
+	}
+	Carp::croak('Ugly::iter: value is not iterable') ;
+}
+
+# The plugin's ugly_to_string, under its eval.
+sub _str { "$_[0]" }
+
 sub is_error { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Error') }
 sub is_proxy { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Proxy') }
 
-sub CALLABLE () { 4 }        # UGLY_TRAIT_CALLABLE
-sub INSTANTIABLE () { 8 }    # UGLY_TRAIT_INSTANTIABLE
 
 # use Ugly python => 'json' ;                         # json::dumps(...), json->dumps(...)
 # use Ugly python => [ 'math', 'os.path' ] ;          # math::sqrt, os::path::join

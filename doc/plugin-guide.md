@@ -91,6 +91,18 @@ lines of C, with no interpreter in the way: read it first.
     before an exception to survive it: Java's `Bridge.next` fills an array
     and bumps a one-element counter as it goes, and the C side reads it
     after clearing the exception, converts those values, then rethrows.
+  - A language without an iteration protocol (Perl) takes its most common
+    convention, and the binding's own iterators use the same one: in Perl
+    an object with a `next` method that returns the empty list at the end
+    is an iterator, `Ugly::iter` returns such objects, and an array's
+    iterator is one too (`Ugly::Iterator`). Then a Perl loop is the same
+    over every language's values, and other languages loop over Perl's
+    hand-written iterators. The end must be a value no element can be:
+    the empty list, not `undef`.
+  - A proxy's `can` (or `hasattr`, or `respondsTo`) must answer no for a
+    member that doesn't exist. Perl's `Carp` asks every argument of a
+    `croak` for `CARP_TRACE`, and a `can` that says yes to every name turns
+    an error message into a call into the foreign language.
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the

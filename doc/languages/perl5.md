@@ -32,6 +32,7 @@ use Ugly java => { 'java.util.HashMap' => 'HashMap' } ;   # or name the package 
 | `Ugly::configure($lang => { key => value or [ ... ] }, ...)` | options for a language that hasn't started: in a `BEGIN` block, before `use Ugly LANG => ...` starts it |
 | `Ugly::kw(name => value, ...)` | keyword arguments, passed last |
 | `Ugly::opts(hint => ..., context => ...)` | other call options, passed last (beside a `kw`, in either order) |
+| `Ugly::iter($x)` | an iterator over a foreign iterable, a Perl array, or an iterator (itself): `next` returns the next value, or the empty list at the end |
 | `Ugly::is_proxy($v)`, `Ugly::is_error($e)` | whether a value is foreign, or an error from another language |
 
 The binding attaches to the running perl at `use`, and tears down in an
@@ -47,6 +48,9 @@ compare identity).
   0-based, as a tied array (resizing goes through the protocol's `splice`).
 - `$p->m(@args)` invokes `m` with the foreign language's receiver rules;
   `$p->(@args)` calls it.
+- `"$p"` is the foreign language's string for it (Python's `str()`, Java's
+  `toString()`...), or `Ugly::Proxy(<handle>)` if it has none.
+- `Ugly::iter($p)` iterates it (see [Iteration](#iteration)).
 - A class bound by `use Ugly` is a package with `new`. A class proxy you
   hold (from `Ugly::module`, or a member) constructs when called, if it can
   only be instantiated (a Java or Perl class): `$cls->(@args)`. `$cls->new`
@@ -69,6 +73,52 @@ compare identity).
   are subs and nested packages, and `new` instantiates.
 - `invoke` passes the invocant for an object, and none for a package's
   function.
+- Arrays are iterable, and so are objects with a `next` method, which are
+  iterators (see [Iteration](#iteration)).
+- Stringification is `"$x"`, overloads included; a package's is its name.
+
+## Iteration
+
+Perl has no iteration protocol, so UGLY takes its most common convention:
+an **iterator is an object with a `next` method**, which returns the next
+value, or the empty list at the end (and again after). Returning the empty
+list rather than `undef` lets `undef` be a value. `Ugly::iter` gives such
+an object for anything iterable, so a loop is the same over every
+language's values:
+
+```perl
+use Ugly python => 'itertools' ;
+
+my $it = Ugly::iter(itertools::count(10)) ;      # Python's infinite counter
+while (my ($n) = $it->next){
+    last if $n > 12 ;
+    print "$n\n" ;                               # 10, 11, 12
+}
+my $squares = Ugly::eval("python", "(x * x for x in range(4))") ;
+my $sq = Ugly::iter($squares) ;
+my @all ;
+while (my ($x) = $sq->next){ push @all, $x }      # 0, 1, 4, 9: one step per next
+```
+
+A foreign value its language doesn't iterate but that has elements (a Lua
+table) is walked by index; a Perl array gives an `Ugly::Iterator` over its
+indices; an iterator is returned as it is.
+
+Other languages iterate Perl arrays and Perl iterators. A closure makes a
+generator:
+
+```perl
+package Countdown ;
+sub new { my ($class, $n) = @_ ; bless { n => $n }, $class }
+sub next { my $s = shift ; return if $s->{n} <= 0 ; $s->{n}-- }
+
+package main ;
+Ugly::eval("python", "sum")->(Countdown->new(3)) ;   # 6: Python's sum() loops over it
+```
+
+Each `next` runs when the other language asks for a value, never ahead.
+When the last reference goes, the iterator is freed (its `DESTROY` runs),
+which is how an infinite one ends.
 
 ## Perl as a guest
 
@@ -125,9 +175,12 @@ Key: `path` (`@INC`), ahead of `PERL5LIB`:
   Latin-1.
 - **Booleans before 5.36** are recognised by `PL_sv_yes`/`PL_sv_no`'s
   signature, a heuristic; 5.36 and later have `SvIsBOOL`.
-- **Proxies stringify as a debug form.** `"$p"` is `Ugly::Proxy(…)`, and
-  `$p + 1` does arithmetic on that string, not on the foreign value. Fetch
-  the value first. `ref($obj)` is `Ugly::Proxy`, even for an instance of a
+- **Proxies stringify as their language does.** `"$p"` asks the foreign
+  language (`Ugly::Proxy(…)` if it can't), and `$p + 1` does arithmetic
+  on that string, not on the foreign value. Fetch the value first.
+- **An iterator's `next` must return the empty list at the end**, not
+  `undef` (a value): `return ;`, not `return undef`. And `can` must find
+  `next` without `AUTOLOAD`. `ref($obj)` is `Ugly::Proxy`, even for an instance of a
   package `use Ugly` made (TODO).
 - **`AUTOLOAD`.** `use Ugly` defines subs on first use through `AUTOLOAD`;
   a closure that `AUTOLOAD` compiles sees `$Ugly::AUTOLOAD`, not the

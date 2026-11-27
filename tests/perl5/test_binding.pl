@@ -125,5 +125,34 @@ ok($py->kw(1, Ugly::opts(), Ugly::kw(c => 3)) eq "1 0 3", "  ... and Ugly::opts 
 eval { LuaString::upper("x", Ugly::kw(a => 1)) } ;
 ok(Ugly::is_error($@) && $@->message =~ /takes no call options/, "keyword arguments to Lua are refused") ;
 
+# Iteration (contract §2): Ugly::iter, and next until the empty list.
+sub drain { my $it = Ugly::iter($_[0]) ; my @all ; while (my ($x) = $it->next){ push @all, (defined $x ? $x : 'undef') } ; join(',', @all) }
+ok(drain($py->count_to(3)) eq '0,1,2', "Ugly::iter over a Python generator: 0,1,2") ;
+my $gen = Ugly::iter($py->count_to(2)) ;
+$gen->next ;
+ok($py->produced == 1, "  ... which runs only as far as asked") ;
+ok(drain(Ugly::eval("python", "iter([None, 1])")) eq 'undef,1', "  ... an undef value isn't the end") ;
+ok(drain(Ugly::eval("lua", "return { 5, 6 }")) eq '5,6', "a Lua table, which Lua doesn't iterate: walked by index") ;
+ok(drain([7, 8]) eq '7,8', "a Perl array") ;
+my $nat = Ugly::iter($py->naturals) ;
+$nat->next for 1 .. 3 ;
+ok(($nat->next)[0] == 3, "an infinite Python generator, stepped") ;
+my $failing = Ugly::iter($py->fail_after(1)) ;
+eval { $failing->next for 1 .. 2 } ;
+ok(Ugly::is_error($@) && $@->type eq 'ConformanceError', "an error while iterating is an Ugly::Error") ;
+eval { Ugly::iter(42) } ;
+ok($@ =~ /not iterable/, "Ugly::iter(42) dies") ;
+
+package Countdown { sub new { bless { n => $_[1] }, $_[0] } sub next { my $s = shift ; return if $s->{n} <= 0 ; $s->{n}-- } }
+ok($py->sum_iter(Countdown->new(3)) == 6, "Python loops over a Perl object with a next method: 3+2+1") ;
+ok($py->sum_iter([1, 2, 3]) == 6, "  ... and over a Perl array") ;
+ok(Ugly::eval("python", "list(__import__('ugly').eval('perl5', 'Countdown->new(2)'))")->[1] == 1, "  ... list() over a Perl iterator") ;
+
+# Stringification: a proxy's "" is its language's.
+my $sc = $py->make_counter ;
+$sc->inc ;
+ok("$sc" eq "counter(1)", "\"\$proxy\" is Python's str(): counter(1)") ;
+ok($py->stringify(Countdown->new(1)) =~ /^Countdown=HASH\(0x/, "Python's str() of a Perl object is Perl's own: Countdown=HASH(0x...)") ;
+
 print "1..$count\n" ;
 exit($failures ? 1 : 0) ;
