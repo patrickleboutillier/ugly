@@ -127,6 +127,35 @@ ok(ugly.tostring(ugly.eval("python", "len")) == "<built-in function len>" and ug
 local okl, long = pcall(ugly.eval, "python", "(_ for _ in ()).throw(ValueError('v' * 3000))")
 ok(not okl and ugly.is_error(long) and #long.message == 3000, "a 3000-character Python message arrives whole")
 
+-- Entries (contract §2): a foreign keyed collection through Lua's own syntax. The mock's table
+-- holds { one = 1, two = 2, [3] = "three" } and has a method, count.
+local mock = ugly.module("mock", "conformance")
+local tab = mock.make_table()
+ok(tab.one == 1 and tab["two"] == 2 and tab[3] == "three" and tab.missing == nil,
+	"a foreign table's entries: t.one, t['two'], t[3], and nil for one that isn't there")
+tab.four = 4
+tab[true] = "yes"
+local key = {}
+tab[key] = "by a table"
+ok(tab.four == 4 and tab[true] == "yes" and tab[key] == "by a table" and tab[{}] == nil,
+	"entries stored by a name, a boolean and a Lua table (found by that table only)")
+tab.two = nil
+tab[key] = nil
+ok(tab.two == nil and tab[key] == nil, "t.k = nil removes the entry")
+local seen, n = {}, 0
+for k, v in pairs(tab) do
+	seen[k] = v
+	n = n + 1
+end
+ok(n == 4 and seen.one == 1 and seen[3] == "three" and seen[true] == "yes" and seen.four == 4,
+	"pairs(t) walks a foreign table's keys and values: " .. n)
+local m2 = 0
+for _ in ugly.entries(tab) do m2 = m2 + 1 end
+ugly.set_entry(tab, "count", 99)
+ok(m2 == 4 and ugly.entry(tab, "count") == 99 and ugly.entry(tab, "nope") == nil,
+	"ugly.entries, ugly.set_entry and ugly.entry: an entry by name, whatever else has that name")
+ok(not pcall(pairs, c), "pairs() of a foreign value without entries is an error")
+
 -- A key that is neither an integer nor a string: an error, and the value isn't kept.
 local weak = setmetatable({}, { __mode = "v" })
 do

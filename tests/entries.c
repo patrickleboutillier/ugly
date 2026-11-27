@@ -175,10 +175,20 @@ int main(void){
 		}
 	}
 
-	/* A value that isn't a keyed collection has no entries. */
+	/* A value that isn't a keyed collection has no entries. In Lua an object is a table: there, it has. */
 	ugly_handle c = make_counter(&f, f.mod) ;
+	traits = 0 ;
+	if (ugly_describe(ctx, c, &traits, &v) == UGLY_OK){
+		ugly_val_release(ctx, &v) ;
+	}
 	st = ugly_get_entry(ctx, c, ugly_str("count", 5), UGLY_ANY, &v) ;
-	ok((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_FOUND), "an object that isn't a table: its members aren't entries (%s)", status_name(st)) ;
+	if (traits & UGLY_TRAIT_ENTRIES){
+		is_status(ctx, st, UGLY_OK, "an object that is a table in its language: its members are entries too") ;
+	}
+	else {
+		ok((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_FOUND), "an object that isn't a table: its members aren't entries (%s)",
+			status_name(st)) ;
+	}
 	if (st == UGLY_OK){
 		ugly_val_release(ctx, &v) ;
 	}
