@@ -19,16 +19,17 @@ The binding is the Haskell package `ugly` itself. A program built against
 it uses the other languages inside `Ugly.withUgly`:
 
 ```haskell
+{-# LANGUAGE OverloadedStrings #-}
 import qualified Ugly
 
 main :: IO ()
 main = Ugly.withUgly $ do
   json <- Ugly.module_ "python" "json"
-  xs <- Ugly.invoke json "loads" [Ugly.toValue "[1, 2, 3]"] >>= Ugly.fromValue
-  print (sum (xs :: [Int]))                                  -- 6: a Python list, as a [Int]
+  xs <- Ugly.invoke json "loads" ["[1, 2, 3]"]
+  print (sum (xs :: [Int]))                     -- 6: a Python list, as a [Int]
   twice <- Ugly.eval "python" "lambda f, x: f(f(x))"
-  r <- Ugly.callValue twice [Ugly.toValue ((+ 1) :: Int -> Int), Ugly.toValue (40 :: Int)]
-  print =<< (Ugly.fromValue r :: IO Int)                  -- 42: Python calls a Haskell function
+  r <- Ugly.callValue twice [Ugly.toValue ((+ 1) :: Int -> Int), 40]
+  print (r :: Int)                              -- 42: Python calls a Haskell function
 ```
 
 Build it dynamically, with the threaded RTS, against the installed package
@@ -45,14 +46,27 @@ ghc -dynamic -threaded -package-db /usr/local/lib/x86_64-linux-gnu/ugly/haskell/
 | `module_ lang name` | a module of another language, as a `Foreign` |
 | `eval lang code` | code evaluated in a language that can (`UGLY_CAP_EVAL`) |
 | `call f args`, `invoke f "m" args` | call a foreign value; invoke its method with its language's receiver rules |
+| `call_`, `invoke_`, `callValue_` | the same, dropping the result (a call made for its effect) |
 | `get f "x"`, `index f i`, `size f`, `members f`, `typeOf f` | members; elements, 0-based; their count; member names; its type's name |
 | `callValue v args` | call any callable `Value`, Haskell's own or foreign |
-| `toValue`, `fromValue` | a Haskell value as a `Value` (`ToUgly`), and back (`FromUgly`: a refusal throws a `TypeError`) |
+| `toValue`, `fromValue` | a Haskell value as a `Value` (`ToUgly`), and a `Value` you hold as a Haskell type (`FromUgly`) |
 | `rethrow`, `exceptionValue` | raise a `Value` again (an exception, or a foreign value as an error's payload); an exception as a `Value` |
 
-Operations return a `Value`: `VNull`, `VBool`, `VInt`, `VDouble`,
-`VString` (`Text`), `VBytes`, `VBox` (a Haskell value) or `VForeign` (a
-`Foreign`). Each runs on the calling thread, through the core.
+**Results come back as the type the caller wants**: `call`, `invoke`,
+`get`, `index`, `callValue` and `eval` return any `FromUgly` type, converted
+as an argument would be (a Python list as a `[Int]`, a str as a `String`, a
+foreign object as a `Foreign`); a refusal is a `TypeError`. Ask for a
+`Value` to get the raw result: `VNull`, `VBool`, `VInt`, `VDouble`,
+`VString` (`Text`), `VBytes`, `VBox` (a Haskell value) or `VForeign`. A
+result nothing uses has no type to infer: use the `_` forms.
+
+**Arguments are `Value`s.** With `OverloadedStrings`, string and number
+literals are `Value`s (`"x"`, `3`, `-1.5`): `Value` has `IsString`, `Num` and
+`Fractional` instances, whose arithmetic is there for literals (a negative
+one is `negate 1`) and is an error on anything but a number. Anything else
+goes through `toValue`: a variable, a function, a list.
+
+Each operation runs on the calling thread, through the core.
 
 A program's own export modules (`uglyModule` in the program, below) are
 found in the process, with no library, when it's linked with `-rdynamic`:
@@ -199,7 +213,7 @@ A failure of an operation on a foreign value is a `ForeignError`, with
 `errorPayload`:
 
 ```haskell
-r <- try (Ugly.invoke json "loads" [Ugly.toValue "{"])
+r <- try (Ugly.invoke_ json "loads" ["{"])
 case r of
   Left e -> putStrLn (Ugly.errorLanguage e ++ " " ++ Ugly.errorType e)   -- python JSONDecodeError
   Right _ -> return ()

@@ -13,6 +13,7 @@ import Control.Exception (Exception (..), evaluate)
 import qualified Data.ByteString as B
 import Data.Int
 import Data.IORef (IORef)
+import Data.String (IsString (..))
 import qualified Data.Text as T
 import Data.Typeable
 import Foreign.ForeignPtr (ForeignPtr)
@@ -31,6 +32,42 @@ data Value
   | VBytes !B.ByteString
   | VBox !Box
   | VForeign !Foreign
+
+-- | A string literal is a string Value (with OverloadedStrings): the
+-- arguments of a call can be written ["[1, 2, 3]", 2].
+instance IsString Value where
+  fromString = VString . T.pack
+
+-- | A number literal is an int or a double Value. The arithmetic is there
+-- for literals (a negative one is negate 1): int with int stays an int,
+-- with a double it's a double, and anything but a number is an error.
+instance Num Value where
+  fromInteger n
+    | n >= toInteger (minBound :: Int64) && n <= toInteger (maxBound :: Int64) = VInt (fromInteger n)
+    | otherwise = error ("ugly: the literal " ++ show n ++ " doesn't fit in an int")
+  (+) = arith (+) (+)
+  (-) = arith (-) (-)
+  (*) = arith (*) (*)
+  negate = unary negate negate
+  abs = unary abs abs
+  signum = unary signum signum
+
+instance Fractional Value where
+  fromRational = VDouble . fromRational
+  a / b = VDouble (double a / double b)
+
+arith :: (Int64 -> Int64 -> Int64) -> (Double -> Double -> Double) -> Value -> Value -> Value
+arith i _ (VInt a) (VInt b) = VInt (i a b)
+arith _ d a b = VDouble (d (double a) (double b))
+
+unary :: (Int64 -> Int64) -> (Double -> Double) -> Value -> Value
+unary i _ (VInt a) = VInt (i a)
+unary _ d a = VDouble (d (double a))
+
+double :: Value -> Double
+double (VInt i) = fromIntegral i
+double (VDouble d) = d
+double _ = error "ugly: arithmetic on a Value that isn't a number"
 
 -- | A Haskell value, its identity (the value itself), and what can be asked
 -- of it. 'Typeable', so that it can be cast back when it comes home.

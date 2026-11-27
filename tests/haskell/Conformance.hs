@@ -164,7 +164,7 @@ call_twice f v = Ugly.callValue f [v] >>= \r -> Ugly.callValue f [r]
 
 -- | Benchmarks (tests/bench.c): f(i) n times, and echo n times.
 bench :: Value -> Int -> IO Int
-bench f n = forM_ [0 .. n - 1] (\i -> Ugly.callValue f [VInt (fromIntegral i)]) >> return n
+bench f n = forM_ [0 .. n - 1] (\i -> Ugly.callValue_ f [VInt (fromIntegral i)]) >> return n
 
 bench_self :: Int -> IO Int
 bench_self n = forM_ [0 .. n - 1] (\i -> evaluate (echo (VInt (fromIntegral i)))) >> return n
