@@ -83,5 +83,27 @@ try { py.kw(1, ugly.opts({ context: "scalar" })); } catch (e) { refused = ugly.i
 ok(refused, "ugly.opts({ context: ... }) into Python: refused");
 ok(py.kw(1, ugly.kw({ c: 3 }), ugly.opts({})) === "1 0 3", "  ... and ugly.kw and ugly.opts last, in either order");
 
+// Iteration (contract §2): for...of, spread and String() on foreign values.
+const itertools = ugly.module("python", "itertools");
+const firsts = [];
+for (const x of itertools.count(1)) {
+  if (x > 3) break;
+  firsts.push(x);
+}
+ok(firsts.join(",") === "1,2,3", "for...of over an infinite Python iterator, left with break");
+ok([...py.count_to(3)].join(",") === "0,1,2", "spread of a Python generator: [...py.count_to(3)]");
+const words = [...ugly.module("lua", "string").gmatch("one two", "%a+")];
+ok(words.join(",") === "one,two", "spread of a Lua iterator function: string.gmatch");
+const squares = ugly.eval("lua", "local t = {} for i = 1, 3 do t[i] = i * i end return t");
+ok([...squares].join(",") === "1,4,9", "a Lua table, which Lua doesn't iterate: its elements, as an array-like");
+let threw = false;
+try { for (const x of py.fail_after(1)) {} } catch (e) { threw = ugly.isError(e) && e.type === "ConformanceError"; }
+ok(threw, "a Python generator's error ends the loop");
+ok(py.sum_iter([1, 2, 3, 4]) === 10, "Python's for over a JS array");
+ok(py.sum_iter((function* () { yield 5; yield 6; })()) === 11, "Python's for over a JS generator");
+const c2 = py.make_counter();
+c2.inc();
+ok(String(c2) === "counter(1)" && `${c2}` === "counter(1)", "String(c) and a template: Python's str(c)");
+
 console.log("1.." + count);
 if (failures > 0) throw new Error(failures + " test(s) failed");

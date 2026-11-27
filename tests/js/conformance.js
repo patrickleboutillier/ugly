@@ -25,6 +25,7 @@ export class counter {
     this.items.push(this.count);
     return this.count;
   }
+  toString() { return `counter(${this.count})`; }
 }
 
 export class ConformanceError extends Error {
@@ -75,3 +76,49 @@ export function finalized() {
   ugly.gc();
   return finalized_count;
 }
+
+// Iteration (contract §2): generators, run only as far as asked.
+let produced_count = 0;
+
+export function count_to(n) {
+  produced_count = 0;
+  return (function* () {
+    for (let i = 0; i < n; i++) {
+      produced_count++;
+      yield i;
+    }
+  })();
+}
+
+export function* naturals() {
+  try {
+    for (let i = 0; ; i++) yield i;
+  } finally {     // closed when released early: return()
+    finalized_count++;
+  }
+}
+
+export function* fail_after(n) {
+  for (let i = 0; i < n; i++) yield i;
+  throw new ConformanceError(`fail_after(${n})`);
+}
+
+export function produced() { return produced_count; }
+
+export function sum_iter(xs) {
+  let total = 0;
+  for (const x of xs) total += x;
+  return total;
+}
+
+export function take_iter(xs, n) {
+  const out = [];
+  if (n <= 0) return out;
+  for (const x of xs) {
+    out.push(x);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+export function stringify(x) { return String(x); }

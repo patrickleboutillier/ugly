@@ -46,8 +46,29 @@ A foreign value is a proxy object, one per value (`===` is identity).
 - A foreign function or class is a function proxy: `f(x)` calls it, and
   `new Cls(x)` constructs. Calling a class that can only be instantiated
   (a Java or Perl class) constructs it too.
+- **Iteration is the foreign language's own** (contract §2): `for...of`,
+  spread and `Array.from` run what that language's loop runs, one value per
+  step, so a Python generator runs only as far as the loop goes, and
+  `break` on an infinite one is fine. A Lua iterator function works as is:
+  `[...string.gmatch(s, "%a+")]`. A value its language doesn't iterate but
+  that has elements (a Lua table) iterates as any array-like does, through
+  `Array.prototype.values`.
+- `String(p)`, `` `${p}` `` and `p.toString()` give the foreign language's
+  stringification (Python's `str()`, Lua's `tostring`); a value it has none
+  for is `[object ugly.Proxy]`.
+- A proxy's prototype holds only those two (`[Symbol.iterator]`,
+  `toString`); its own members come first, so a Java object's `toString`
+  is Java's.
 - Members of a foreign value can't be deleted from JS: `delete p.k` does
   nothing (TODO).
+
+```js
+const itertools = ugly.module("python", "itertools");
+for (const x of itertools.count(1)) {      // an infinite Python iterator
+  if (x > 3) break;
+  console.log(x);                            // 1, 2, 3
+}
+```
 
 ## JS values elsewhere
 
@@ -65,6 +86,13 @@ A foreign value is a proxy object, one per value (`===` is identity).
 - The type name is the constructor's name (`Object`, `Array`, a class's
   name), and `module` for a module namespace.
 - `invoke` calls with `this` bound to the object.
+- Iterable is what `for...of` takes: anything with a `Symbol.iterator`
+  method (arrays, `Map`, `Set`, generators, iterators). `ugly_iter` calls
+  it (an iterator's returns itself); each step is `next()` until `done`, so
+  a generator runs only as far as asked, and a `Map` yields `[k, v]`
+  arrays. Releasing an iterator stepped and not done calls its `return()`,
+  as a `break` would, so a generator's `finally` runs.
+- `ugly_to_string` is `String(v)`.
 
 ## JS as a guest
 

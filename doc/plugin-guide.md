@@ -76,6 +76,11 @@ lines of C, with no interpreter in the way: read it first.
   - A text that `to_string` returns must be read when asked, not when the
     box was made: a mutable value's changes (Haskell's `infoShow` is
     `IO String` for that).
+  - "Release closes" can mean running the language's code from `release`
+    (JS's `return()`, so a generator's `finally` runs). Only for an
+    iterator actually stepped and not done, and never where the
+    interpreter forbids it: the JS binding tears down inside a QuickJS
+    finalizer, where no JS may run.
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the
