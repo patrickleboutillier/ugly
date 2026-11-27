@@ -125,10 +125,11 @@ unsafe struct PluginTable {
         MemberNames, Length, GetIndex, SetIndex, Call, Invoke, NewInstance, DeleteMember, Splice, Release;
     public byte** Options;
     public nint CallOpts, InvokeOpts, NewOpts;
+    public nint Iter, Next, ToStr;     // ABI 5: not implemented yet (NULL)
 }
 
 static unsafe class Binding {
-    const uint PluginAbi = 4;     // UGLY_PLUGIN_ABI
+    const uint PluginAbi = 5;     // UGLY_PLUGIN_ABI
     const uint CapAttach = 1u << 2, CapAnyThread = 1u << 4;
 
     static readonly object gate = new();

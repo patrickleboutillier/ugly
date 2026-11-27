@@ -20,16 +20,20 @@ already written in Python. HAProxy works, in both of its Lua modes
 
 All additive: none of it breaks existing plugins (contract, "Scope").
 
-- [ ] **Iterators and generators**: a protocol for "next" (Python iterators,
-  Lua `pairs`/closures, JS iterators), beyond indexing.
+- [ ] **Iterators and generators** (contract §2, decisions 18 to 25): the
+  core (`ugly_iter`, `ugly_next`; libugly 2.7, plugin ABI 5), core lists,
+  the mock and the `iterators` group are done. Next, each plugin as producer
+  and consumer (Python, Haskell, JS, Lua, C#, Java, Perl), pairwise checks
+  with the first two, then the bindings' syntax and Perl's `each`.
 - [ ] **A hash protocol for non-string keys**: Lua tables keyed by tables,
   Python dicts keyed by tuples, JS `Map`.
 - [ ] **Resizing and deleting in the other bindings.** `ugly_splice` and
   `ugly_delete_member` exist, and Perl's ties use them. Python proxies
   could too (`del p[k]`, `p.append(x)`, slice assignment), and so could JS
   (`delete`, `push`). In Lua, a `__newindex` past the end already appends.
-- [ ] **A "to string" operation**, so a proxy stringifies with its own
-  language's `str()`/`tostring` (Perl's `"$p"` gives a debug form today).
+- [ ] **"To string"** (`ugly_to_string`, contract §2): in the core and the
+  mock; each plugin implements it, and its proxies use it, with
+  iteration.
 - [ ] **Async and coroutines across runtimes.** Hard; probably needs each
   plugin to expose its scheduler.
 - [ ] **Python subinterpreters** (a GIL per interpreter, 3.12+), which would

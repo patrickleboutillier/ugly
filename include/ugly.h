@@ -280,6 +280,11 @@ ugly_status ugly_same(ugly_ctx *ctx, ugly_handle a, ugly_handle b, bool *out) ;
  * reports it where it knows, and must for a sequence that may be unbounded.
  */
 #define UGLY_TRAIT_FIXED_SIZE    (1u << 4)
+/*
+ * Its language's own loop takes it (Python for, JS for...of, Lua's generic
+ * for over a function, Java's for-each, C# foreach): ugly_iter (libugly 2.7).
+ */
+#define UGLY_TRAIT_ITERABLE      (1u << 5)
 
 /* Traits, plus the type name in the home language's terms ("dict", "HASH", "table"). */
 ugly_status ugly_describe(ugly_ctx *ctx, ugly_handle h, uint32_t *traits, ugly_val *type_name) ;
@@ -312,6 +317,33 @@ ugly_status ugly_set_index(ugly_ctx *ctx, ugly_handle h, int64_t i, ugly_val v) 
  * check, when describe reports UGLY_TRAIT_FIXED_SIZE, else from the plugin.
  */
 ugly_status ugly_splice(ugly_ctx *ctx, ugly_handle h, int64_t offset, int64_t remove, const ugly_val *insert, size_t n) ;
+
+/*
+ * Iteration (contract §2, libugly 2.7): what the value's language's own loop
+ * does, or UGLY_ERR_NOT_CAPABLE. ugly_iter gives an iterator, an owned
+ * handle whose home is h's; on an iterator, it gives that iterator again.
+ * Releasing the last reference closes it, as an early break would (a Python
+ * generator's close, JS return(), C# Dispose()).
+ */
+ugly_status ugly_iter(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
+/*
+ * Runs iterator 'it' for at most 'max' (>= 1) more values, each converted to
+ * 'want', into out[0..*got), owned by the caller. *got < max means it is
+ * exhausted (*got == 0: it already was). Nothing runs ahead: a generator's
+ * code runs only as far as the values asked for, so an infinite one is fine.
+ * On an error, out[0..*got) still holds the values before it (owned), and
+ * the error is the ctx's.
+ */
+ugly_status ugly_next(ugly_ctx *ctx, ugly_handle it, ugly_kind want, ugly_val *out, size_t max, size_t *got) ;
+
+/*
+ * h as its language stringifies it (Python str(), Lua tostring, Perl "",
+ * JS String(), Java toString(), C# ToString(), Haskell show): a STRING, or
+ * BYTES where the language's string isn't valid UTF-8 (Lua, Perl).
+ * UGLY_ERR_NOT_SUPPORTED where the language has none for the value. Not
+ * want = STRING, which converts only what the language converts implicitly.
+ */
+ugly_status ugly_to_string(ugly_ctx *ctx, ugly_handle h, ugly_val *out) ;
 
 /*
  * 'want' is the kind the caller needs back. UGLY_ANY lets the home language

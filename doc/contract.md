@@ -2,7 +2,7 @@
 
 *Approved 2026-11-24, and kept current since: changes are recorded in
 "Decisions" and "Clarifications", and in the headers. It describes libugly
-2.4 (plugin ABI 4). This document sits alongside
+2.7 (plugin ABI 5). This document sits alongside
 [`ugly.h`](../include/ugly.h) (the public API) and
 [`ugly_plugin.h`](../include/ugly_plugin.h) (the plugin contract). The v1
 reference is tag `v0.02`.*
@@ -23,7 +23,7 @@ for Lua, CPython and QuickJS, and Perl 5 is ported last.
 **Not in v2.0:**
 - a hash protocol for non-string keys (Lua tables with table keys, Python
   dicts with tuple keys, JS `Map`);
-- iterators and generators;
+- iterators and generators (added since: §2);
 - async/await and coroutines across runtimes;
 - collecting cycles across runtimes;
 - sandboxing;
@@ -31,7 +31,8 @@ for Lua, CPython and QuickJS, and Perl 5 is ported last.
 
 Each of these can be added later without breaking the contract. Since v2.0,
 besides Java: threads shared between runtimes (§6), options for runtimes
-created on demand (§7), resizing and deleting (§2) and call options (§11).
+created on demand (§7), resizing and deleting (§2), call options (§11),
+and iteration and stringification (§2).
 The rest of the list is still open ([TODO.md](../TODO.md)).
 
 ## What changes from v1
@@ -115,9 +116,10 @@ This is Truffle's idea, reduced:
 | `CALLABLE` | `call` |
 | `INSTANTIABLE` | `new` |
 | `FIXED_SIZE` | none: with `ELEMENTS`, the count never changes, so `splice` is refused (libugly 2.6) |
+| `ITERABLE` | `iter`, then `next` on the iterator (libugly 2.7) |
 
-Plus `invoke` (a method call) and `describe` (the traits, plus the type name
-in the home language's terms).
+Plus `invoke` (a method call), `describe` (the traits, plus the type name
+in the home language's terms) and `to_string` (libugly 2.7).
 
 `delete_member` and `splice` came with libugly 2.1 and plugin ABI 2
 (2026-11-25), for bindings that make foreign containers native (Perl's
@@ -161,7 +163,9 @@ shape.
 **A sequence may be unbounded.** A lazy sequence (a Haskell list) has
 `ELEMENTS`, and `get_index` reads it only as far as asked. Its `length`
 doesn't return when it's infinite, as in its own language, and nothing
-caps it. So code that walks a foreign sequence reads by index until
+caps it. So code that walks a foreign sequence iterates it if it's
+`ITERABLE` (below: a Haskell list is, and iterating it is linear where
+reading by index is quadratic), and otherwise reads by index until
 `UGLY_ERR_NOT_FOUND`, and asks for the length only when its caller did. A
 binding whose language needs a size to iterate (a Perl tied array's
 `FETCHSIZE`, JS's `.length`, Lua's `#`) inherits the non-termination, as
@@ -172,6 +176,95 @@ then refuses the splice without asking (libugly 2.6, found by writing this
 paragraph; before it, splicing `[0..]` never returned). Reporting it for
 any other sequence of fixed size is optional, and saves a `length` call.
 Haskell reports it for every immutable sequence.
+
+### Iteration
+
+Added in libugly 2.7, plugin ABI 5 (decided 2026-11-27, decisions 18 to
+25). Indexes reach only sequences. Generators (Python, JS, C#'s `yield
+return`), Java's `Iterator`, Lua's iterator functions and lazy lists need
+"next", and a native loop over a proxy (`for…of`, Java's for-each,
+`foreach`) needs something to hook.
+
+```c
+#define UGLY_TRAIT_ITERABLE  (1u << 5)
+ugly_status ugly_iter(ugly_ctx *ctx, ugly_handle h, ugly_handle *out) ;
+ugly_status ugly_next(ugly_ctx *ctx, ugly_handle it, ugly_kind want, ugly_val *out, size_t max, size_t *got) ;
+```
+
+- **Exact or refused.** A value is `ITERABLE` when its own language's loop
+  takes it, and iterating it yields what that loop yields, one value per
+  step. Nothing is synthesized: the core doesn't iterate an `ELEMENTS`
+  value by index (that would hide the quadratic walk), and a value its
+  language can't loop over refuses `ugly_iter` with
+  `UGLY_ERR_NOT_CAPABLE`. Languages that iterate pairs yield them as their
+  own values (JS `[k, v]` arrays, C# `KeyValuePair`s).
+- **An iterator is an ordinary handle** whose home is the iterable's
+  runtime: threads, depth, borrows and errors apply unchanged. `ugly_iter`
+  on an iterator returns it (Python's `iter(it) is it`), also in languages
+  that don't say so (Java's `Iterator`, C#'s `IEnumerator`).
+- **The end is a count.** `ugly_next` runs the iterator for at most `max`
+  values into `out[0..*got)`; `*got < max` means it is exhausted, and
+  `*got == 0` that it already was. No error is recorded at the end of a
+  loop. After the end, `next` gives what the language gives (normally
+  nothing again); the core doesn't remember.
+- **Batches, never ahead.** `max` lets a caller that will consume many
+  (Python's `list(p)`, a conversion to a native array) cross once for
+  them, since a crossing costs 60 to 870 ns (doc/benchmarks.md). A plugin
+  runs at most `max` steps: a generator's code runs only as far as asked,
+  and an infinite one is fine. A loop asks for one at a time.
+- **Errors keep what came before.** If the iterator raises, the values made
+  before it are still delivered (`*got` of them, owned by the caller), and
+  the error is the ctx's, as it would have been one at a time. Errors are
+  the language's own: changing a dict during iteration is Python's
+  `RuntimeError`, as `RAISED`.
+- **Release closes.** There is no `ugly_close`. Dropping the last reference
+  to an iterator closes it as an early `break` would: a Python generator's
+  `close()` (its `finally` runs), JS's `return()`, C#'s `Dispose()`. For an
+  iterator a proxy holds, that is the proxy's finalizer.
+
+What each language iterates (decided; the plugins implement it in turn,
+contract §10 records each as it's done):
+
+| | iterable | each step yields | release does |
+|---|---|---|---|
+| Python | what `iter()` accepts (`__iter__`, or the sequence protocol) | what `for` gives (a dict's keys) | drops it; a generator closes |
+| JS | objects with `Symbol.iterator`: arrays, `Map`, `Set`, generators | `value` until `done` (a `Map`: `[k, v]` arrays) | `return()`, if not done |
+| Lua | functions, as `for v in f do`; tables are not | the first value returned, until `nil` | nothing |
+| Perl 5 | arrays | elements | nothing |
+| Java | `Iterable`, arrays, `Iterator`, `BaseStream` | elements (a `Map` isn't iterable, as in Java) | closes a stream |
+| C# | `IEnumerable`, `IEnumerator` | elements (a dictionary: `KeyValuePair`s) | `Dispose()` |
+| Haskell | lists, lazy (infinite ones too), and boxes that declare it | elements | nothing |
+| mock | lists, and its generators | elements | frees it |
+| C (core) | core lists | elements | nothing |
+
+Every Lua function is `ITERABLE`, with the generic `for`'s meaning, since
+Lua's iterators are functions (`gmatch`, `io.lines`, `coroutine.wrap`).
+That includes functions that never return `nil`: a caller iterates only
+when its own code loops, so that is Lua's meaning, not a hazard the core
+adds. Perl has no iteration protocol: a hash has three readings (`keys`,
+`values`, `each`) and iterator objects are a convention, so only arrays
+are iterable.
+
+Each plugin's proxies take part in their language's loop when the foreign
+value is `ITERABLE`: Python's `__iter__`, JS's `[Symbol.iterator]`, Java's
+`ugly.Foreign` as an `Iterable`, C#'s `Foreign` as an `IEnumerable`,
+Haskell's `FromUgly [a]` as a lazy list read as it's forced. Where the
+language has no loop to hook, the binding offers one: `for v in
+ugly.iter(p) do` in Lua, and in Perl `Ugly::iter($p)`, an object whose
+`next` returns the empty list at the end (so `undef` elements survive).
+
+### Stringification
+
+`ugly_to_string(ctx, h, &out)` (libugly 2.7) is the value as its language
+makes it a string, the one `print` uses: Python `str()`, Lua `tostring`,
+Perl `""`, JS `String()`, Java `toString()`, C# `ToString()`, Haskell
+`show`. The result is a STRING, or BYTES where the language's strings
+aren't UTF-8 (Lua, Perl). A value its language can't stringify refuses with
+`UGLY_ERR_NOT_SUPPORTED`: a Haskell type without `Show`, and core values,
+since C has no stringification. This is not `want = STRING`, which converts
+only what the language converts implicitly (Python refuses an object).
+Proxies use it for their language's stringification; each language's
+debug form (`repr`, Perl's `Ugly::Proxy=SCALAR(...)`) stays its own.
 
 ## 3. Ownership
 
@@ -583,6 +676,17 @@ language, in `tests/<lang>/` (the mock's are built in). v1's
   run. The restart test uses it if it exists.
 - `bench(f, n)` calls `f(i)` n times, and `bench_self(n)` calls the
   module's own `echo(i)` n times (for `tests/bench.c`, not the suite).
+- Iteration (§2), in the language's own idiom (a Python generator, a JS
+  generator function, a Lua closure, a C# `yield return`, Haskell's
+  `[0..n-1]`): `count_to(n)` makes 0 to n−1 lazily; `naturals()` makes 0,
+  1, 2... without end; `fail_after(n)` makes 0 to n−1, then raises
+  `ConformanceError`; `produced()` is how many values the last of them
+  made. `sum_iter(xs)` sums xs with the language's own loop, and
+  `take_iter(xs, n)` returns the first n values as a list, its loop
+  stopping there. `naturals` and `produced` are optional (Perl has nothing
+  lazy): the tests SKIP without them.
+- `stringify(x)` is the language's stringification of x, and a counter's
+  is `counter(<count>)` (§2).
 
 Type names are whatever `describe` reports, in the language's own terms.
 Lua uses each metatable's `__name`, so the fixtures set them.
@@ -602,6 +706,7 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 | errors | type and message are preserved; **the payload rethrown at home is the identical object**; an error crossing three runtimes |
 | threads | calls from another thread give `WRONG_THREAD`, or work with `UGLY_CAP_ANY_THREAD` or once the runtime is host-serialized (then `ugly_rt_drain` runs queued releases); a release from another thread is deferred and drained; for `UGLY_CAP_ANY_THREAD`, 4 threads at once in the shared runtime (`ugly_rt_get`), and a runtime deleted while another thread holds a share |
 | lifecycle | capabilities are honoured; runtime delete makes outstanding handles stale; unload is refused while runtimes are alive; restart is tested only with `RESTARTABLE` |
+| iterators | core lists; `ITERABLE`; one at a time, then the end (twice); batches; nothing produced ahead (`produced()`); `want`; an infinite iterator, freed when released early; the values before an error, then the error; the language's loop over its own and over a core list, stopping early; `to_string` and `stringify` of a counter |
 | pairwise | values, identity, calls, caught and rethrown errors, and alternating recursion between two languages; deleting one language's runtime while the other holds its values |
 | memory | the whole suite under the valgrind setup: no errors and no leaks |
 
@@ -747,6 +852,29 @@ Call options (§11), decided on 2026-11-25 (the recommendations were taken):
     joined by commas (`"int,java.lang.String"`), not JNI signatures.
 17. **All three options are in the struct from the start**, so the plugin
     ABI changes once. Keyword arguments come first, then context, then hints.
+
+Iteration and stringification (§2), decided on 2026-11-27 (the
+recommendations were taken):
+
+18. **The end of an iteration is a count** (`*got < max`), not
+    `UGLY_ERR_NOT_FOUND` (an error recorded at the end of every loop) nor a
+    new status.
+19. **Batches are in the ABI from the start:** `max` in `ugly_next` and in
+    the plugin's `next`, so the plugin ABI changes once.
+20. **Every Lua function is iterable**, with the generic `for`'s meaning.
+    Tables are not.
+21. **Perl iterates arrays only.** Hashes, code refs and objects are
+    refused.
+22. **One value per step.** Pairs are the language's own values; Lua's
+    extra return values are dropped, as `for v in f` drops them. A
+    key-value form can come with the hash protocol.
+23. **No fallback in the core** over `ELEMENTS`. Bindings keep their own
+    index walk where they have one.
+24. **Binding syntax:** `ugly.iter(p)` in Lua; `Ugly::iter($p)` in Perl, an
+    object whose `next` returns the empty list at the end; in Haskell, a
+    lazy list (`unsafeInterleaveIO`, like `hGetContents`), plus
+    `Ugly.next` for control.
+25. **`ugly_to_string` comes in the same ABI bump** (5).
 
 ## Clarifications from the first implementation
 

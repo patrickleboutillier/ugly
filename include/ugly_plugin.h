@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define UGLY_PLUGIN_ABI 4     /* 2: delete_member, splice; 3: options; 4: call options */
+#define UGLY_PLUGIN_ABI 5     /* 2: delete_member, splice; 3: options; 4: call options; 5: iter, next, to_string */
 
 
 /*
@@ -156,6 +156,19 @@ typedef struct ugly_plugin {
 		size_t nargs, const ugly_opts *opts, ugly_kind want, ugly_val *out) ;
 	ugly_status (*new_opts)(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 		const ugly_opts *opts, ugly_handle *out) ;
+
+	/*
+	 * ABI 5. Iteration (contract §2): 'iter' exports an iterator over ref
+	 * (ref itself, if it is one); 'next' runs it for at most 'max' values,
+	 * never ahead, and sets *got (< max: exhausted). Values made before an
+	 * error stay in out[0..*got). 'release' closes an iterator as an early
+	 * break would. 'to_string' is the language's stringification (STRING,
+	 * or BYTES where its strings aren't UTF-8). NULL: UGLY_ERR_NOT_IMPLEMENTED.
+	 */
+	ugly_status (*iter)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out) ;
+	ugly_status (*next)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max,
+		size_t *got) ;
+	ugly_status (*to_string)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out) ;
 } ugly_plugin ;
 
 
