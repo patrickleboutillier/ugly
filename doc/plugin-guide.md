@@ -81,6 +81,12 @@ lines of C, with no interpreter in the way: read it first.
     iterator actually stepped and not done, and never where the
     interpreter forbids it: the JS binding tears down inside a QuickJS
     finalizer, where no JS may run.
+  - "An iterator's iterator is itself" needs care where one object is both
+    (C#'s `yield return` object: until its `GetEnumerator()`, `MoveNext()`
+    gives nothing). The plugin remembers which enumerators it handed out,
+    and only those are their own iterators, and only those are disposed of
+    at their last release: closing every disposable the core lets go of
+    would close files.
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the

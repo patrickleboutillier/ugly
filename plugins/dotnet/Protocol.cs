@@ -14,6 +14,7 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace Ugly;
 
@@ -26,7 +27,7 @@ sealed class MethodRef(Type cls, object? target, string name) {
 }
 
 static class Protocol {
-    public const uint MEMBERS = 1, ELEMENTS = 2, CALLABLE = 4, INSTANTIABLE = 8;
+    public const uint MEMBERS = 1, ELEMENTS = 2, CALLABLE = 4, INSTANTIABLE = 8, ITERABLE = 32;
 
     const BindingFlags Static = BindingFlags.Public | BindingFlags.Static;
     const BindingFlags Instance = BindingFlags.Public | BindingFlags.Instance;
@@ -54,8 +55,47 @@ static class Protocol {
         uint traits = MEMBERS;
         if (o is Delegate) traits |= CALLABLE;
         if ((o is Array a && a.Rank == 1) || (o is IList)) traits |= ELEMENTS;
+        if ((o is IEnumerable) || (o is IEnumerator)) traits |= ITERABLE;
         return traits;
     }
+
+    /* ---------------------------------------------------------------- */
+    /* Iteration (contract §2)                                          */
+    /* ---------------------------------------------------------------- */
+
+    // The enumerators Iter handed out: their own iterators, disposed of when released.
+    static readonly ConditionalWeakTable<object, object> enumerators = new();
+    static readonly object mark = new();
+
+    internal static bool Iterating(object o) => enumerators.TryGetValue(o, out _);
+
+    /*
+     * What foreach takes: an enumerable gives GetEnumerator(); an enumerator
+     * is its own. A 'yield return' method's object is both, and needs its
+     * GetEnumerator() first (until then MoveNext() gives nothing): so an
+     * object that is both is taken as an enumerator only once Iter has
+     * handed it out.
+     */
+    public static object Iter(object o) {
+        if ((o is IEnumerator) && ((o is not IEnumerable) || Iterating(o))) return o;
+        if (o is IEnumerable en) {
+            IEnumerator e = en.GetEnumerator();
+            enumerators.AddOrUpdate(e, mark);
+            return e;
+        }
+        throw Fail.NotCapable("value is not enumerable");
+    }
+
+    // A foreign value as an IEnumerable<T>: its iteration, each element coerced as it comes.
+    static IEnumerable<T> Typed<T>(IEnumerable source) {
+        foreach (object? x in source) yield return (T)Coerce(x, typeof(T))!;
+    }
+
+    static readonly MethodInfo typed = typeof(Protocol).GetMethod(nameof(Typed), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+    // IEnumerable<T>'s T, if t is that interface.
+    static Type? EnumerableOf(Type t) =>
+        t.IsGenericType && (t.GetGenericTypeDefinition() == typeof(IEnumerable<>)) ? t.GetGenericArguments()[0] : null;
 
     public static string TypeName(object o) => o switch {
         Type t => Instantiable(t) ? "class" : "module",
@@ -445,6 +485,7 @@ static class Protocol {
         if ((a is string s) && (t == typeof(char)) && (s.Length == 1)) return 3;
         if (t.IsInstanceOfType(a)) return t == typeof(object) ? 6 : 2;
         if (IsDelegate(t) && ((a is Foreign) || (a is MethodRef) || (a is Delegate))) return 5;
+        if ((a is Foreign) && (EnumerableOf(t) != null)) return 4;     // its iteration, typed
         if ((a is Foreign) && t.IsInterface) return 5;
         return NO;
     }
@@ -475,6 +516,7 @@ static class Protocol {
         if ((a is double d) && (t == typeof(float))) return (float)d;
         if ((a is string s) && (t == typeof(char))) return s[0];
         if (IsDelegate(t)) return Delegates.Make(a, t);
+        if ((a is Foreign g) && (EnumerableOf(t) is Type et)) return typed.MakeGenericMethod(et).Invoke(null, [g]);
         if ((a is Foreign f) && t.IsInterface) return ForeignProxy.Create(f, t);
         throw Fail.Type($"can't convert {a.GetType().Name} to {p.Name}");
     }

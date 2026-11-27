@@ -125,7 +125,7 @@ unsafe struct PluginTable {
         MemberNames, Length, GetIndex, SetIndex, Call, Invoke, NewInstance, DeleteMember, Splice, Release;
     public byte** Options;
     public nint CallOpts, InvokeOpts, NewOpts;
-    public nint Iter, Next, ToStr;     // ABI 5: not implemented yet (NULL)
+    public nint Iter, Next, ToStr;     // ABI 5
 }
 
 static unsafe class Binding {
@@ -241,6 +241,9 @@ static unsafe class Binding {
         t->CallOpts = (nint)(delegate* unmanaged<nint, nint, nint, Val*, nuint, Opts*, int, Val*, int>)&Bridge.CallOpts;
         t->InvokeOpts = (nint)(delegate* unmanaged<nint, nint, nint, byte*, Val*, nuint, Opts*, int, Val*, int>)&Bridge.InvokeOpts;
         t->NewOpts = (nint)(delegate* unmanaged<nint, nint, nint, Val*, nuint, Opts*, ulong*, int>)&Bridge.NewOpts;
+        t->Iter = (nint)(delegate* unmanaged<nint, nint, nint, ulong*, int>)&Bridge.Iter;
+        t->Next = (nint)(delegate* unmanaged<nint, nint, nint, int, Val*, nuint, nuint*, int>)&Bridge.Next;
+        t->ToStr = (nint)(delegate* unmanaged<nint, nint, nint, Val*, int>)&Bridge.ToStr;
         return t;
     }
 }

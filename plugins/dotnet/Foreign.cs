@@ -13,7 +13,7 @@ namespace Ugly;
  * also a DynamicObject: through 'dynamic', f.m(x, name: y) invokes m with a
  * keyword argument, f(x) calls it, f.x and f[i] read members and elements.
  */
-public sealed unsafe class Foreign : DynamicObject {
+public sealed unsafe class Foreign : DynamicObject, IEnumerable<object?> {
     static readonly Dictionary<ulong, WeakReference<Foreign>> cache = new();
 
     internal readonly ulong Handle;
@@ -74,7 +74,43 @@ public sealed unsafe class Foreign : DynamicObject {
 
     public override bool Equals(object? o) => (o is Foreign f) && Ops.Same(Handle, f.Handle);
     public override int GetHashCode() => Handle.GetHashCode();
-    public override string ToString() => $"Ugly.Foreign({Handle})";
+
+    /** Its own language's string for it (Python's str(), Lua's tostring); Ugly.Foreign(n) for a value it has none for. */
+    public override string ToString() => Ops.ToStr(Handle) ?? $"Ugly.Foreign({Handle})";
+
+    /*
+     * foreach, and LINQ: the value's own iteration (contract §2), one value
+     * per step, so a Python generator runs only as far as the loop goes. A
+     * value its language doesn't iterate but that has elements (a Lua table)
+     * is walked by index.
+     */
+    public IEnumerator<object?> GetEnumerator() {
+        object? it = Ops.Iter(Handle, out bool refused);
+        if (refused) {
+            if ((Traits & Protocol.ELEMENTS) == 0) throw new NotSupportedException("ugly: the foreign value is not iterable");
+            return Elements();
+        }
+        return it switch {
+            Foreign f => Steps(f),
+            System.Collections.IEnumerator e => Native(e),     // its iterator is a C# one, come home
+            _ => throw new NotSupportedException("ugly: the foreign value's iterator isn't one"),
+        };
+    }
+
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+    static IEnumerator<object?> Steps(Foreign it) {
+        while (Ops.Next(it.Handle, out object? v)) yield return v;
+    }
+
+    IEnumerator<object?> Elements() {
+        long n = Length;
+        for (long i = 0; i < n; i++) yield return Ops.GetIndex(Handle, i);
+    }
+
+    static IEnumerator<object?> Native(System.Collections.IEnumerator e) {
+        while (e.MoveNext()) yield return e.Current;
+    }
 
     /* dynamic */
 
@@ -363,6 +399,44 @@ static unsafe class Ops {
         if (st != Status.Ok) Errors.Throw(ctx, st);
         Core.ugly_val_release(ctx, &name);
         return traits;
+    }
+
+    // Its iterator (a Foreign, or a C# enumerator come home); refused if its language doesn't iterate it.
+    public static object? Iter(ulong h, out bool refused) {
+        nint ctx = Ctx();
+        ulong it;
+        Status st = Core.ugly_iter(ctx, h, &it);
+        refused = (st == Status.NotCapable) || (st == Status.NotImplemented);
+        if (refused) return null;
+        if (st != Status.Ok) Errors.Throw(ctx, st);
+        Val v = new() { Kind = Kind.Handle, H = it };
+        return Result(ctx, Status.Ok, &v);
+    }
+
+    // One step of a foreign iterator: false at the end.
+    public static bool Next(ulong it, out object? value) {
+        nint ctx = Ctx();
+        Val o;
+        nuint got;
+        Status st = Core.ugly_next(ctx, it, Kind.Any, &o, 1, &got);
+        if (st != Status.Ok) Errors.Throw(ctx, st);
+        value = got == 1 ? Result(ctx, Status.Ok, &o) : null;
+        return got == 1;
+    }
+
+    // Its language's string for it, or null if it has none (or the handle is gone).
+    public static string? ToStr(ulong h) {
+        nint ctx = Ctx();
+        Val o;
+        Status st = Core.ugly_to_string(ctx, h, &o);
+        if (st == Status.Raised) Errors.Throw(ctx, st);
+        if (st != Status.Ok) return null;
+        if (o.Kind == Kind.Bytes) {
+            string s = o.Len == 0 ? "" : System.Text.Encoding.UTF8.GetString(o.Ptr, (int)o.Len);
+            Core.ugly_val_release(ctx, &o);
+            return s;
+        }
+        return (string?)Result(ctx, Status.Ok, &o);
     }
 
     public static bool Same(ulong a, ulong b) {

@@ -3,6 +3,7 @@
 // The module is the static class conformance; its public nested types are
 // members (Point is instantiable). Type names are simple type names:
 // counter, list. Exceptions are ConformanceError.
+using System.Collections;
 using System.Runtime.ExceptionServices;
 using Ugly;
 
@@ -17,6 +18,7 @@ public static class conformance {
         public long count;
         public readonly list items = new();
         public long inc() { count++; items.Add(count); return count; }
+        public override string ToString() => $"counter({count})";
         ~counter() { Interlocked.Increment(ref finalizedCount); }
     }
 
@@ -89,6 +91,55 @@ public static class conformance {
         if (e is Exception ex) ExceptionDispatchInfo.Throw(ex);
         throw new ForeignException(e);
     }
+
+    // Iteration (contract §2): 'yield return' methods, run only as far as asked.
+    static long producedCount;
+
+    public static IEnumerable<long> count_to(long n) {
+        producedCount = 0;
+        return Counting(n);
+    }
+
+    static IEnumerable<long> Counting(long n) {
+        for (long i = 0; i < n; i++) {
+            producedCount++;
+            yield return i;
+        }
+    }
+
+    public static IEnumerable<long> naturals() {
+        try {
+            for (long i = 0; ; i++) yield return i;
+        }
+        finally {     // disposed of when released early
+            Interlocked.Increment(ref finalizedCount);
+        }
+    }
+
+    public static IEnumerable<long> fail_after(long n) {
+        for (long i = 0; i < n; i++) yield return i;
+        throw new ConformanceError($"fail_after({n})");
+    }
+
+    public static long produced() => producedCount;
+
+    public static long sum_iter(IEnumerable xs) {
+        long total = 0;
+        foreach (object? x in xs) total += Convert.ToInt64(x);
+        return total;
+    }
+
+    public static List<object?> take_iter(IEnumerable xs, long n) {
+        var taken = new List<object?>();
+        if (n <= 0) return taken;
+        foreach (object? x in xs) {
+            taken.Add(x);
+            if (taken.Count >= n) break;
+        }
+        return taken;
+    }
+
+    public static string stringify(object? x) => x?.ToString() ?? "null";
 
     public static long finalized() {
         for (int round = 0; round < 3; round++) {
