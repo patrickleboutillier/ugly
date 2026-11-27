@@ -98,15 +98,23 @@ static PyObject *raise_ugly(ugly_ctx *ctx, ugly_status st){
 	}
 	ugly_release(ctx, home) ;
 
-	PyObject *exc = PyObject_CallFunction(ErrorType, "s", ugly_error_message(err)) ;
+	/*
+	 * Decoded leniently: the core makes an error's text valid UTF-8, and
+	 * failing to build this exception would lose the error it reports.
+	 */
+	PyObject *message = PyUnicode_DecodeUTF8(ugly_error_message(err), (Py_ssize_t)strlen(ugly_error_message(err)), "replace") ;
+	PyObject *exc = (message != NULL ? PyObject_CallFunctionObjArgs(ErrorType, message, NULL) : NULL) ;
 	if (exc == NULL){
+		Py_XDECREF(message) ;
 		ugly_error_free(err) ;
 		return NULL ;
 	}
 	PyObject *s ;
-	s = PyUnicode_FromString(ugly_error_type(err)) ; PyObject_SetAttrString(exc, "type", s) ; Py_XDECREF(s) ;
-	s = PyUnicode_FromString(ugly_error_message(err)) ; PyObject_SetAttrString(exc, "message", s) ; Py_XDECREF(s) ;
-	s = PyUnicode_FromString(ugly_error_language(err)) ; PyObject_SetAttrString(exc, "language", s) ; Py_XDECREF(s) ;
+	s = PyUnicode_DecodeUTF8(ugly_error_type(err), (Py_ssize_t)strlen(ugly_error_type(err)), "replace") ;
+	PyObject_SetAttrString(exc, "type", s) ; Py_XDECREF(s) ;
+	PyObject_SetAttrString(exc, "message", message) ; Py_DECREF(message) ;
+	s = PyUnicode_DecodeUTF8(ugly_error_language(err), (Py_ssize_t)strlen(ugly_error_language(err)), "replace") ;
+	PyObject_SetAttrString(exc, "language", s) ; Py_XDECREF(s) ;
 
 	ugly_handle h = UGLY_NO_HANDLE ;
 	PyObject *payload = NULL ;

@@ -292,6 +292,42 @@ other.start()
 other.join()
 ok(len(refused) == 1 and maker(3).x == 3, f"a Lua class called from a wrong thread first, then from its own: {refused}")
 
+# An error whose text isn't UTF-8, or is cut in the middle of a character, is still that error.
+def lua_error(code):
+    try:
+        ugly.eval("lua", code)
+    except ugly.Error as e:
+        return e
+    except Exception as e:
+        return e
+    return None
+e = lua_error("error('bad \\255 byte', 0)")
+ok(isinstance(e, ugly.Error) and e.language == "lua" and e.message == "bad \ufffd byte",
+    f"a Lua error whose message isn't UTF-8 is an ugly.Error: {e!r}")
+e = lua_error("error(string.rep('a', 510) .. 'éé', 0)")
+ok(isinstance(e, ugly.Error) and e.message.startswith("a" * 510) and e.message.isprintable(),
+    f"  ... and so is one cut in the middle of a character: {type(e).__name__}, {len(e.message) if hasattr(e, 'message') else 0} characters")
+if "perl5" in built:
+    try:
+        ugly.eval("perl5", 'die "caf\\xe9 broke\\n"')
+        ok(False, "a Perl die with a Latin-1 message keeps its text")
+    except ugly.Error as e:
+        ok(e.message == "café broke\n", f"a Perl die with a Latin-1 message keeps its text: {e.message!r}")
+    except Exception as e:
+        ok(False, f"a Perl die with a Latin-1 message keeps its text: {e!r}")
+else:
+    skip("a Perl die with a Latin-1 message", "perl5")
+if "js" in built:
+    try:
+        ugly.eval("js", 'throw new RangeError("xx" + "日".repeat(300))')
+        ok(False, "a long JS error is still a RangeError")
+    except ugly.Error as e:
+        ok(e.type == "RangeError" and e.message.startswith("xx日日"), f"a long JS error is still a RangeError: {e.type}")
+    except Exception as e:
+        ok(False, f"a long JS error is still a RangeError: {e!r}")
+else:
+    skip("a long JS error", "js")
+
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")
 ok(ugly.eval("lua", "return package.cpath").startswith("/configured/?.so;"), "  ... and cpath comes first in package.cpath")

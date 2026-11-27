@@ -373,6 +373,12 @@ This is essay point 4. An error has five parts:
 - a **message**;
 - a **payload**: a handle to the original exception object.
 
+An error's language, type and message are valid UTF-8, whatever they were
+made from: the core drops a character cut by the end of the text (a plugin's
+message buffer is finite) and puts U+FFFD for any other byte that isn't
+UTF-8 (a Lua error's bytes). A language with strict strings can then always
+build its exception, and never loses an error to its text.
+
 How an error propagates through three runtimes (Perl calls Lua, Lua calls
 Python, Python raises):
 

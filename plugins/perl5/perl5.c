@@ -509,7 +509,14 @@ static void croak_ugly(pTHX_ ugly_ctx *ctx, plrt *r, ugly_status st){
  */
 static void message_of(pTHX_ SV *sv, char *buf, size_t size){
 	if (! (SvROK(sv)&&SvOBJECT(SvRV(sv)))){
-		snprintf(buf, size, "%s", SvPV_nolen(sv)) ;
+		/* Text: a byte string that isn't UTF-8 already is Latin-1, as perl itself reads it. */
+		STRLEN len ;
+		const char *s = SvPV(sv, len) ;
+		if ((! SvUTF8(sv))&&(! valid_utf8((const unsigned char *)s, len))){
+			SV *copy = sv_mortalcopy(sv) ;     /* a variable: SvPVutf8_nolen evaluates its argument twice */
+			s = SvPVutf8_nolen(copy) ;
+		}
+		snprintf(buf, size, "%s", s) ;
 		return ;
 	}
 	ENTER ;

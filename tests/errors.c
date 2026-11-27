@@ -115,6 +115,18 @@ int main(void){
 		ugly_rt_delete(ctx, rt2) ;
 	}
 
+	/*
+	 * An error's text is valid UTF-8 whatever it was made from (§5): a
+	 * character cut by the end is dropped, any other byte that isn't UTF-8
+	 * is U+FFFD.
+	 */
+	ugly_raise(ctx, UGLY_ERR_TYPE, "T\xff", "caf\xe9 \xc3\xa9t\xc3\xa9 \xed\xa0\x80 \xe6\x97", UGLY_NO_HANDLE) ;
+	const ugly_error *bad = ugly_last_error(ctx) ;
+	ok((bad != NULL)&&(strcmp(ugly_error_type(bad), "T\xEF\xBF\xBD") == 0), "an error's type with a byte that isn't UTF-8: U+FFFD") ;
+	ok((bad != NULL)&&(strcmp(ugly_error_message(bad),
+		"caf\xEF\xBF\xBD \xc3\xa9t\xc3\xa9 \xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD ") == 0),
+		"  ... its message: valid characters kept, a surrogate replaced, a cut character dropped") ;
+
 	ugly_release(ctx, p1) ;
 	fx_teardown(&f) ;
 	return done_testing() ;

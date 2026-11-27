@@ -145,6 +145,11 @@ ugly_status ugly_error_status(const ugly_error *err) ;
 const char *ugly_error_language(const ugly_error *err) ;  /* "lua", "python", "perl5", "core", "c"... */
 const char *ugly_error_type(const ugly_error *err) ;      /* in that language's terms, e.g. "ZeroDivisionError" */
 const char *ugly_error_message(const ugly_error *err) ;
+/*
+ * The three are valid UTF-8, whatever the error was made from: the core
+ * drops a character that the end of the text cuts, and puts U+FFFD for any
+ * other byte that isn't UTF-8.
+ */
 
 /*
  * The original exception object, as an owned handle, or UGLY_NO_HANDLE.
