@@ -29,6 +29,7 @@ module Ugly.Marshal
 
 import Control.DeepSeq (force)
 import Control.Exception
+import Control.Concurrent (isCurrentThreadBound, rtsSupportsBoundThreads, runInBoundThread)
 import Control.Monad (forM, when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
@@ -48,8 +49,6 @@ import Foreign.Marshal.Alloc
 import Foreign.Ptr
 import Foreign.StablePtr
 import Foreign.Storable
-import qualified GHC.Foreign as GF
-import GHC.IO.Encoding (utf8)
 import System.IO.Unsafe (unsafeInterleaveIO, unsafePerformIO)
 import System.Mem.StableName
 
@@ -57,12 +56,16 @@ import Ugly.Native
 import Ugly.Types
 
 
--- Strings to and from C are UTF-8, whatever the locale.
+-- Strings to and from C are UTF-8, whatever the locale, and neither way
+-- throws: these carry error messages and names, on paths that mustn't fail.
+-- A lone surrogate (a Char that UTF-8 can't encode: GHC puts them in the
+-- FilePath of a file whose name isn't UTF-8, so in an IOException's message)
+-- goes out as U+FFFD, and bytes that aren't UTF-8 come in as U+FFFD.
 withUtf8 :: String -> (CString -> IO a) -> IO a
-withUtf8 = GF.withCString utf8
+withUtf8 s = B.useAsCString (TE.encodeUtf8 (T.pack s))
 
 peekUtf8 :: CString -> IO String
-peekUtf8 = GF.peekCString utf8
+peekUtf8 p = T.unpack . TE.decodeUtf8With TEE.lenientDecode <$> B.packCString p
 
 -- | Text that is valid Unicode. A Haskell 'Char' can be a lone surrogate,
 -- which UTF-8 can't encode (and Data.Text would silently replace).
@@ -151,13 +154,21 @@ guarded ctx rt act = do
 -- | An exception escaping to the core. A foreign error goes on unchanged
 -- (rule 7). Any other is UGLY_ERR_RAISED: its type's name, its message, and
 -- itself as the payload (a box).
+--
+-- It must not throw itself: an exception out of a foreign export ends the
+-- process. One that can't even be described (its value is itself an error,
+-- forced by newRef) is raised without a payload.
 raise :: Ptr Ctx -> Ptr Rt -> SomeException -> IO Status
-raise ctx rt e = case fromException e of
-  Just fe -> restore ctx rt fe
-  Nothing -> do
-    (b, ty, msg) <- exceptionBox e
-    (sp, key) <- newRef b
-    withUtf8 ty $ \t -> withUtf8 msg $ \m -> c_ugly_raise_native ctx rt t m sp key
+raise ctx rt e = described `catch` \(_ :: SomeException) ->
+  withCString "SomeException" $ \t -> withCString "an exception that can't be evaluated" $ \m ->
+    c_ugly_raise_native ctx rt t m nullPtr 0
+  where
+    described = case fromException e of
+      Just fe -> restore ctx rt fe
+      Nothing -> do
+        (b, ty, msg) <- exceptionBox e
+        (sp, key) <- newRef b
+        withUtf8 ty $ \t -> withUtf8 msg $ \m -> c_ugly_raise_native ctx rt t m sp key
 
 -- | An exception as the core sees it: a box of the SomeException itself
 -- (so that it comes home as itself), its type's name and its message. One
@@ -374,9 +385,20 @@ currentCtx = do
   when (outside /= 0) c_drain     -- the program's own code: run the releases queued for its runtime
   return ctx
 
+-- | Runs a call out on one OS thread from start to end. The ctx is the OS
+-- thread's (currentCtx), and the calls made with it are safe foreign calls:
+-- an unbound Haskell thread (forkIO) can be moved to another OS thread
+-- between two of them, and would then use a ctx that isn't its thread's. A
+-- bound thread (main, forkOS, any entry from another language) stays put;
+-- an unbound one makes its call out on a bound thread of its own.
+bound :: IO a -> IO a
+bound act = do
+  here <- isCurrentThreadBound
+  if here || not rtsSupportsBoundThreads then act else runInBoundThread act
+
 -- | An operation on a foreign value, with a result.
 operation :: Foreign -> (Ptr Ctx -> Handle -> Ptr Val -> IO Status) -> IO Value
-operation f act = do
+operation f act = bound $ do
   ctx <- currentCtx
   size <- fromIntegral <$> c_val_size
   withHandle f $ \h -> allocaBytes size $ \out -> do
@@ -415,12 +437,12 @@ withArgs ctx vs k = do
           (c_set_handle p h >> next) `finally` c_ugly_release ctx h
 
 foreignCall :: Foreign -> [Value] -> IO Value
-foreignCall f args = do
+foreignCall f args = bound $ do
   ctx <- currentCtx
   withArgs ctx args $ \argv n -> operation f $ \c h out -> c_ugly_call c h argv n kAny out
 
 foreignInvoke :: Foreign -> String -> [Value] -> IO Value
-foreignInvoke f name args = do
+foreignInvoke f name args = bound $ do
   ctx <- currentCtx
   withUtf8 name $ \m -> withArgs ctx args $ \argv n ->
     operation f $ \c h out -> c_ugly_invoke c h m argv n kAny out
@@ -432,7 +454,7 @@ foreignIndex :: Foreign -> Int -> IO Value
 foreignIndex f i = operation f $ \c h out -> c_ugly_get_index c h (fromIntegral i) kAny out
 
 foreignLength :: Foreign -> IO Int
-foreignLength f = do
+foreignLength f = bound $ do
   ctx <- currentCtx
   withHandle f $ \h -> alloca $ \np -> do
     st <- c_ugly_length ctx h np
@@ -440,7 +462,7 @@ foreignLength f = do
 
 -- | Its members' names.
 foreignNames :: Foreign -> IO [String]
-foreignNames f = do
+foreignNames f = bound $ do
   ctx <- currentCtx
   names <- withHandle f $ \h -> alloca $ \lp -> do
     st <- c_ugly_member_names ctx h lp
@@ -462,7 +484,7 @@ foreignType f = do
 
 -- | Its traits (describe).
 foreignTraits :: Foreign -> IO Word32
-foreignTraits f = do
+foreignTraits f = bound $ do
   ctx <- currentCtx
   size <- fromIntegral <$> c_val_size
   withHandle f $ \h -> alloca $ \tp -> allocaBytes size $ \out -> do
@@ -472,7 +494,7 @@ foreignTraits f = do
 
 -- | Its own iterator (ugly_iter): on an iterator, itself.
 foreignIter :: Foreign -> IO Foreign
-foreignIter f = do
+foreignIter f = bound $ do
   ctx <- currentCtx
   withHandle f $ \h -> alloca $ \hp -> do
     st <- c_ugly_iter ctx h hp
@@ -480,7 +502,7 @@ foreignIter f = do
 
 -- | One step of a foreign iterator (ugly_next, one value): Nothing at the end.
 foreignNext :: Foreign -> IO (Maybe Value)
-foreignNext f = do
+foreignNext f = bound $ do
   ctx <- currentCtx
   size <- fromIntegral <$> c_val_size
   withHandle f $ \h -> allocaBytes size $ \out -> alloca $ \gp -> do
@@ -535,7 +557,7 @@ runtimeOf ctx lang = withUtf8 lang $ \l -> alloca $ \rp -> do
 
 -- | A module of a language, by name: ugly.module(lang, name).
 moduleIn :: String -> String -> IO Value
-moduleIn lang name = do
+moduleIn lang name = bound $ do
   ctx <- currentCtx
   rt <- runtimeOf ctx lang
   h <- withUtf8 name $ \n -> alloca $ \hp -> do
@@ -545,7 +567,7 @@ moduleIn lang name = do
 
 -- | Code in a language: ugly.eval(lang, code).
 evalIn :: String -> String -> IO Value
-evalIn lang code = do
+evalIn lang code = bound $ do
   ctx <- currentCtx
   rt <- runtimeOf ctx lang
   size <- fromIntegral <$> c_val_size

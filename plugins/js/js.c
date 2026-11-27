@@ -169,7 +169,70 @@ static void run_jobs(jsrt *r){
 }
 
 
+/*
+ * Releases made from a QuickJS finalizer. A finalizer runs inside the
+ * engine's GC, where no JS may run, and releasing a foreign value can run
+ * anything: the value's destructor (a Perl DESTROY, a Lua __gc) may call
+ * back into JS, and a JS iterator it held is closed by calling its return()
+ * (js_release). So a finalizer only queues what it has to release, when
+ * something on this thread will run the queue (will_run > 0: inside one of
+ * our entries, during rt_delete, while the binding is attached), at a point
+ * where JS may run: a call out from JS (need_ctx), leave(), the end of
+ * rt_delete and of the binding's teardown. Otherwise no runtime of ours is
+ * left on this thread to re-enter, and it releases on the spot.
+ */
+typedef struct { ugly_handle h ; ugly_error *err ; } deferred ;
+static _Thread_local deferred *later ;
+static _Thread_local size_t nlater, later_cap ;
+static _Thread_local int will_run ;
+
+static void release_later(ugly_handle h, ugly_error *err){
+	if (will_run > 0){
+		if (nlater == later_cap){
+			size_t ncap = (later_cap ? later_cap * 2 : 16) ;
+			deferred *nl = realloc(later, ncap * sizeof(deferred)) ;
+			if (nl != NULL){
+				later = nl ;
+				later_cap = ncap ;
+			}
+		}
+		if (nlater < later_cap){
+			later[nlater].h = h ;
+			later[nlater++].err = err ;
+			return ;
+		}
+	}
+	ugly_release(ugly_current_ctx(), h) ;
+	ugly_error_free(err) ;
+}
+
+
+/* Runs the queue, and what running it queues. Keeps the ctx's error: a release is cleanup. */
+static void run_later(void){
+	if (nlater == 0){
+		return ;
+	}
+	ugly_ctx *ctx = ugly_current_ctx() ;
+	ugly_error *kept = (ctx != NULL ? ugly_take_error(ctx) : NULL) ;
+	while (nlater > 0){
+		deferred *batch = later ;
+		size_t n = nlater, i ;
+		later = NULL ;
+		nlater = later_cap = 0 ;
+		for (i = 0 ; i < n ; i++){
+			ugly_release(ctx, batch[i].h) ;
+			ugly_error_free(batch[i].err) ;
+		}
+		free(batch) ;
+	}
+	if (kept != NULL){
+		ugly_restore_error(ctx, kept) ;
+	}
+}
+
+
 static void enter(jsrt *r){
+	will_run++ ;
 	/*
 	 * QuickJS checks for stack overflow against the stack top it recorded
 	 * for this runtime. A host may run it on another thread, one at a time
@@ -184,9 +247,17 @@ static void enter(jsrt *r){
 
 /* Pending jobs run when the outermost call returns, unless the host owns the event loop (attached). */
 static ugly_status leave(jsrt *r, ugly_status st){
-	if ((--r->depth == 0)&&(r->owns)){
+	if ((--r->depth == 0)&&(r->owns)&&JS_IsJobPending(r->rt)){
+		/* A job may call out, which would erase the error of the call that just failed. */
+		ugly_ctx *ctx = ugly_current_ctx() ;
+		ugly_error *kept = (ctx != NULL ? ugly_take_error(ctx) : NULL) ;
 		run_jobs(r) ;
+		if (kept != NULL){
+			ugly_restore_error(ctx, kept) ;
+		}
 	}
+	run_later() ;
+	will_run-- ;
 	return st ;
 }
 
@@ -649,7 +720,9 @@ static ugly_ctx *need_ctx(JSContext *c){
 	ugly_ctx *ctx = ugly_current_ctx() ;
 	if (ctx == NULL){
 		JS_ThrowInternalError(c, "ugly: no ctx on this thread") ;
+		return NULL ;
 	}
+	run_later() ;     /* JS is calling out: what finalizers had to release goes now */
 	return ctx ;
 }
 
@@ -1042,7 +1115,7 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val){
 		if (registered(p->r)){
 			pc_remove(p->r, p->h, JS_VALUE_GET_PTR(val)) ;
 		}
-		ugly_release(ugly_current_ctx(), p->h) ;
+		release_later(p->h, NULL) ;
 		free(p) ;
 	}
 }
@@ -1052,7 +1125,7 @@ static void error_finalizer(JSRuntime *rt, JSValue val){
 	(void)rt ;
 	errbox *b = JS_GetOpaque(val, error_class) ;
 	if (b != NULL){
-		ugly_error_free(b->err) ;
+		release_later(UGLY_NO_HANDLE, b->err) ;
 		free(b) ;
 	}
 }
@@ -2160,14 +2233,17 @@ static ugly_status js_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 	(void)ctx ; (void)rt ;
 	jsrt *r = native ;
 	unregister(r) ;
+	will_run++ ;
 	JS_FreeValueRT(r->rt, r->error_proto) ;
 	JS_FreeValueRT(r->rt, r->array_buffer) ;
 	JS_FreeAtomRT(r->rt, r->to_string_tag) ;
 	JS_FreeAtomRT(r->rt, r->iterator) ;
 	if (r->owns){
 		JS_FreeContext(r->c) ;
-		JS_FreeRuntime(r->rt) ;     /* runs the remaining finalizers: proxies release their handles */
+		JS_FreeRuntime(r->rt) ;     /* runs the remaining finalizers: proxies queue their handles */
 	}
+	run_later() ;     /* the engine is gone (or the host's): nothing of this runtime can run */
+	will_run-- ;
 	size_t i ;
 	for (i = 0 ; i < sizeof(r->pcache) / sizeof(r->pcache[0]) ; i++){
 		while (r->pcache[i] != NULL){
@@ -2270,6 +2346,8 @@ static void binding_finalizer(JSRuntime *rt, JSValue val){
 			ugly_ctx_delete(b_ctx) ;     /* also deletes the runtimes ugly.module created */
 		}
 		b_rt = NULL ;
+		run_later() ;     /* what this context's proxies queued: no runtime is left for a release to enter */
+		will_run-- ;
 		tearing_down = 0 ;
 	}
 }
@@ -2296,6 +2374,7 @@ JSModuleDef *js_init_module(JSContext *c, const char *module_name){
 			JS_ThrowInternalError(c, "ugly: can't attach: %s", e ? ugly_error_message(e) : "?") ;
 			return NULL ;
 		}
+		will_run++ ;     /* until the teardown: finalizers queue their releases (release_later) */
 		JSRuntime *rt = JS_GetRuntime(c) ;
 		JS_NewClassID(&binding_class) ;
 		JS_NewClass(rt, binding_class, &binding_def) ;

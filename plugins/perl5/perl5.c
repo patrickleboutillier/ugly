@@ -58,6 +58,8 @@ typedef struct plrt {
 	PerlInterpreter *perl ;
 	int owns ;                   /* created by rt_new; attached ones belong to the host */
 	pcache_entry *pcache[64] ;
+	struct guard *guard ;        /* the entry running under eval (protect), innermost */
+	CV *guard_cv ;               /* Ugly::_guard, which runs it */
 } plrt ;
 
 static plrt *runtimes ;
@@ -88,6 +90,10 @@ static int registered(plrt *r){
 #define ENTER_PERL(r) PerlInterpreter *saved_perl_ = PERL_GET_CONTEXT ; PerlInterpreter *my_perl = (r)->perl ; \
 	PERL_SET_CONTEXT(my_perl) ; ENTER ; SAVETMPS
 #define LEAVE_PERL() FREETMPS ; LEAVE ; PERL_SET_CONTEXT(saved_perl_)
+
+
+/* $@ after G_EVAL: an exception object is an error whatever its bool (or "") overload says, or does. */
+#define DIED (SvROK(ERRSV)||SvTRUE(ERRSV))
 
 
 /* ---------------------------------------------------------------- */
@@ -467,6 +473,38 @@ static void croak_ugly(pTHX_ ugly_ctx *ctx, plrt *r, ugly_status st){
 }
 
 
+/*
+ * A value's string, for an error message. An object's goes through Perl
+ * under eval, since an overloaded "" may die; then it is its class's name.
+ */
+static void message_of(pTHX_ SV *sv, char *buf, size_t size){
+	if (! (SvROK(sv)&&SvOBJECT(SvRV(sv)))){
+		snprintf(buf, size, "%s", SvPV_nolen(sv)) ;
+		return ;
+	}
+	ENTER ;
+	SAVETMPS ;
+	dSP ;
+	PUSHMARK(SP) ;
+	XPUSHs(sv) ;
+	PUTBACK ;
+	int count = call_pv("Ugly::_str", G_SCALAR | G_EVAL) ;
+	SPAGAIN ;
+	if (DIED){
+		SP -= count ;
+		sv_setsv(ERRSV, &PL_sv_undef) ;
+		snprintf(buf, size, "%s", HvNAME(SvSTASH(SvRV(sv)))) ;
+	}
+	else {
+		SV *s = POPs ;
+		snprintf(buf, size, "%s", SvPV_nolen(s)) ;
+	}
+	PUTBACK ;
+	FREETMPS ;
+	LEAVE ;
+}
+
+
 /* $@ after a failed call, escaping to the core (rule 7). Clears it. */
 static ugly_status perl_failure(pTHX_ ugly_ctx *ctx, plrt *r){
 	SV *e = sv_2mortal(newSVsv(ERRSV)) ;
@@ -495,12 +533,12 @@ static ugly_status perl_failure(pTHX_ ugly_ctx *ctx, plrt *r){
 		if (SvTYPE(SvRV(e)) == SVt_PVHV){
 			SV **m = hv_fetchs((HV *)SvRV(e), "message", 0) ;
 			if ((m != NULL)&&(SvOK(*m))){
-				snprintf(message, sizeof(message), "%s", SvPV_nolen(*m)) ;
+				message_of(aTHX_ *m, message, sizeof(message)) ;
 			}
 		}
 	}
 	if (message[0] == '\0'){
-		snprintf(message, sizeof(message), "%s", SvPV_nolen(e)) ;
+		message_of(aTHX_ e, message, sizeof(message)) ;
 	}
 	return ugly_raise_native(ctx, r->urt, type, message, newSVsv(e), identity_of(aTHX_ e)) ;
 }
@@ -521,6 +559,16 @@ static ugly_status perl_failure(pTHX_ ugly_ctx *ctx, plrt *r){
  * they ask for: list (the default, collapsed as decision 9 says), scalar or
  * void. A hint is refused.
  */
+static ugly_status to_val_guarded(pTHX_ ugly_ctx *ctx, plrt *r, SV *sv, ugly_kind want, ugly_val *out) ;
+
+/*
+ * Whether using a value can run Perl code, which may die: it's tied, or
+ * (when a primitive is wanted of it) its class overloads the conversions.
+ */
+static int runs_code(SV *sv, int converting){
+	return SvMAGICAL(sv)||(SvROK(sv)&&(SvMAGICAL(SvRV(sv))||(converting && SvAMAGIC(sv)))) ;
+}
+
 static ugly_status call_perl(pTHX_ ugly_ctx *ctx, plrt *r, SV *fn, const char *method, SV *invocant,
 	const ugly_val *args, size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
 
@@ -582,7 +630,7 @@ static ugly_status call_perl(pTHX_ ugly_ctx *ctx, plrt *r, SV *fn, const char *m
 	free(svs) ;
 	int count = (method != NULL ? call_method(method, gimme | G_EVAL) : call_sv(fn, gimme | G_EVAL)) ;
 	SPAGAIN ;
-	if (SvTRUE(ERRSV)){
+	if (DIED){
 		SP -= count ;
 		PUTBACK ;
 		st = perl_failure(aTHX_ ctx, r) ;
@@ -605,7 +653,9 @@ static ugly_status call_perl(pTHX_ ugly_ctx *ctx, plrt *r, SV *fn, const char *m
 			result = sv_2mortal(newRV_noinc((SV *)av)) ;
 		}
 		PUTBACK ;
-		st = to_val(aTHX_ ctx, r, result, want, out) ;
+		/* The call ran under eval; converting its result doesn't, unless it has to. */
+		st = (runs_code(result, (want != UGLY_ANY)&&(want != UGLY_HANDLE)) ? to_val_guarded(aTHX_ ctx, r, result, want, out)
+			: to_val(aTHX_ ctx, r, result, want, out)) ;
 	}
 	FREETMPS ;
 	LEAVE ;
@@ -947,19 +997,30 @@ XS(xs_proxy_keys){
 	if (ugly_member_names(ctx, PROXY_HANDLE(ST(0)), &names) != UGLY_OK){
 		XSRETURN_EMPTY ;
 	}
-	int64_t n = 0, i ;
+	/*
+	 * The names first, then the stack: a call through the core can come back
+	 * into this interpreter (a Python __dir__ calling a Perl sub) and move
+	 * perl's stack, which leaves our copy of its pointer behind.
+	 */
+	int64_t n = 0, i, got = 0 ;
 	ugly_length(ctx, names, &n) ;
-	SP -= items ;
-	for (i = 0 ; i < n ; i++){
+	SV **keys = calloc((size_t)(n > 0 ? n : 0) + 1, sizeof(SV *)) ;
+	for (i = 0 ; (keys != NULL)&&(i < n) ; i++){
 		ugly_val s ;
 		if (ugly_get_index(ctx, names, i, UGLY_STRING, &s) == UGLY_OK){
-			SV *k = newSVpvn(s.as.str.ptr, s.as.str.len) ;
-			SvUTF8_on(k) ;
-			XPUSHs(sv_2mortal(k)) ;
+			keys[got] = sv_2mortal(newSVpvn(s.as.str.ptr, s.as.str.len)) ;
+			SvUTF8_on(keys[got++]) ;
 			ugly_val_release(ctx, &s) ;
 		}
 	}
 	ugly_release(ctx, names) ;
+	SPAGAIN ;
+	SP -= items ;
+	EXTEND(SP, got) ;
+	for (i = 0 ; i < got ; i++){
+		PUSHs(keys[i]) ;
+	}
+	free(keys) ;
 	PUTBACK ;
 }
 
@@ -1176,6 +1237,8 @@ XS(xs_eval){
 
 EXTERN_C void boot_DynaLoader(pTHX_ CV *cv) ;
 
+static XS(xs_guard) ;     /* below, with the entries it runs */
+
 static void register_xs(pTHX){
 	const char *file = __FILE__ ;
 	newXS("Ugly::Proxy::_call", xs_proxy_call, file) ;
@@ -1199,6 +1262,7 @@ static void register_xs(pTHX){
 	newXS("Ugly::module", xs_module, file) ;
 	newXS("Ugly::eval", xs_eval, file) ;
 	newXS("Ugly::_configure", xs_configure, file) ;
+	newXS("Ugly::_guard", xs_guard, file) ;
 }
 
 
@@ -1211,7 +1275,7 @@ static void xs_init(pTHX){
 /* Defines the helper packages (once per interpreter). 0 on success. */
 static int load_helper(pTHX){
 	eval_pv(helper_pm, FALSE) ;
-	return (SvTRUE(ERRSV) ? -1 : 0) ;
+	return (DIED ? -1 : 0) ;
 }
 
 
@@ -1273,7 +1337,7 @@ static ugly_status pl_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_
 	SV *code = sv_2mortal(newSVpvf("require %s ; 1", name)) ;
 	eval_sv(code, G_SCALAR | G_DISCARD) ;
 	ugly_status st ;
-	if (SvTRUE(ERRSV)){
+	if (DIED){
 		st = perl_failure(aTHX_ ctx, r) ;
 	}
 	else {
@@ -1304,7 +1368,7 @@ static ugly_status pl_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t 
 	int count = eval_sv(sv_2mortal(newSVpvn(code, len)), G_LIST) ;
 	dSP ;
 	ugly_status st ;
-	if (SvTRUE(ERRSV)){
+	if (DIED){
 		SP -= count ;
 		PUTBACK ;
 		st = perl_failure(aTHX_ ctx, r) ;
@@ -1708,29 +1772,14 @@ static ugly_status new_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_v
 }
 
 
-static ugly_status pl_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_kind want, ugly_val *out){
-	return call_entry(ctx, rt, ref, args, nargs, NULL, want, out) ;
-}
-
 static ugly_status pl_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
 	const ugly_opts *o, ugly_kind want, ugly_val *out){
 	return call_entry(ctx, rt, ref, args, nargs, o, want, out) ;
 }
 
-static ugly_status pl_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
-	size_t nargs, ugly_kind want, ugly_val *out){
-	return invoke_entry(ctx, rt, ref, method, args, nargs, NULL, want, out) ;
-}
-
 static ugly_status pl_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
 	size_t nargs, const ugly_opts *o, ugly_kind want, ugly_val *out){
 	return invoke_entry(ctx, rt, ref, method, args, nargs, o, want, out) ;
-}
-
-static ugly_status pl_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
-	ugly_handle *out){
-	return new_entry(ctx, rt, ref, args, nargs, NULL, out) ;
 }
 
 static ugly_status pl_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
@@ -1788,7 +1837,7 @@ static ugly_status pl_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want
 		int count = call_method("next", G_LIST | G_EVAL) ;
 		SPAGAIN ;
 		int end = 0 ;
-		if (SvTRUE(ERRSV)){
+		if (DIED){
 			SP -= count ;
 			PUTBACK ;
 			st = perl_failure(aTHX_ ctx, r) ;
@@ -1846,7 +1895,7 @@ static ugly_status pl_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val 
 		PUTBACK ;
 		int count = call_pv("Ugly::_str", G_SCALAR | G_EVAL) ;
 		SPAGAIN ;
-		if (SvTRUE(ERRSV)){
+		if (DIED){
 			SP -= count ;
 			PUTBACK ;
 			st = perl_failure(aTHX_ ctx, r) ;
@@ -2013,6 +2062,246 @@ static ugly_status pl_rt_delete(ugly_ctx *ctx, ugly_rt *rt, void *native){
 }
 
 
+/* ---------------------------------------------------------------- */
+/* Every entry runs under eval                                      */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Perl's API croaks: a store into a restricted hash or a read-only array, a
+ * tied FETCH or STORE that dies, an overloaded bool or "". Outside any eval
+ * that ends the process (an embedded perl) or jumps over the core's frames
+ * to the host's eval (the binding). So each entry point below runs its
+ * pl_* function through Ugly::_guard, an XS sub called with G_EVAL: a croak
+ * comes back as $@, and becomes the entry's error like any die (rule 7).
+ * What the entry had allocated in C at that point is lost.
+ *
+ * Calls are the exception, since they are the hot path and call_perl runs
+ * the callee under eval already (the guard doubled a call's cost,
+ * tests/bench.c): call, invoke and new go through the guard only when their
+ * target can run code just by being used (runs_code: it's tied), and
+ * call_perl converts a result under the guard when that can (tied, or an
+ * overloaded object asked for as a primitive).
+ */
+typedef struct guard {
+	ugly_status (*run)(struct guard *g) ;
+	ugly_status st ;
+	ugly_ctx *ctx ;
+	ugly_rt *rt ;
+	void *ref ;
+	const char *name ;
+	size_t len ;
+	ugly_kind want ;
+	ugly_val *out ;
+	ugly_val v ;
+	int64_t i, j ;
+	int64_t *length ;
+	const ugly_val *args ;
+	size_t n ;
+	const ugly_opts *opts ;
+	uint32_t *traits ;
+	ugly_handle *h ;
+	size_t *got ;
+} guard ;
+
+
+static XS(xs_guard){
+	dXSARGS ;
+	PERL_UNUSED_VAR(items) ;
+	plrt *r = R(aTHX) ;
+	if ((r != NULL)&&(r->guard != NULL)){
+		guard *g = r->guard ;
+		g->st = g->run(g) ;
+	}
+	XSRETURN_EMPTY ;
+}
+
+
+static ugly_status protect(guard *g){
+	plrt *r = RT(g->rt) ;
+	PerlInterpreter *saved = PERL_GET_CONTEXT ;
+	PerlInterpreter *my_perl = r->perl ;
+	PERL_SET_CONTEXT(my_perl) ;
+	if (r->guard_cv == NULL){
+		r->guard_cv = get_cv("Ugly::_guard", 0) ;
+	}
+	guard *outer = r->guard ;
+	r->guard = g ;
+	g->st = UGLY_ERR_INTERNAL ;
+	ENTER ;
+	SAVETMPS ;
+	dSP ;
+	PUSHMARK(SP) ;
+	PUTBACK ;
+	call_sv((SV *)r->guard_cv, G_EVAL | G_DISCARD | G_NOARGS | G_VOID) ;
+	r->guard = outer ;
+	ugly_status st = g->st ;
+	if (DIED){     /* a ref is an error whatever its bool overload says */
+		st = perl_failure(aTHX_ g->ctx, r) ;
+	}
+	FREETMPS ;
+	LEAVE ;
+	PERL_SET_CONTEXT(saved) ;
+	return st ;
+}
+
+#define GUARD(g_, run_, ctx_, rt_, ref_) guard g_ ; memset(&g_, 0, sizeof(g_)) ; g_.run = run_ ; g_.ctx = ctx_ ; g_.rt = rt_ ; g_.ref = ref_
+
+static int target_runs_code(ugly_rt *rt, void *ref){
+	(void)rt ;
+	return runs_code((SV *)ref, 0) ;
+}
+
+static ugly_status run_to_val(guard *g){
+	return to_val(aTHX_ g->ctx, RT(g->rt), (SV *)g->ref, g->want, g->out) ;     /* protect made the interpreter current */
+}
+static ugly_status to_val_guarded(pTHX_ ugly_ctx *ctx, plrt *r, SV *sv, ugly_kind want, ugly_val *out){
+	GUARD(g, run_to_val, ctx, r->urt, sv) ; g.want = want ; g.out = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_import(guard *g){ return pl_import(g->ctx, g->rt, g->name, g->out) ; }
+static ugly_status g_import(ugly_ctx *ctx, ugly_rt *rt, const char *name, ugly_val *out){
+	GUARD(g, run_import, ctx, rt, NULL) ; g.name = name ; g.out = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_globals(guard *g){ return pl_globals(g->ctx, g->rt, g->out) ; }
+static ugly_status g_globals(ugly_ctx *ctx, ugly_rt *rt, ugly_val *out){
+	GUARD(g, run_globals, ctx, rt, NULL) ; g.out = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_eval(guard *g){ return pl_eval(g->ctx, g->rt, g->name, g->len, g->want, g->out) ; }
+static ugly_status g_eval(ugly_ctx *ctx, ugly_rt *rt, const char *code, size_t len, ugly_kind want, ugly_val *out){
+	GUARD(g, run_eval, ctx, rt, NULL) ; g.name = code ; g.len = len ; g.want = want ; g.out = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_describe(guard *g){ return pl_describe(g->ctx, g->rt, g->ref, g->traits, g->out) ; }
+static ugly_status g_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
+	GUARD(g, run_describe, ctx, rt, ref) ; g.traits = traits ; g.out = type_name ;
+	return protect(&g) ;
+}
+
+static ugly_status run_get_member(guard *g){ return pl_get_member(g->ctx, g->rt, g->ref, g->name, g->want, g->out) ; }
+static ugly_status g_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_kind want, ugly_val *out){
+	GUARD(g, run_get_member, ctx, rt, ref) ; g.name = name ; g.want = want ; g.out = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_set_member(guard *g){ return pl_set_member(g->ctx, g->rt, g->ref, g->name, g->v) ; }
+static ugly_status g_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name, ugly_val v){
+	GUARD(g, run_set_member, ctx, rt, ref) ; g.name = name ; g.v = v ;
+	return protect(&g) ;
+}
+
+static ugly_status run_delete_member(guard *g){ return pl_delete_member(g->ctx, g->rt, g->ref, g->name) ; }
+static ugly_status g_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *name){
+	GUARD(g, run_delete_member, ctx, rt, ref) ; g.name = name ;
+	return protect(&g) ;
+}
+
+static ugly_status run_member_names(guard *g){ return pl_member_names(g->ctx, g->rt, g->ref, g->h) ; }
+static ugly_status g_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	GUARD(g, run_member_names, ctx, rt, ref) ; g.h = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_length(guard *g){ return pl_length(g->ctx, g->rt, g->ref, g->length) ; }
+static ugly_status g_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
+	GUARD(g, run_length, ctx, rt, ref) ; g.length = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_get_index(guard *g){ return pl_get_index(g->ctx, g->rt, g->ref, g->i, g->want, g->out) ; }
+static ugly_status g_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_kind want, ugly_val *out){
+	GUARD(g, run_get_index, ctx, rt, ref) ; g.i = i ; g.want = want ; g.out = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_set_index(guard *g){ return pl_set_index(g->ctx, g->rt, g->ref, g->i, g->v) ; }
+static ugly_status g_set_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i, ugly_val v){
+	GUARD(g, run_set_index, ctx, rt, ref) ; g.i = i ; g.v = v ;
+	return protect(&g) ;
+}
+
+static ugly_status run_splice(guard *g){ return pl_splice(g->ctx, g->rt, g->ref, g->i, g->j, g->args, g->n) ; }
+static ugly_status g_splice(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t offset, int64_t remove,
+	const ugly_val *insert, size_t n){
+
+	GUARD(g, run_splice, ctx, rt, ref) ; g.i = offset ; g.j = remove ; g.args = insert ; g.n = n ;
+	return protect(&g) ;
+}
+
+static ugly_status run_call(guard *g){ return pl_call_opts(g->ctx, g->rt, g->ref, g->args, g->n, g->opts, g->want, g->out) ; }
+static ugly_status g_call_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *opts, ugly_kind want, ugly_val *out){
+
+	if (! target_runs_code(rt, ref)){
+		return pl_call_opts(ctx, rt, ref, args, nargs, opts, want, out) ;
+	}
+	GUARD(g, run_call, ctx, rt, ref) ; g.args = args ; g.n = nargs ; g.opts = opts ; g.want = want ; g.out = out ;
+	return protect(&g) ;
+}
+static ugly_status g_call(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_kind want, ugly_val *out){
+
+	return g_call_opts(ctx, rt, ref, args, nargs, NULL, want, out) ;
+}
+
+static ugly_status run_invoke(guard *g){
+	return pl_invoke_opts(g->ctx, g->rt, g->ref, g->name, g->args, g->n, g->opts, g->want, g->out) ;
+}
+static ugly_status g_invoke_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, const ugly_opts *opts, ugly_kind want, ugly_val *out){
+
+	if (! target_runs_code(rt, ref)){
+		return pl_invoke_opts(ctx, rt, ref, method, args, nargs, opts, want, out) ;
+	}
+	GUARD(g, run_invoke, ctx, rt, ref) ; g.name = method ; g.args = args ; g.n = nargs ; g.opts = opts ; g.want = want ; g.out = out ;
+	return protect(&g) ;
+}
+static ugly_status g_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *method, const ugly_val *args,
+	size_t nargs, ugly_kind want, ugly_val *out){
+
+	return g_invoke_opts(ctx, rt, ref, method, args, nargs, NULL, want, out) ;
+}
+
+static ugly_status run_new(guard *g){ return pl_new_opts(g->ctx, g->rt, g->ref, g->args, g->n, g->opts, g->h) ; }
+static ugly_status g_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	const ugly_opts *opts, ugly_handle *out){
+
+	if (! target_runs_code(rt, ref)){
+		return pl_new_opts(ctx, rt, ref, args, nargs, opts, out) ;
+	}
+	GUARD(g, run_new, ctx, rt, ref) ; g.args = args ; g.n = nargs ; g.opts = opts ; g.h = out ;
+	return protect(&g) ;
+}
+static ugly_status g_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly_val *args, size_t nargs,
+	ugly_handle *out){
+
+	return g_new_opts(ctx, rt, ref, args, nargs, NULL, out) ;
+}
+
+static ugly_status run_iter(guard *g){ return pl_iter(g->ctx, g->rt, g->ref, g->h) ; }
+static ugly_status g_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	GUARD(g, run_iter, ctx, rt, ref) ; g.h = out ;
+	return protect(&g) ;
+}
+
+static ugly_status run_next(guard *g){ return pl_next(g->ctx, g->rt, g->ref, g->want, g->out, g->n, g->got) ; }
+static ugly_status g_next(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max, size_t *got){
+	GUARD(g, run_next, ctx, rt, ref) ; g.want = want ; g.out = out ; g.n = max ; g.got = got ;
+	return protect(&g) ;
+}
+
+static ugly_status run_to_string(guard *g){ return pl_to_string(g->ctx, g->rt, g->ref, g->out) ; }
+static ugly_status g_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	GUARD(g, run_to_string, ctx, rt, ref) ; g.out = out ;
+	return protect(&g) ;
+}
+
+
 static const ugly_plugin plugin = {
 	.abi = UGLY_PLUGIN_ABI,
 	.caps = UGLY_CAP_MULTI_RUNTIME | UGLY_CAP_EVAL | UGLY_CAP_ATTACH,
@@ -2022,28 +2311,28 @@ static const ugly_plugin plugin = {
 	.options = (const char *const []){ "path", NULL },
 	.rt_attach = pl_rt_attach,
 	.rt_delete = pl_rt_delete,
-	.import = pl_import,
-	.globals = pl_globals,
-	.eval = pl_eval,
-	.describe = pl_describe,
-	.get_member = pl_get_member,
-	.set_member = pl_set_member,
-	.member_names = pl_member_names,
-	.length = pl_length,
-	.get_index = pl_get_index,
-	.set_index = pl_set_index,
-	.call_opts = pl_call_opts,
-	.invoke_opts = pl_invoke_opts,
-	.new_opts = pl_new_opts,
-	.delete_member = pl_delete_member,
-	.splice = pl_splice,
-	.call = pl_call,
-	.invoke = pl_invoke,
-	.new_instance = pl_new_instance,
+	.import = g_import,
+	.globals = g_globals,
+	.eval = g_eval,
+	.describe = g_describe,
+	.get_member = g_get_member,
+	.set_member = g_set_member,
+	.member_names = g_member_names,
+	.length = g_length,
+	.get_index = g_get_index,
+	.set_index = g_set_index,
+	.call_opts = g_call_opts,
+	.invoke_opts = g_invoke_opts,
+	.new_opts = g_new_opts,
+	.delete_member = g_delete_member,
+	.splice = g_splice,
+	.call = g_call,
+	.invoke = g_invoke,
+	.new_instance = g_new_instance,
 	.release = pl_release,
-	.iter = pl_iter,
-	.next = pl_next,
-	.to_string = pl_to_string,
+	.iter = g_iter,
+	.next = g_next,
+	.to_string = g_to_string,
 } ;
 
 

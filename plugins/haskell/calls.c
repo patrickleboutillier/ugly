@@ -5,8 +5,52 @@
  * invoke with the receiver last, and overloads chosen by the arguments.
  */
 #include "tap.h"
+#include <pthread.h>
 
 static ugly_handle mod ;
+
+
+/*
+ * Re-entry on a small stack: apply(cb, n) calls cb, which calls apply
+ * again, on a thread with 1 MB (a JVM thread's default). It must end with
+ * Haskell's StackOverflow, not with the stack.
+ */
+static _Thread_local ugly_handle deep_apply, deep_self ;
+static ugly_status deep_st ;
+static char deep_type[64] ;
+static int deepest ;
+
+static ugly_status deeper(ugly_ctx *c, void *data, const ugly_val *args, size_t nargs, ugly_kind want, ugly_val *out){
+	(void)data ; (void)nargs ;
+	deepest = (int)args[0].as.i ;
+	ugly_val a[2] = { ugly_hval(deep_self), ugly_int(args[0].as.i + 1) } ;
+	return ugly_call(c, deep_apply, a, 2, want, out) ;
+}
+
+static void *small_stack(void *arg){
+	(void)arg ;
+	ugly_ctx *c = NULL ;
+	ugly_rt *rt = NULL ;
+	ugly_handle m = UGLY_NO_HANDLE ;
+	ugly_val v = ugly_null(), out = ugly_null() ;
+	deep_st = UGLY_ERR_INTERNAL ;
+	if ((ugly_ctx_new(&c) == UGLY_OK)&&(ugly_rt_get(c, "haskell", &rt) == UGLY_OK)
+		&&(ugly_rt_import(c, rt, "Smoke", &m) == UGLY_OK)
+		&&(ugly_get_member(c, m, "apply", UGLY_HANDLE, &v) == UGLY_OK)
+		&&(ugly_callable_new(c, deeper, NULL, NULL, &deep_self) == UGLY_OK)){
+		deep_apply = v.as.h ;
+		ugly_val a[2] = { ugly_hval(deep_self), ugly_int(1) } ;
+		deep_st = ugly_call(c, deep_apply, a, 2, UGLY_INT, &out) ;
+		const ugly_error *e = ugly_last_error(c) ;
+		snprintf(deep_type, sizeof(deep_type), "%s", e != NULL ? ugly_error_type(e) : "") ;
+		ugly_val_release(c, &out) ;
+		ugly_release(c, deep_self) ;
+		ugly_release(c, deep_apply) ;
+	}
+	ugly_release(c, m) ;
+	ugly_ctx_delete(c) ;
+	return NULL ;
+}
 
 /* The member 'name' of Smoke, as a handle (owned). */
 static ugly_handle fn(const char *name){
@@ -147,6 +191,32 @@ int main(void){
 	ok(error_is(call("narrow", (ugly_val[]){ ugly_int(5) }, 1, UGLY_ANY, &v), UGLY_ERR_TYPE, "TypeError",
 		"ambiguous"), "narrow 5: TYPE, ambiguous") ;
 	ugly_release(ctx, f) ;
+
+	/* Errors that are hard to report are still errors, not the end of the process. */
+	ok(error_is(call("unsayable", (ugly_val[]){ ugly_int(1) }, 1, UGLY_ANY, &v), UGLY_ERR_RAISED, "ErrorCall",
+		"bad file name: \xEF\xBF\xBD"), "an error whose message UTF-8 can't encode: RAISED, with U+FFFD") ;
+	ok(error_is(call("unthrowable", (ugly_val[]){ ugly_int(1) }, 1, UGLY_ANY, &v), UGLY_ERR_RAISED, "SomeException",
+		"can't be evaluated"), "an exception that is itself an error: RAISED, without a payload") ;
+	ok((call("add", (ugly_val[]){ ugly_int(2), ugly_int(3) }, 2, UGLY_ANY, &v) == UGLY_OK)&&is_int(v, 5),
+		"  ... and Haskell still runs") ;
+
+	/* An immutable list may be infinite: set_index refuses before asking for its length. */
+	ugly_val nat = ugly_null() ;
+	ugly_get_member(ctx, mod, "naturals", UGLY_HANDLE, &nat) ;
+	ok(error_is(ugly_set_index(ctx, nat.as.h, 0, ugly_int(1)), UGLY_ERR_NOT_CAPABLE, "TypeError", "immutable"),
+		"set_index on an infinite list: NOT_CAPABLE, at once") ;
+	ugly_val_release(ctx, &nat) ;
+
+	pthread_attr_t attr ;
+	pthread_t t ;
+	pthread_attr_init(&attr) ;
+	pthread_attr_setstacksize(&attr, 1024 * 1024) ;
+	pthread_create(&t, &attr, small_stack, NULL) ;
+	pthread_join(t, NULL) ;
+	pthread_attr_destroy(&attr) ;
+	printf("# status %d, %s, at depth %d\n", deep_st, deep_type, deepest) ;
+	ok((deep_st == UGLY_ERR_RAISED)&&(strcmp(deep_type, "StackOverflow") == 0)&&(deepest > 5),
+		"re-entry on a 1 MB stack ends with StackOverflow") ;
 
 	ugly_release(ctx, mod) ;
 	ok(ugly_rt_delete(ctx, rt) == UGLY_OK, "runtime deleted") ;

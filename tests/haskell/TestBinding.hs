@@ -7,7 +7,9 @@
 module Main (main) where
 
 import Control.Exception
-import Control.Monad (forM_, unless)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar
+import Control.Monad (forM, forM_, unless)
 import Data.IORef
 import Foreign.C.Types (CInt (..))
 import System.Environment (lookupEnv)
@@ -112,6 +114,19 @@ main = do
       Ugly.callValue_ ignore [1]
       now <- liveRefs
       ok tap (now <= held + 1) ("100 functions passed to Python are released: " ++ show (now - held) ++ " still held")
+
+      -- Unbound threads (forkIO) change OS thread between foreign calls: each call out
+      -- must still run, start to end, on one thread and its ctx.
+      dumps <- Ugly.get json "dumps"
+      done <- newEmptyMVar
+      calls <- maybe 20000 read <$> lookupEnv "UGLY_TEST_FORK_CALLS"
+      forM_ [1 .. 4 :: Int] $ \t -> forkIO $ do
+        outcome <- try (forM [1 .. calls :: Int] $ \i -> do
+          text <- Ugly.callValue dumps [Ugly.toValue (t * 10000 + i)]
+          return (text == show (t * 10000 + i)))
+        putMVar done (either (\(e :: SomeException) -> Left (show e)) (Right . and) outcome)
+      results <- mapM (const (takeMVar done)) [1 .. 4 :: Int]
+      ok tap (all (== Right True) results) ("4 forkIO threads, " ++ show calls ++ " calls to Python each: " ++ show (filter (/= Right True) results))
 
       own <- Ugly.eval "python" "__import__('ugly').module('haskell', 'TestBinding').double(21)"
       ok tap (own == (42 :: Int)) "Python uses this program's own export module (found in the process)"

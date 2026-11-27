@@ -259,7 +259,14 @@ that's refused inside Haskell code (`fromValue`, a callback's result) is a
 Any thread can call into Haskell (`UGLY_CAP_ANY_THREAD`), and every call
 from C runs as a bound thread on its caller's OS thread. Haskell code that
 uses a runtime bound to a thread (Lua's) must call it from that thread: a
-`forkIO` thread gets `UGLY_ERR_WRONG_THREAD`. Foreign values are released
+`forkIO` thread gets `UGLY_ERR_WRONG_THREAD`.
+
+A call out runs on one OS thread from start to end. A bound thread (`main`,
+`forkOS`, any call from another language) makes it where it is. An unbound
+one (`forkIO`) can be moved between OS threads at any foreign call, so each
+of its calls out runs on a bound thread made for it: correct, and some tens
+of microseconds dearer. A thread that calls out in a loop should be a `forkOS`
+thread, or wrap the loop in `runInBoundThread`. Foreign values are released
 by finalizers, on the RTS's finalizer thread; the core defers each release
 to the value's home thread.
 
@@ -308,8 +315,10 @@ changes with every GHC.
   `json.dumps` refuses it, as it would any foreign object.
 - **Nesting depth.** Each call into Haskell from C runs the RTS's scheduler
   on the caller's stack (about 17 KB a level), so a call is refused, as
-  `StackOverflow`, once less than 1 MB of stack is left: recursion through
-  Haskell stops at about 400 levels, before the core's 1000.
+  `StackOverflow`, once less than 1 MB of stack is left (a quarter of it,
+  on a thread whose stack is 2 MB or less): recursion through Haskell stops
+  at about 400 levels on an 8 MB stack, before the core's 1000, and at
+  about 45 on a JVM thread's 1 MB.
 - **Module libraries**: `-dynamic` with no RTS (no `-threaded` or
   `-flink-rts` needed), `-this-unit-id` of their own (two libraries with a
   module of the same name would otherwise share `Typeable` names), and
