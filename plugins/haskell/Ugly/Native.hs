@@ -19,7 +19,7 @@ module Ugly.Native
   , c_ugly_resolve
   , c_arg, c_kind, c_bool, c_int, c_double, c_ptr, c_len, c_handle
     -- calling out
-  , c_enter, c_leave, c_current_rt, c_ctx, c_val_size, c_val_at, c_set_string, c_set_bytes
+  , c_enter, c_leave, c_current_rt, c_ctx, c_outside, c_drain, c_val_size, c_val_at, c_set_string, c_set_bytes
   , c_ugly_dup, c_ugly_release, c_ugly_val_release
   , c_ugly_call, c_ugly_invoke, c_ugly_get_member, c_ugly_get_index, c_ugly_length, c_ugly_member_names
   , c_ugly_describe, c_ugly_iter, c_ugly_next, c_ugly_to_string
@@ -115,6 +115,8 @@ foreign import ccall unsafe "ugly_hs_enter" c_enter :: Ptr Rt -> IO (Ptr Rt)
 foreign import ccall unsafe "ugly_hs_leave" c_leave :: Ptr Rt -> IO ()
 foreign import ccall unsafe "ugly_hs_current_rt" c_current_rt :: IO (Ptr Rt)
 foreign import ccall unsafe "ugly_hs_ctx" c_ctx :: IO (Ptr Ctx)
+foreign import ccall unsafe "ugly_hs_outside" c_outside :: IO CInt
+foreign import ccall safe "ugly_hs_drain" c_drain :: IO ()
 foreign import ccall unsafe "ugly_hs_val_size" c_val_size :: IO CSize
 foreign import ccall unsafe "ugly_hs_val_at" c_val_at :: Ptr Val -> CSize -> IO (Ptr Val)
 foreign import ccall unsafe "ugly_hs_set_string" c_set_string :: Ptr Val -> CString -> CSize -> IO ()

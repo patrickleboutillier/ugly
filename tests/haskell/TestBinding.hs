@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ScopedTypeVariables, TemplateHaskell #-}
+{-# LANGUAGE ForeignFunctionInterface, OverloadedStrings, ScopedTypeVariables, TemplateHaskell #-}
 
 -- | The Haskell binding's test (TAP): a Haskell program as the host, built
 -- against the package 'ugly' (-dynamic -threaded, and -rdynamic so that
@@ -7,8 +7,9 @@
 module Main (main) where
 
 import Control.Exception
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Data.IORef
+import Foreign.C.Types (CInt (..))
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
 import System.IO
@@ -24,6 +25,10 @@ greet :: String -> String
 greet name = "hello, " ++ name
 
 uglyModule "TestBinding" ['double, 'greet]
+
+
+-- Haskell values the core holds a reference to (the plugin's count, for tests).
+foreign import ccall safe "ugly_hs_live_refs" liveRefs :: IO CInt
 
 
 data Tap = Tap (IORef Int) (IORef Bool)
@@ -99,6 +104,14 @@ main = do
       total <- Ugly.eval "python" "lambda xs: sum(xs)"
       s' <- Ugly.callValue total [Ugly.toValue [1 .. 4 :: Int]]
       ok tap (s' == (10 :: Int)) "Python's sum() over a Haskell list: its iteration"
+
+      -- A program that only calls out: what it passed is released at its next call out.
+      ignore <- Ugly.eval "python" "lambda f: None"
+      held <- liveRefs
+      forM_ [1 .. 100 :: Int] $ \i -> Ugly.callValue_ ignore [Ugly.toValue ((+ i) :: Int -> Int)]
+      Ugly.callValue_ ignore [1]
+      now <- liveRefs
+      ok tap (now <= held + 1) ("100 functions passed to Python are released: " ++ show (now - held) ++ " still held")
 
       own <- Ugly.eval "python" "__import__('ugly').module('haskell', 'TestBinding').double(21)"
       ok tap (own == (42 :: Int)) "Python uses this program's own export module (found in the process)"

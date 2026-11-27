@@ -823,8 +823,11 @@ in every case):
 7. **Deferred releases are drained only on entry into the home runtime.**
    There is no `ugly_rt_collect`. Refined on 2026-11-25: a binding's host
    interpreter runs its own code without entering through the core, so a
-   binding calls `ugly_rt_drain()` at its entry points (the Lua binding does,
-   on every use of `ugly`), which counts as entry.
+   binding calls `ugly_rt_drain()` at its entry points, which counts as
+   entry. Every binding whose releases can be queued does (2026-11-27): Lua's,
+   and those of the `UGLY_CAP_ANY_THREAD` languages (Python, Java, C#,
+   Haskell), whose releases are always queued, so that a program that only
+   calls out would otherwise never free what it passed.
 8. **No hash protocol in v2.0.**
 
 Perl's open questions, decided on 2026-11-24 when the Perl plugin was

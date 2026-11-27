@@ -213,6 +213,20 @@ lines of C, with no interpreter in the way: read it first.
   reaches the host's interpreter instead of starting another.
 - **Attach on first use, on that thread**, not at import: HAProxy loads Lua
   states on its main thread and runs them on workers.
+- **Drain at your entry points.** A host program runs its own code without
+  entering its runtime through the core, where queued releases run. Call
+  `ugly_rt_drain` wherever the host's code uses `ugly` (it is one atomic
+  load when nothing is queued). For a `UGLY_CAP_ANY_THREAD` language this
+  isn't optional: releases to it are *always* queued, so a program that
+  only calls out kept every object it had ever passed (Python: 9 MB to
+  147 MB over 300,000 calls) until the bindings drained (Python's
+  `need_ctx`, Java's `native_ctx`, C#'s `Ops.Ctx`, Haskell's `currentCtx`).
+- **Give each entry point its own scope for temporaries** if the language
+  has one (Perl's `SAVETMPS`/`FREETMPS`, JNI local frames). A caller that
+  isn't your language has no scope around you: Perl's mortals made outside
+  one lived until the interpreter was destroyed.
+- **Prune proxy caches when proxies die**, not only when they're looked
+  up: Java's map kept an entry per foreign value ever seen.
 - **Tear down on the thread that attached.** Lua uses a `__gc` sentinel,
   Python `atexit`, Perl an `END` block, Java JVMTI's VMDeath (shutdown
   hooks run on new threads). .NET's `ProcessExit` runs on another thread,

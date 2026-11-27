@@ -8,7 +8,7 @@ behind each item; what's done is listed at the end. The contract,
 
 A bug hunt over the core and the eight plugins, after 2.7.0. Each was
 confirmed by a repro unless marked *(by reading)*. Line numbers are 2.7.0's.
-Three were fixed at once (PR #74, under "Done").
+The three worst crashes and the leaks are fixed (under "Done").
 
 ### Crashes and memory corruption
 
@@ -50,26 +50,6 @@ Three were fixed at once (PR #74, under "Done").
 - [ ] **Perl binding: ithreads.** No `CLONE_SKIP` in `Ugly::Proxy` and
   `Ugly::Error`: a thread's clone releases the parent's handle at join
   (and would free an error twice).
-
-### Leaks
-
-- [ ] **Any-thread hosts never drain their release queue.** Releases to an
-  any-thread runtime are always queued, and only the Lua binding calls
-  `ugly_rt_drain`. A Python program that only calls out keeps every object
-  it passes until something calls into Python through the core (300k calls
-  passing a 100-element list: 9 MB to 147 MB). *(By reading:)* the same in
-  the Java, .NET and Haskell bindings. Call `ugly_rt_drain` in their
-  call-out paths (one atomic load when the queue is empty).
-- [ ] **Java: `Foreign.cache` is never pruned** (`Foreign.java`): one map
-  entry per foreign value, forever. Remove it in the Cleaner action if the
-  weak reference is cleared, as C#'s finalizer does.
-- [ ] **Perl: mortals made outside `SAVETMPS`** when the caller isn't Perl
-  (`perl5.c:1659` `invoke_entry`, `:1753` `pl_iter`, `:1286`, `:1383`,
-  `:1389`, `:1405`): an RV per invoke on a package from Python, and an
-  array Python iterated is never destroyed. Each entry point needs its own
-  `ENTER; SAVETMPS ... FREETMPS; LEAVE`.
-- [ ] **Lua: `__newindex` leaks the converted value** when the key is bad
-  (`lua.c`, `luaL_checkstring` after `to_val`).
 
 ### Wrong results
 
@@ -345,5 +325,13 @@ contract and in the pull requests.
   slots); Python reads `proxy[key] = v`'s key before releasing the GIL
   (`proxy[-1] = v` was a segfault); libugly exports only `ugly_*`
   (`src/ugly.map`), so a host can't interpose its internals.
+- **Review fixes, leaks** (2026-11-27): the any-thread languages' bindings
+  run the releases queued for their runtime wherever their own code uses
+  `ugly` (a Python, Java, C# or Haskell program that only called out never
+  freed what it passed); Java's `Foreign` cache drops collected entries;
+  every entry into Perl is a scope for temporaries (a caller that isn't
+  Perl leaked an RV per call of a package's sub, and kept arrays it had
+  iterated); Lua's `proxy[key] = v` reads the key before converting the
+  value.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).

@@ -200,6 +200,41 @@ for key, exc, what in ((BadIndex(), ValueError, "an __index__ that raises"), (1.
     except exc:
         ok(True, f"proxy[key] = v with {what} raises {exc.__name__}")
 
+# A program that only calls out: what it passed is freed at its next use of ugly, not kept
+# until something calls into Python (releases to Python are queued, and the binding drains them).
+import gc
+import weakref
+class Passed:
+    pass
+def pass_one():
+    o = Passed()
+    lua.echo(o)
+    return weakref.ref(o)
+passed = [pass_one() for _ in range(100)]
+ugly.eval("lua", "collectgarbage() collectgarbage()")     # Lua drops its proxies of them
+lua.echo(1)
+gc.collect()
+ok(not any(w() for w in passed), "Python objects passed to Lua are freed at the next use of ugly")
+
+if "perl5" in built:
+    # Perl called from a language that isn't Perl: its temporaries end with each call.
+    lu = ugly.module("perl5", "List::Util")
+    refs = ugly.eval("perl5", "require B; sub { B::svref_2object(\\&List::Util::max)->REFCNT }")
+    before = refs()
+    for _ in range(100):
+        lu.max(1, 2)
+    ok(refs() == before, f"100 calls of a Perl package's sub leave no reference to it: {refs()} == {before}")
+    ugly.eval("perl5", "package Counted; our $gone = 0; sub new { bless [], shift } sub DESTROY { $gone++ } 1")
+    arr = ugly.eval("perl5", "[ map { Counted->new } 1 .. 3 ]")
+    n = len(list(arr))
+    del arr
+    gc.collect()
+    gone = ugly.eval("perl5", "$Counted::gone")
+    ok(n == 3 and gone == 3, f"a Perl array Python iterated is destroyed when dropped: {gone} of 3")
+else:
+    skip("Perl's temporaries, calls", "perl5")
+    skip("Perl's temporaries, iteration", "perl5")
+
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")
 ok(ugly.eval("lua", "return package.cpath").startswith("/configured/?.so;"), "  ... and cpath comes first in package.cpath")

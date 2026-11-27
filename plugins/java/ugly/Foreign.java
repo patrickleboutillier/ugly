@@ -34,7 +34,18 @@ public final class Foreign implements Iterable<Object> {
 
 	private Foreign(long handle){
 		this.handle = handle;
-		cleaner.register(this, () -> release(handle));
+		cleaner.register(this, () -> { release(handle); forget(handle); });
+	}
+
+	/** Drops a collected Foreign's cache entry, unless a new Foreign took the handle's place meanwhile. */
+	private static synchronized void forget(long handle){
+		WeakReference<Foreign> ref = cache.get(handle);
+		if ((ref != null)&&(ref.get() == null)) cache.remove(handle);
+	}
+
+	/** Live cache entries, for the tests. */
+	static synchronized int cached(){
+		return cache.size();
 	}
 
 	/** The Foreign for an owned handle: the cached one (releasing the extra reference), or a new one. */

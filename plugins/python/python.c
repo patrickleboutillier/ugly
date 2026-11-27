@@ -407,12 +407,20 @@ static PyObject *args_tuple(ugly_ctx *ctx, const ugly_val *args, size_t n){
 #define OUT(call) ({ ugly_status out_st_ ; Py_BEGIN_ALLOW_THREADS out_st_ = (call) ; Py_END_ALLOW_THREADS out_st_ ; })
 
 
-/* This thread's ctx; a Python thread that has none gets one, deleted when it ends (ugly_ctx_thread). */
+/*
+ * This thread's ctx; a Python thread that has none gets one, deleted when it
+ * ends (ugly_ctx_thread). Python code is running here, with the GIL, so the
+ * releases queued for its runtime run now (ugly_rt_drain): they are always
+ * queued (UGLY_CAP_ANY_THREAD), and a program that only calls out never
+ * enters its runtime through the core, where they would otherwise run.
+ */
 static ugly_ctx *need_ctx(void){
 	ugly_ctx *ctx = NULL ;
 	if (ugly_ctx_thread(&ctx) != UGLY_OK){
 		PyErr_SetString(PyExc_RuntimeError, "ugly: can't create a ctx on this thread") ;
+		return NULL ;
 	}
+	ugly_rt_drain(URT()) ;
 	return ctx ;
 }
 

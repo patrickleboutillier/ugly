@@ -101,5 +101,17 @@ ok(#words == 2 and words[1] == "one" and words[2] == "two", "a Lua iterator (str
 ok(tostring(c) == "counter(3)", "tostring(c) is Python's str(c): counter(3)")
 ok(tostring(builtins.dict) == "<class 'dict'>", "  ... and str() of a class: <class 'dict'>")
 
+-- A key that is neither an integer nor a string: an error, and the value isn't kept.
+local weak = setmetatable({}, { __mode = "v" })
+do
+	local value = {}
+	weak[1] = value
+	local bad = pcall(function() c[true] = value end)
+	ok(not bad, "proxy[true] = v is an error")
+end
+collectgarbage()
+collectgarbage()
+ok(weak[1] == nil, "  ... and the value it didn't store isn't kept alive")
+
 print("1.." .. count)
 os.exit(failures == 0 and 0 or 1, true)      -- true: close the state, so the binding tears down
