@@ -88,6 +88,11 @@ static unsafe class Core {
     [DllImport(L)] public static extern Status ugly_set_member(nint ctx, ulong h, byte* name, Val v);
     [DllImport(L)] public static extern Status ugly_member_names(nint ctx, ulong h, ulong* o);
     [DllImport(L)] public static extern Status ugly_length(nint ctx, ulong h, long* o);
+    [DllImport(L)] public static extern Status ugly_get_entry(nint ctx, ulong h, Val key, Kind want, Val* o);
+    [DllImport(L)] public static extern Status ugly_set_entry(nint ctx, ulong h, Val key, Val v);
+    [DllImport(L)] public static extern Status ugly_delete_entry(nint ctx, ulong h, Val key);
+    [DllImport(L)] public static extern Status ugly_entry_count(nint ctx, ulong h, long* o);
+    [DllImport(L)] public static extern Status ugly_entry_keys(nint ctx, ulong h, ulong* o);
     [DllImport(L)] public static extern Status ugly_get_index(nint ctx, ulong h, long i, Kind want, Val* o);
     [DllImport(L)] public static extern Status ugly_set_index(nint ctx, ulong h, long i, Val v);
     [DllImport(L)] public static extern Status ugly_call_opts(nint ctx, ulong h, Val* args, nuint n, Opts* opts, Kind want, Val* o);

@@ -175,3 +175,12 @@ def take_iter(xs, n):
 
 def stringify(x):
     return str(x)
+
+
+# Entries (contract §2): a dict, whose keys are any hashable value. A dict has methods of its own.
+def make_table():
+    return {"one": 1, "two": 2, 3: "three"}
+
+
+def table_method():
+    return "keys"

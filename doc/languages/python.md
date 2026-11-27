@@ -47,6 +47,13 @@ proxies hash).
 - `p.x`, `p.x = v`, `del p.x`: members. `p[0]`, `p[i] = v`, `len(p)`,
   `list(p)`: elements, 0-based. `p["k"]` reads a member by a name that
   isn't an identifier, and `del p["k"]` removes it.
+- **A foreign keyed collection** (a Lua table, a Perl hash, a `Map`) works
+  as a dict does: `p[key]` (a `KeyError` if it isn't there), `p[key] = v`,
+  `del p[key]`, `key in p`, `len(p)`, and `keys()`, `values()`, `items()`
+  and `get(key, default)`, as lists of what is there now, unless the value
+  has a member of that name itself. Looping over one its language doesn't
+  iterate gives its keys. Python's syntax tells an entry from a member, so
+  nothing falls back: `p["get"]` is the entry, `p.get` the member.
 - A foreign sequence works as a list does: `p[-1]` counts from the end,
   `p[1:3]` is a Python list of those elements, `p[1:3] = items`,
   `del p[1:3]` and `del p[i]` resize it (a slice with a step can be read,
@@ -60,8 +67,8 @@ proxies hash).
   still called on its owner, so `this` is right.
 - `bool(p)` is false for an empty sequence, as Python's own are, and true
   for everything else. It asks for the first element, not the length, so
-  an infinite Haskell list is true at once. A Lua table with only named
-  fields has no first element, so it is false: test a field instead.
+  an infinite Haskell list is true at once. A keyed collection is false
+  when it has no entries, so a Lua table with only named fields is true.
 - `p(x)` calls it; calling a class that can only be instantiated (a Java,
   Perl or JS class) constructs it: `perl.KwBox(value=5)`.
 - **Iteration is the foreign language's own** (contract §2): `for x in p`,
@@ -89,7 +96,10 @@ proxies hash).
 | `str` / `bytes` | STRING / BYTES | `str` / `bytes` |
 | anything else | a handle | the original object |
 
-- Members are attributes, or the keys of a dict. Elements are the sequence
+- Members are attributes, a dict's too (its methods). A dict's keys are its
+  **entries** (contract §2): any mapping has them (a dict, an
+  `OrderedDict`, `os.environ`), with any hashable key, compared as Python
+  compares keys (`1`, `1.0` and `True` are one). Elements are the sequence
   protocol (lists, tuples...).
 - Iterable is what `iter()` takes: lists, dicts (their keys), generators,
   files, anything with `__iter__` or the sequence protocol. `ugly_iter` on

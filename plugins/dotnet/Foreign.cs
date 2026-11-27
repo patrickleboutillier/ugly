@@ -64,10 +64,50 @@ public sealed unsafe class Foreign : DynamicObject, IEnumerable<object?> {
 
     public object? Get(string member) => Ops.Get(Handle, member);
     public void Set(string member, object? value) => Ops.Set(Handle, member, value);
-    public object? this[int index] {
-        get => Ops.GetIndex(Handle, index);
-        set => Ops.SetIndex(Handle, index, value);
+
+    int Kinds { get { if (traits < 0) traits = (int)Ops.Traits(Handle); return traits; } }
+
+    /** Whether it is a keyed collection (a dict, a table, a Map): contract §2, "Entries". */
+    public bool HasEntries => (Kinds & Protocol.ENTRIES) != 0;
+
+    // p[key]: an element, for an integer on a sequence; otherwise the entry of a keyed
+    // collection; otherwise, for a string, the member of that name (p["name"] as p.name).
+    bool Keyed(object? key) => HasEntries && !(((Kinds & Protocol.ELEMENTS) != 0) && (key is int or long or short or byte));
+
+    object? At(object? key) {
+        if (Keyed(key)) return GetEntry(key);
+        if (key is string s) return Get(s);
+        return Ops.GetIndex(Handle, System.Convert.ToInt64(key));
     }
+
+    void Put(object? key, object? value) {
+        if (Keyed(key)) SetEntry(key, value);
+        else if (key is string s) Set(s, value);
+        else Ops.SetIndex(Handle, System.Convert.ToInt64(key), value);
+    }
+
+    public object? this[int index] {
+        get => At(index);
+        set => Put(index, value);
+    }
+
+    /** An entry by any key (a KeyNotFoundException if it isn't there), or a member by name where the value has no entries. */
+    public object? this[object? key] {
+        get => At(key);
+        set => Put(key, value);
+    }
+
+    /** The entry under key; a KeyNotFoundException if it isn't there. */
+    public object? GetEntry(object? key) =>
+        Ops.GetEntry(Handle, key, out object? v) ? v : throw new KeyNotFoundException($"ugly: no entry {key}");
+    /** The entry under key, if it is there. */
+    public bool TryGetEntry(object? key, out object? value) => Ops.GetEntry(Handle, key, out value);
+    public void SetEntry(object? key, object? value) => Ops.SetEntry(Handle, key, value);
+    /** Removes the entry under key; one that isn't there is not an error. */
+    public void DeleteEntry(object? key) => Ops.DeleteEntry(Handle, key);
+    public long EntryCount => Ops.EntryCount(Handle);
+    /** The keys, as they are now. */
+    public List<object?> EntryKeys() => Ops.EntryKeys(Handle);
     public long Length => Ops.Length(Handle);
     public string[] Names => Ops.Names(Handle);
     public uint Traits => Ops.Traits(Handle);
@@ -144,13 +184,12 @@ public sealed unsafe class Foreign : DynamicObject, IEnumerable<object?> {
     }
 
     public override bool TryGetIndex(GetIndexBinder binder, object[] indexes, out object? result) {
-        result = indexes is [string s] ? Get(s) : Ops.GetIndex(Handle, System.Convert.ToInt64(indexes[0]));
+        result = At(indexes[0]);
         return true;
     }
 
     public override bool TrySetIndex(SetIndexBinder binder, object[] indexes, object? value) {
-        if (indexes is [string s]) Set(s, value);
-        else Ops.SetIndex(Handle, System.Convert.ToInt64(indexes[0]), value);
+        Put(indexes[0], value);
         return true;
     }
 
@@ -353,6 +392,60 @@ static unsafe class Ops {
         Status st;
         fixed (byte* m = Errors.Z(member)) st = Core.ugly_set_member(ctx, h, m, a.Vals[0]);
         if (st != Status.Ok) Errors.Throw(ctx, st);
+    }
+
+    // Entries (contract §2): a keyed collection's, by any key.
+    public static bool GetEntry(ulong h, object? key, out object? value) {
+        nint ctx = Ctx();
+        using var a = new Args(ctx, [key], null);
+        Val o;
+        Status st = Core.ugly_get_entry(ctx, h, a.Vals[0], Kind.Any, &o);
+        value = null;
+        if (st == Status.NotFound) return false;
+        value = Result(ctx, st, &o);
+        return true;
+    }
+
+    public static void SetEntry(ulong h, object? key, object? value) {
+        nint ctx = Ctx();
+        using var a = new Args(ctx, [key, value], null);
+        Status st = Core.ugly_set_entry(ctx, h, a.Vals[0], a.Vals[1]);
+        if (st != Status.Ok) Errors.Throw(ctx, st);
+    }
+
+    public static void DeleteEntry(ulong h, object? key) {
+        nint ctx = Ctx();
+        using var a = new Args(ctx, [key], null);
+        Status st = Core.ugly_delete_entry(ctx, h, a.Vals[0]);
+        if (st != Status.Ok) Errors.Throw(ctx, st);
+    }
+
+    public static long EntryCount(ulong h) {
+        nint ctx = Ctx();
+        long n;
+        Status st = Core.ugly_entry_count(ctx, h, &n);
+        if (st != Status.Ok) Errors.Throw(ctx, st);
+        return n;
+    }
+
+    public static List<object?> EntryKeys(ulong h) {
+        nint ctx = Ctx();
+        ulong it;
+        Status st = Core.ugly_entry_keys(ctx, h, &it);
+        if (st != Status.Ok) Errors.Throw(ctx, st);
+        var keys = new List<object?>();
+        try {
+            for (;;) {
+                Val k;
+                nuint got = 0;
+                st = Core.ugly_next(ctx, it, Kind.Any, &k, 1, &got);
+                if (st != Status.Ok) Errors.Throw(ctx, st);
+                if (got == 0) break;
+                keys.Add(Result(ctx, Status.Ok, &k));
+            }
+        }
+        finally { Core.ugly_release(ctx, it); }
+        return keys;
     }
 
     public static object? GetIndex(ulong h, long i) {

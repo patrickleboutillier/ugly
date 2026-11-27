@@ -136,5 +136,20 @@ let kept = false;
 try { delete ugly.eval("python", "[1, 2]")[0]; } catch (e) { kept = e instanceof TypeError; }
 ok(kept, "delete proxy[0] is refused (a TypeError in a module)");
 
+// Entries (contract §2): a Python dict's keys are its entries, apart from its methods.
+const pd = ugly.eval("python", "{'name': 'ugly', 3: 'three', 'keys': 'an entry'}");
+ok(pd.name === "ugly" && pd[3] === "three" && pd.missing === undefined, "a Python dict's entries as properties: d.name, d[3]");
+ok(typeof pd.keys === "function" && ugly.entry(pd, "keys") === "an entry",
+	"a member hides an entry of its name (d.keys is the method); ugly.entry(d, 'keys') is the entry");
+pd.added = 1;
+ugly.setEntry(pd, 2.5, "a float key");
+delete pd.name;
+ok(pd.added === 1 && ugly.entry(pd, 2.5) === "a float key" && pd.name === undefined && ugly.entry(pd, "nope") === undefined,
+	"d.k = v and delete d.k change entries; ugly.setEntry takes any key");
+ok(Object.keys(pd).sort().join(",") === "3,added,keys" && new Map(ugly.entries(pd)).get(2.5) === "a float key",
+	"Object.keys(d) lists the keys a property can spell, ugly.entries(d) all of them: " + Object.keys(pd).sort().join(","));
+ugly.deleteEntry(pd, 2.5);
+ok(ugly.entries(pd).length === 3, "ugly.deleteEntry");
+
 console.log("1.." + count);
 if (failures > 0) throw new Error(failures + " test(s) failed");

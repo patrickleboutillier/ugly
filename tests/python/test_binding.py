@@ -194,10 +194,11 @@ except IndexError:
 class BadIndex:
     def __index__(self):
         raise ValueError("no index")
-for key, exc, what in ((BadIndex(), ValueError, "an __index__ that raises"), (1.5, TypeError, "a float key"),
-        ("\udc80", UnicodeEncodeError, "a key that isn't UTF-8")):
+plain = ugly.module("mock", "conformance").make_counter()     # members only: no entries, no elements
+for target, key, exc, what in ((t, BadIndex(), ValueError, "an __index__ that raises"), (plain, 1.5, TypeError, "a float key"),
+        (plain, "\udc80", UnicodeEncodeError, "a key that isn't UTF-8")):
     try:
-        t[key] = 1
+        target[key] = 1
         ok(False, f"proxy[key] = v with {what} raises {exc.__name__}")
     except exc:
         ok(True, f"proxy[key] = v with {what} raises {exc.__name__}")
@@ -401,6 +402,36 @@ if "js" in built:
     ok(arr.pop() == 4 and arr.push(9) == 4 and list(arr) == [1, 2, 3, 9], f"append on a JS array, whose pop and push are its own: {list(arr)}")
 else:
     skip("a JS array's own pop and push", "js")
+
+# Entries (contract §2): a foreign keyed collection as a dict. A Lua table's keys are any value.
+d = ugly.eval("lua", "return { one = 1, two = 2, [3] = 'three', [true] = 'yes' }")
+ok(d["one"] == 1 and d[True] == "yes" and "two" in d and "nope" not in d,
+    "p['one'], p[True] and 'two' in p on a Lua table")
+try:
+    d["nope"]
+    ok(False, "a key that isn't there is a KeyError")
+except KeyError:
+    ok(True, "a key that isn't there is a KeyError")
+d["four"] = 4
+d[1.5] = "a float key"
+del d["two"]
+ok(d.get("four") == 4 and d[1.5] == "a float key" and d.get("two") is None and d.get("two", 0) == 0,
+    "p[k] = v, del p[k], and get(k, default)")
+try:
+    del d["two"]
+    ok(False, "del of a key that isn't there is a KeyError")
+except KeyError:
+    ok(True, "del of a key that isn't there is a KeyError")
+ok(sorted(map(str, d.keys())) == ["1.5", "3", "True", "four", "one"]
+    and sorted(map(str, d.values())) == ["1", "4", "a float key", "three", "yes"]
+    and dict(d.items())["one"] == 1, f"keys(), values() and items(): {sorted(map(str, d.keys()))}")
+ok(bool(d) and not ugly.eval("lua", "return {}").keys(), "a keyed collection is true unless it has no entries")
+
+# A member and an entry of the same name are apart: Python's syntax says which.
+table = ugly.module("mock", "conformance").make_table()
+table["count"] = 99
+ok(table["count"] == 99 and table.count() == 4 and len(table) == 4 and sorted(map(str, table)) == ["3", "count", "one", "two"],
+    f"p['count'] is the entry, p.count() the method; iterating gives the keys: {sorted(map(str, table))}")
 
 # Options took effect, and can't change once a language has started.
 ok(ugly.module("lua", "ugly_configured").where == "configured", "configure('lua', path=...): Lua finds the module")

@@ -64,7 +64,7 @@ typedef struct lrt {
 	int shared ;         /* run by several threads, one at a time (ugly.shared_by_threads) */
 } lrt ;
 
-typedef struct { ugly_handle h ; } proxy ;
+typedef struct { ugly_handle h ; uint32_t traits ; } proxy ;     /* traits: the value's, as described when the proxy was made */
 
 static int proxy_fn(lua_State *L) ;
 
@@ -298,6 +298,7 @@ static ugly_status push_proxy(ugly_ctx *ctx, lrt *r, lua_State *L, ugly_handle b
 	}
 	proxy *p = lua_newuserdatauv(L, sizeof(proxy), 0) ;
 	p->h = h ;
+	p->traits = traits ;
 	luaL_setmetatable(L, PROXY_MT) ;
 	if ((traits & UGLY_TRAIT_CALLABLE)&&(! (traits & UGLY_TRAIT_INSTANTIABLE))){
 		lua_pushcclosure(L, proxy_fn, 1) ;
@@ -445,7 +446,7 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 
 enum { OP_IMPORT, OP_GLOBALS, OP_EVAL, OP_DESCRIBE, OP_GET_MEMBER, OP_SET_MEMBER, OP_MEMBER_NAMES,
 	OP_LENGTH, OP_GET_INDEX, OP_SET_INDEX, OP_INVOKE, OP_NEW, OP_DELETE_MEMBER, OP_SPLICE,
-	OP_ITER, OP_NEXT, OP_TO_STRING } ;
+	OP_ITER, OP_NEXT, OP_TO_STRING, OP_GET_ENTRY, OP_SET_ENTRY, OP_DELETE_ENTRY, OP_ENTRY_COUNT, OP_ENTRY_KEYS } ;
 
 typedef struct op {
 	int code ;
@@ -461,6 +462,7 @@ typedef struct op {
 	ugly_kind want ;
 	ugly_val *out ;
 	ugly_val v ;
+	ugly_val key ;        /* entries */
 	uint32_t *traits ;
 	int64_t *length ;
 	ugly_handle *hout ;
@@ -511,6 +513,13 @@ static int push_args(op *o){
 }
 
 
+/* One step over a table's keys, as the generic for calls it: (state, control) -> the next key. The table is upvalue 1. */
+static int keys_step(lua_State *L){
+	lua_settop(L, 2) ;
+	return (lua_next(L, lua_upvalueindex(1)) ? (lua_pop(L, 1), 1) : 0) ;
+}
+
+
 static int op_body(lua_State *L){
 	op *o = lua_touserdata(L, 1) ;
 	lrt *r = o->r ;
@@ -548,7 +557,8 @@ static int op_body(lua_State *L){
 			uint32_t t = 0 ;
 			int lt = lua_type(L, 2) ;
 			if (lt == LUA_TTABLE){
-				t |= UGLY_TRAIT_MEMBERS | UGLY_TRAIT_ELEMENTS ;
+				/* A table is all three at once: its string keys are its members, and among its entries. */
+				t |= UGLY_TRAIT_MEMBERS | UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_ENTRIES ;
 				if (lua_getfield(L, 2, "new") == LUA_TFUNCTION){
 					t |= UGLY_TRAIT_INSTANTIABLE ;
 				}
@@ -739,6 +749,77 @@ static int op_body(lua_State *L){
 				}
 			}
 			return 0 ;
+
+		/*
+		 * Entries: a table's, by any key (contract §2). Through the table's
+		 * metamethods, like its members; a key Lua can't have (nil, NaN)
+		 * isn't there, and can't be set.
+		 */
+		case OP_GET_ENTRY:
+		case OP_SET_ENTRY:
+		case OP_DELETE_ENTRY: {
+			if (lua_type(L, 2) != LUA_TTABLE){
+				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+			}
+			CHECK(o, push_val(ctx, r, L, o->key)) ;
+			int bad = lua_isnil(L, -1)||((lua_type(L, -1) == LUA_TNUMBER)&&(! lua_isinteger(L, -1))
+				&&(lua_tonumber(L, -1) != lua_tonumber(L, -1))) ;
+			if (o->code == OP_GET_ENTRY){
+				if (bad ||(lua_gettable(L, 2) == LUA_TNIL)){
+					FAIL(o, UGLY_ERR_NOT_FOUND, "KeyError", "no such entry") ;
+				}
+				o->st = to_val(ctx, r, L, -1, o->want, o->out) ;
+			}
+			else if (o->code == OP_DELETE_ENTRY){
+				if (! bad){
+					lua_pushnil(L) ;
+					lua_settable(L, 2) ;
+				}
+			}
+			else {
+				if (bad){
+					FAIL(o, UGLY_ERR_TYPE, "TypeError", "a table's key can't be nil or NaN") ;
+				}
+				CHECK(o, push_val(ctx, r, L, o->v)) ;
+				lua_settable(L, 2) ;
+			}
+			return 0 ;
+		}
+
+		case OP_ENTRY_COUNT: {
+			if (lua_type(L, 2) != LUA_TTABLE){
+				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+			}
+			int64_t n = 0 ;
+			lua_pushnil(L) ;
+			while (lua_next(L, 2)){
+				lua_pop(L, 1) ;
+				n++ ;
+			}
+			*o->length = n ;
+			return 0 ;
+		}
+
+		case OP_ENTRY_KEYS: {
+			/* An iterator like any Lua iterator function's (OP_ITER), over next(t, key). */
+			if (lua_type(L, 2) != LUA_TTABLE){
+				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+			}
+			lua_iter *it = lua_newuserdatauv(L, sizeof(lua_iter), 1) ;
+			it->done = 0 ;
+			luaL_setmetatable(L, ITER_MT) ;
+			lua_createtable(L, 2, 0) ;
+			lua_pushvalue(L, 2) ;
+			lua_pushcclosure(L, keys_step, 1) ;
+			lua_rawseti(L, -2, 1) ;
+			lua_setiuservalue(L, -2, 1) ;
+			ugly_val v ;
+			o->st = to_val(ctx, r, L, -1, UGLY_HANDLE, &v) ;
+			if (o->st == UGLY_OK){
+				*o->hout = v.as.h ;
+			}
+			return 0 ;
+		}
 
 		case OP_ITER:
 			if (luaL_testudata(L, 2, ITER_MT) != NULL){
@@ -1128,13 +1209,51 @@ static int index_key(lua_State *L, int idx, lua_Integer *i){
 }
 
 
+/* p's entry under the key at idx, pushed: nil if it isn't there. */
+static int entry_get(lua_State *L, ugly_ctx *ctx, proxy *p, int idx){
+	ugly_val key, out = ugly_null() ;
+	ugly_status st = to_val(ctx, R(L), L, idx, UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		st = ugly_get_entry(ctx, p->h, key, UGLY_ANY, &out) ;
+		ugly_val_release(ctx, &key) ;
+	}
+	if (st == UGLY_ERR_NOT_FOUND){
+		lua_pushnil(L) ;
+		return 1 ;
+	}
+	return finish(L, ctx, st, &out) ;
+}
+
+
+/* Sets p's entry under the key at kidx to the value at vidx; nil deletes it, as t[k] = nil does. */
+static int entry_set(lua_State *L, ugly_ctx *ctx, proxy *p, int kidx, int vidx){
+	ugly_val key, v = ugly_null() ;
+	ugly_status st = to_val(ctx, R(L), L, kidx, UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		if (lua_isnil(L, vidx)){
+			st = ugly_delete_entry(ctx, p->h, key) ;
+		}
+		else if ((st = to_val(ctx, R(L), L, vidx, UGLY_ANY, &v)) == UGLY_OK){
+			st = ugly_set_entry(ctx, p->h, key, v) ;
+			ugly_val_release(ctx, &v) ;
+		}
+		ugly_val_release(ctx, &key) ;
+	}
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
+	return 0 ;
+}
+
+
 static int proxy_index(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
 	ugly_val out = ugly_null() ;
 	ugly_status st ;
 	lua_Integer at = 0 ;
-	if (index_key(L, 2, &at)){
+	int entries = ((p->traits & UGLY_TRAIT_ENTRIES) != 0) ;
+	if (index_key(L, 2, &at)&&((p->traits & UGLY_TRAIT_ELEMENTS)||(! entries))){
 		st = ugly_get_index(ctx, p->h, (int64_t)at - 1, UGLY_ANY, &out) ;
 		if (st == UGLY_ERR_NOT_FOUND){
 			lua_pushnil(L) ;
@@ -1142,9 +1261,36 @@ static int proxy_index(lua_State *L){
 		}
 		return finish(L, ctx, st, &out) ;
 	}
-	const char *name = luaL_checkstring(L, 2) ;
+	if (lua_type(L, 2) != LUA_TSTRING){
+		/*
+		 * A key that isn't a name (a number on what isn't a sequence, a
+		 * boolean, a table): an entry of a keyed collection, as t[k] is.
+		 */
+		if (! entries){
+			return luaL_argerror(L, 2, "a name, or an index of a sequence, expected (the value has no entries)") ;
+		}
+		return entry_get(L, ctx, p, 2) ;
+	}
+	/*
+	 * A name: the member, then the entry. Lua has one way to say both, and
+	 * a member hides an entry of the same name (ugly.entry reaches it).
+	 */
+	const char *name = lua_tostring(L, 2) ;
 	st = ugly_get_member(ctx, p->h, name, UGLY_ANY, &out) ;
 	int method = ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)) ;
+	if (method && entries){
+		ugly_val key = ugly_str(name, strlen(name)), e = ugly_null() ;
+		ugly_status est = ugly_get_entry(ctx, p->h, key, UGLY_ANY, &e) ;
+		if (est == UGLY_OK){
+			return finish(L, ctx, est, &e) ;
+		}
+		if (est != UGLY_ERR_NOT_FOUND){
+			return throw_ugly_error(L, ctx, est) ;
+		}
+		/* Neither: nil, as a table's missing key is. Not a method to try: "if t.k then" must work. */
+		lua_pushnil(L) ;
+		return 1 ;
+	}
 	if ((st == UGLY_OK)&&(out.kind == UGLY_HANDLE)){
 		/*
 		 * A callable member is a method: invoke it, with the foreign
@@ -1169,6 +1315,7 @@ static int proxy_index(lua_State *L){
 				ugly_val_release(ctx, &tn) ;
 				proxy *m = lua_newuserdatauv(L, sizeof(proxy), 1) ;
 				m->h = out.as.h ;     /* the result's reference is the proxy's */
+				m->traits = traits ;
 				luaL_setmetatable(L, PROXY_MT) ;
 				lua_createtable(L, 2, 0) ;
 				lua_pushvalue(L, 1) ;
@@ -1195,9 +1342,18 @@ static int proxy_index(lua_State *L){
 static int proxy_newindex(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
-	/* The key first: a bad one is a Lua error, which would skip releasing the converted value. */
+	/*
+	 * A keyed collection takes what isn't an index of a sequence as an
+	 * entry: t[k] = v stores, and a nil removes. Elsewhere a name is a
+	 * member.
+	 */
 	lua_Integer at = 0 ;
-	const char *name = (index_key(L, 2, &at) ? NULL : luaL_checkstring(L, 2)) ;
+	int index = index_key(L, 2, &at) ;
+	if ((p->traits & UGLY_TRAIT_ENTRIES)&&(! (index &&(p->traits & UGLY_TRAIT_ELEMENTS)))){
+		return entry_set(L, ctx, p, 2, 3) ;
+	}
+	/* The key first: a bad one is a Lua error, which would skip releasing the converted value. */
+	const char *name = (index ? NULL : luaL_checkstring(L, 2)) ;
 	ugly_val v ;
 	ugly_status st = to_val(ctx, R(L), L, 3, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){
@@ -1351,6 +1507,92 @@ static int api_iter(lua_State *L){
 	}
 	lua_pushcclosure(L, iter_step, 1) ;
 	return 1 ;
+}
+
+
+/*
+ * Entries by name, for what Lua's one syntax can't say: ugly.entry(p, k) is
+ * the entry even where a member of that name hides it, ugly.set_entry(p, k,
+ * v) stores one (nil removes it), and ugly.entries(p) is the generic for's
+ * iterator over keys and values, which pairs(p) gives too.
+ */
+static proxy *check_entries(lua_State *L){
+	proxy *p = to_proxy(L, 1) ;
+	if (p == NULL){
+		luaL_argerror(L, 1, "a foreign value expected") ;
+	}
+	return p ;
+}
+
+static int api_entry(lua_State *L){
+	luaL_checkany(L, 2) ;
+	return entry_get(L, need_ctx(L), check_entries(L), 2) ;
+}
+
+static int api_set_entry(lua_State *L){
+	luaL_checkany(L, 3) ;
+	return entry_set(L, need_ctx(L), check_entries(L), 2, 3) ;
+}
+
+/* One step: upvalue 1 is the keys' iterator (a proxy, or one of ours come home), upvalue 2 the collection. */
+static int entries_step(lua_State *L){
+	ugly_ctx *ctx = need_ctx(L) ;
+	proxy *it = to_proxy(L, lua_upvalueindex(1)), *p = to_proxy(L, lua_upvalueindex(2)) ;
+	ugly_val key = ugly_null(), v = ugly_null() ;
+	size_t got = 0 ;
+	ugly_status st = ugly_next(ctx, it->h, UGLY_ANY, &key, 1, &got) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
+	if (got == 0){
+		return 0 ;
+	}
+	st = ugly_get_entry(ctx, p->h, key, UGLY_ANY, &v) ;
+	if (st == UGLY_ERR_NOT_FOUND){
+		st = UGLY_OK ;     /* gone since its key was listed: a nil value would end the loop, so false */
+		v = ugly_bool(false) ;
+	}
+	if (st == UGLY_OK){
+		st = push_val(ctx, R(L), L, key) ;
+	}
+	ugly_val_release(ctx, &key) ;
+	if (st != UGLY_OK){
+		ugly_val_release(ctx, &v) ;
+		return throw_ugly_error(L, ctx, st) ;
+	}
+	st = push_val(ctx, R(L), L, v) ;
+	ugly_val_release(ctx, &v) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
+	return 2 ;
+}
+
+static int api_entries(lua_State *L){
+	proxy *p = check_entries(L) ;
+	ugly_ctx *ctx = need_ctx(L) ;
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_entry_keys(ctx, p->h, &it) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
+	/* The iterator as a proxy of its own: a foreign collection's keys iterator is foreign. */
+	proxy *ip = lua_newuserdatauv(L, sizeof(proxy), 0) ;
+	ip->h = it ;
+	ip->traits = 0 ;
+	luaL_setmetatable(L, PROXY_MT) ;
+	lua_pushvalue(L, 1) ;
+	lua_pushcclosure(L, entries_step, 2) ;
+	return 1 ;
+}
+
+/* pairs(p): a keyed collection's entries; otherwise nothing to walk. */
+static int proxy_pairs(lua_State *L){
+	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
+	if (! (p->traits & UGLY_TRAIT_ENTRIES)){
+		return luaL_error(L, "ugly: pairs() takes a foreign value with entries (use ugly.iter for its own iteration)") ;
+	}
+	return api_entries(L) ;
 }
 
 
@@ -1541,6 +1783,7 @@ static const luaL_Reg api[] = {
 	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure },
 	{ "shared_by_threads", api_shared_by_threads }, { "kw", api_kw }, { "opts", api_opts }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
 	{ "iter", api_iter }, { "tostring", api_tostring },
+	{ "entry", api_entry }, { "set_entry", api_set_entry }, { "entries", api_entries },
 	{ NULL, NULL }
 } ;
 
@@ -1557,6 +1800,7 @@ static void setup_state(lua_State *L, lrt *r){
 	static const luaL_Reg proxy_mt[] = {
 		{ "__index", proxy_index }, { "__newindex", proxy_newindex }, { "__call", proxy_call },
 		{ "__len", proxy_len }, { "__eq", proxy_eq }, { "__tostring", proxy_tostring }, { "__gc", proxy_gc },
+		{ "__pairs", proxy_pairs },
 		{ NULL, NULL }
 	} ;
 	luaL_newmetatable(L, PROXY_MT) ;
@@ -1827,6 +2071,40 @@ static ugly_status lua_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const
 }
 
 
+static ugly_status lua_get_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_kind want, ugly_val *out){
+	op o = mkop(OP_GET_ENTRY, ctx, rt, ref) ;
+	o.key = key ;
+	o.want = want ;
+	o.out = out ;
+	return run(&o) ;
+}
+
+static ugly_status lua_set_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_val v){
+	op o = mkop(OP_SET_ENTRY, ctx, rt, ref) ;
+	o.key = key ;
+	o.v = v ;
+	return run(&o) ;
+}
+
+static ugly_status lua_delete_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key){
+	op o = mkop(OP_DELETE_ENTRY, ctx, rt, ref) ;
+	o.key = key ;
+	return run(&o) ;
+}
+
+static ugly_status lua_entry_count(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
+	op o = mkop(OP_ENTRY_COUNT, ctx, rt, ref) ;
+	o.length = out ;
+	return run(&o) ;
+}
+
+static ugly_status lua_entry_keys(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	op o = mkop(OP_ENTRY_KEYS, ctx, rt, ref) ;
+	o.hout = out ;
+	return run(&o) ;
+}
+
+
 static ugly_status lua_iter_op(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	op o = mkop(OP_ITER, ctx, rt, ref) ;
 	o.hout = out ;
@@ -1884,6 +2162,11 @@ static const ugly_plugin plugin = {
 	.iter = lua_iter_op,
 	.next = lua_next_op,
 	.to_string = lua_to_string,
+	.get_entry = lua_get_entry,
+	.set_entry = lua_set_entry,
+	.delete_entry = lua_delete_entry,
+	.entry_count = lua_entry_count,
+	.entry_keys = lua_entry_keys,
 	.release = lua_release,
 } ;
 

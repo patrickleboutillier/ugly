@@ -41,7 +41,13 @@ The binding attaches to the running perl at `use`, and tears down in an
 ## Foreign values in Perl
 
 A foreign value is an `Ugly::Proxy` object, one per value (`==`, `eq`, `!=`
-and `ne` compare identity). Every method called on it is the foreign
+and `ne` compare identity). `%$p` is a foreign keyed collection's entries
+(a dict's keys, a table's): `$p->{k}`, `exists`, `delete`, `keys`. A hash
+key is a string, and one that reads as an integer also finds the entry
+under that integer; for any other key there are `Ugly::entry($p, $key)`,
+`Ugly::has_entry`, `Ugly::set_entry`, `Ugly::delete_entry` and
+`Ugly::entry_keys($p)`. For a value that isn't a collection, `%$p` is its
+members, as before. Every method called on it is the foreign
 value's, whatever its name; only `can`, `isa`, `DOES` and `VERSION` are
 Perl's own.
 

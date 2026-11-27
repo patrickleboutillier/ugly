@@ -46,6 +46,14 @@ Interop.Shutdown();                                           // on this thread,
 | `IsForeign(x)` | whether a value is foreign |
 | `Shutdown()` | tears UGLY down: see below |
 
+**Entries** (contract §2): `p[key]` on a foreign keyed collection (a dict,
+a table, a hash) is its entry under any key, to read and to write
+(`KeyNotFoundException` if it isn't there), through `dynamic` too. On a
+sequence an integer is an element, and where the value has no entries a
+string is a member, as before. `GetEntry`, `TryGetEntry`, `SetEntry`,
+`DeleteEntry`, `EntryCount`, `EntryKeys()` and `HasEntries` say it without
+the indexer. `p.name` is always the member.
+
 **Iteration** (contract §2): a `Foreign` is an `IEnumerable<object?>`, so
 `foreach` and LINQ run the foreign language's own iteration, one value per
 step: a Python generator runs only as far as the loop goes, and `break` or

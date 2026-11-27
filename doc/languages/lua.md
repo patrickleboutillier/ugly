@@ -48,6 +48,16 @@ identity).
 
 - `p.x`, `p.x = v`: members. `p[1]`, `p[i] = v`, `#p`: elements, **1-based**.
   Assigning one past the end appends.
+- **A foreign keyed collection** (a dict, a hash, a `Map`: contract §2,
+  "Entries") reads as a table does. `p.k` and `p["k"]` are the member of
+  that name, then the entry, then `nil`; `p[key]` with any other key (a
+  number on what isn't a sequence, a boolean, a table) is the entry.
+  `p.k = v` and `p[key] = v` store an entry, and `nil` removes it.
+  `pairs(p)` walks its keys and values. Lua has one syntax for members and
+  entries, so a member hides an entry of the same name: `ugly.entry(p, k)`
+  reads the entry whatever else has that name, `ugly.set_entry(p, k, v)`
+  stores one, and `ugly.entries(p)` is what `pairs(p)` gives. A name that
+  is neither a member nor an entry is `nil` there, not a method to try.
 - `p:m(x)` and `p.m(x)` both invoke `m` with the foreign language's receiver
   rules (Python's bound method, Java's `this`...). A member that is a class
   stays the class, so `mod.Point(1, 2)` constructs and `mod.Point.origin`
@@ -95,6 +105,10 @@ end
   `1..#t`, so a table with holes has a short length.
 - A table is INSTANTIABLE if `t.new` is a function, and its type name is its
   metatable's `__name` (set it, or every object is a `table`).
+- A table has ENTRIES too: every key, of any type, through its metamethods.
+  Its string keys are both members and entries, since Lua makes no
+  difference; a key Lua can't have (`nil`, NaN) isn't there and can't be
+  set. `entry_keys` walks `next`, in its order.
 - `invoke` passes `self` only to a method found through the metatable; a
   plain field (a module's function) is called without it. So `obj:m()` and
   `mod.f()` both work from other languages.

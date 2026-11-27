@@ -39,22 +39,43 @@ sub DESTROY { delete $code{${$_[0]}} ; Ugly::Core::_release($_[0]) }
 # A new ithread gets no copy: a copy's DESTROY would release the handle this thread holds.
 sub CLONE_SKIP { 1 }
 
-# %$proxy: the members (fields, methods, dict/hash/table entries).
+# %$proxy: a foreign keyed collection's entries (a dict's keys, a table's),
+# as a hash's are; for a value that isn't one, its members (an object's
+# fields). A hash key is a string: one that reads as an integer also finds
+# the entry under that integer (a Lua table's t[3]).
 package Ugly::Proxy::Hash ;
-sub TIEHASH { bless [ $_[1], undef, 0 ], $_[0] }
-sub FETCH { Ugly::Core::_get($_[0][0], $_[1], 0) }
-sub STORE { Ugly::Core::_set($_[0][0], $_[1], $_[2], 0) }
-sub EXISTS { Ugly::Core::_has($_[0][0], $_[1]) }
+sub TIEHASH { bless [ $_[1], undef, 0, Ugly::Core::_traits($_[1]) & 64 ], $_[0] }     # 64: UGLY_TRAIT_ENTRIES
+sub _entry {
+	my ($p, $k) = @_ ;
+	my @v = Ugly::Core::_entry_get($p, $k) ;
+	@v = Ugly::Core::_entry_get($p, 0 + $k) if ! @v && $k =~ /\A-?[0-9]+\z/ ;
+	@v
+}
+sub _names { $_[0][3] ? Ugly::Core::_entry_keys($_[0][0]) : Ugly::Core::_keys($_[0][0]) }
+sub FETCH { $_[0][3] ? (_entry($_[0][0], $_[1]))[0] : Ugly::Core::_get($_[0][0], $_[1], 0) }
+sub STORE { $_[0][3] ? Ugly::Core::_entry_set($_[0][0], $_[1], $_[2]) : Ugly::Core::_set($_[0][0], $_[1], $_[2], 0) }
+sub EXISTS { $_[0][3] ? scalar(my @v = _entry($_[0][0], $_[1])) : Ugly::Core::_has($_[0][0], $_[1]) }
 sub DELETE {
 	my ($s, $k) = @_ ;
-	my $v = Ugly::Core::_get($s->[0], $k, 0) ;
-	Ugly::Core::_delete($s->[0], $k) ;
+	my $v = $s->FETCH($k) ;
+	if ($s->[3]){
+		Ugly::Core::_entry_delete($s->[0], $k) ;
+		Ugly::Core::_entry_delete($s->[0], 0 + $k) if $k =~ /\A-?[0-9]+\z/ ;
+	}
+	else {
+		Ugly::Core::_delete($s->[0], $k) ;
+	}
 	$v
 }
-sub CLEAR { my $p = $_[0][0] ; Ugly::Core::_delete($p, $_) for Ugly::Core::_keys($p) }
-sub FIRSTKEY { $_[0][1] = [ Ugly::Core::_keys($_[0][0]) ] ; $_[0][2] = 0 ; $_[0][1][0] }
+sub CLEAR {
+	my $s = $_[0] ;
+	for my $k ($s->_names){
+		$s->[3] ? Ugly::Core::_entry_delete($s->[0], $k) : Ugly::Core::_delete($s->[0], $k) ;
+	}
+}
+sub FIRSTKEY { $_[0][1] = [ $_[0]->_names ] ; $_[0][2] = 0 ; $_[0][1][0] }
 sub NEXTKEY { $_[0][1][ ++$_[0][2] ] }
-sub SCALAR { scalar(my @k = Ugly::Core::_keys($_[0][0])) }
+sub SCALAR { scalar(my @k = $_[0]->_names) }
 
 # @$proxy: the elements. Resizing goes through ugly_splice.
 package Ugly::Proxy::Array ;
@@ -203,6 +224,15 @@ sub _str { "$_[0]" }
 
 sub is_error { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Error') }
 sub is_proxy { ref($_[0]) && UNIVERSAL::isa($_[0], 'Ugly::Proxy') }
+
+# Entries by key, for a key that isn't a string (a hash's are): Ugly::entry($p, $key)
+# is the value or undef, Ugly::has_entry whether it is there, Ugly::set_entry and
+# Ugly::delete_entry change it, and Ugly::entry_keys($p) lists the keys as they are.
+sub entry { (Ugly::Core::_entry_get($_[0], $_[1]))[0] }
+sub has_entry { scalar(my @v = Ugly::Core::_entry_get($_[0], $_[1])) }
+sub set_entry { Ugly::Core::_entry_set($_[0], $_[1], $_[2]) }
+sub delete_entry { Ugly::Core::_entry_delete($_[0], $_[1]) }
+sub entry_keys { Ugly::Core::_entry_keys($_[0]) }
 
 
 # use Ugly python => 'json' ;                         # json::dumps(...), json->dumps(...)

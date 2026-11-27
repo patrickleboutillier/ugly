@@ -59,6 +59,15 @@ A foreign value is a proxy object, one per value (`===` is identity).
 - A proxy's prototype holds only those two (`[Symbol.iterator]`,
   `toString`); its own members come first, so a Java object's `toString`
   is Java's.
+- **A foreign keyed collection** (a dict, a table, a hash) reads as an
+  object does: `p.k` and `p["k"]` are the member of that name, then the
+  entry; `p[3]` the entry 3, else `"3"`. `p.k = v` and `delete p.k` change
+  entries, and `Object.keys(p)` lists the keys a property can spell
+  (strings and integers). JS has one syntax for both, so a member hides an
+  entry of its name, and a property key is a string: `ugly.entry(p, key)`,
+  `ugly.setEntry(p, key, value)` and `ugly.deleteEntry(p, key)` take any
+  key and mean the entry, and `ugly.entries(p)` is an array of
+  `[key, value]` (`new Map(ugly.entries(p))`).
 - A symbol names no foreign member: `p[Symbol()] = v` is a `TypeError`.
 - `delete p.k` removes the foreign member (false, so a `TypeError` in
   strict code, where its members are fixed). `delete p[0]` is refused: it

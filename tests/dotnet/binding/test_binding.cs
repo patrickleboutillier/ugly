@@ -5,7 +5,7 @@
 using Ugly;
 
 static class TestBinding {
-    const int Plan = 44;
+    const int Plan = 46;
     static int count;
     static readonly HashSet<string> langs = new((Environment.GetEnvironmentVariable("UGLY_TEST_LANGS") ?? "").Split(','));
 
@@ -197,6 +197,19 @@ static class TestBinding {
             Ok(3.0.Equals(got[0]), $"another C# thread shares Python (UGLY_CAP_ANY_THREAD): {got[0]}");
             Ok("ABC".Equals(got[1]), $"  ... and gets its own Lua: {got[1]}");
             Ok(got[2] is ForeignException e && e.Message.Contains("thread"), $"  ... but the main thread's Lua values stay the main thread's: {(got[2] as Exception)?.Message}");
+        });
+
+        Check("entries", 2, ["python"], () => {
+            // Entries (contract §2): a Python dict's keys through the indexer, apart from its methods.
+            var d = (Foreign)Interop.Eval("python", "{'name': 'ugly', 3: 'three', 'keys': 'an entry'}")!;
+            Ok(d.HasEntries && "ugly".Equals(d["name"]) && "three".Equals(d[3]) && "an entry".Equals(d["keys"]) && d.EntryCount == 3
+                && !d.TryGetEntry("missing", out _), "a Python dict's entries: d[\"name\"], d[3], and its key \"keys\"");
+            d["added"] = 1;
+            d[2.5] = "a float key";
+            d.DeleteEntry("name");
+            dynamic dd = d;
+            Ok("a float key".Equals(d[2.5]) && 1L.Equals(dd["added"]) && d.EntryKeys().Count == 4 && ((Foreign)dd.keys()) != null
+                && !d.TryGetEntry("name", out _), "stores and deletes are entries; d.keys() is still the method");
         });
 
         Check("enumerables", 2, ["python"], () => {

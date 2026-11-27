@@ -169,4 +169,13 @@ function M.stringify(x)
 	return tostring(x)
 end
 
+-- Entries (contract §2): a table, whose keys are any value. Tables have no methods of their own.
+function M.make_table()
+	return { one = 1, two = 2, [3] = "three" }
+end
+
+function M.table_method()
+	return nil
+end
+
 return M

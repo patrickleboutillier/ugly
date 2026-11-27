@@ -4,6 +4,42 @@ Open work, roughly in priority order within each section, with the reasons
 behind each item; what's done is listed at the end. The contract,
 [doc/contract.md](doc/contract.md), records every decision taken.
 
+## Next steps (agreed 2026-11-27)
+
+The goal: people can play with UGLY from several languages. In this order.
+
+1. **Merge pull request #85** once its CI is green (Lua and Python have
+   entries; the JS, Perl and C# bindings read them). It was opened at the
+   end of the day and its CI wasn't checked.
+2. **Finish the members/entries split** (contract §2, "Entries"; the design
+   and what's done are under "Design questions" below). Left:
+   - JS `Map`, Perl hashes, Java `Map` and C# dictionaries as keyed
+     collections in their own plugins: `ENTRIES`, the five operations, the
+     `make_table()` and `table_method()` fixtures, and their keys taken out
+     of `MEMBERS`.
+   - The Java and Haskell bindings' side (reading a foreign collection's
+     entries), and Haskell's `Map`.
+   - Pairwise checks for entries, once every language has them.
+   - Taking a plugin's keys out of `MEMBERS` breaks any binding that still
+     reads them as members: run the whole suite after each plugin, and fix
+     the bindings it breaks in the same pull request (Python's broke JS,
+     Perl and C#).
+3. **A Docker image**, rather than a binary package per distribution: one
+   image with every language built, from what CI already installs
+   (`.github/workflows/ci.yml`). It replaces the "Packages" item under
+   "Engineering", and makes "Install layout" matter less.
+4. **A release** (2.8.0: the API grew, and behaviour changed) once the split
+   is whole, so that what people download has the review's fixes. Only when
+   the author asks.
+
+Done from the same list: the first-hour papercuts (#82) and resizing and
+deleting from Python and JS (#83).
+
+Still open by choice, to decide when they come up: `isa`, `can`, `DOES` and
+`VERSION` on a Perl proxy are Perl's own; `bool()` of an empty foreign
+sequence is false in Python; a member hides an entry of the same name in
+Lua and JS.
+
 ## Review findings (2026-11-27)
 
 A bug hunt over the core and the eight plugins, after 2.7.0. Each was
@@ -92,7 +128,10 @@ plugins do.
   `get_member` on a dict keeps reaching its keys.
   **Under way** (2026-11-27): the core, the mock and the `entries` group
   are in (libugly 2.8, plugin ABI 6; contract §2 "Entries"). Left, a
-  language per pull request: Lua, Python, JS, Perl, Java, C#, Haskell, each
+  language at a time: Lua and Python are done, and the JS, Perl and C#
+  bindings read a foreign collection's entries. Still to do: JS (`Map`),
+  Perl (hashes), Java (`Map`) and C# (dictionaries) as collections, the
+  Java and Haskell bindings, Haskell's `Map`. Each
   with its plugin's entries, its dictionaries' keys taken out of `MEMBERS`,
   its binding's syntax, and pairwise checks at the end.
   *The recommendation it follows:* split them. A new

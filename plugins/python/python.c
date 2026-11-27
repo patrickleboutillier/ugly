@@ -739,6 +739,8 @@ static PyObject *bound_method(PyObject *self, PyObject *name){
 
 static PyMethodDef list_def ;     /* a list's methods on a foreign sequence: below, with slices and del */
 static int is_list_method(const char *n) ;
+static PyMethodDef dict_def ;     /* a dict's, on a foreign keyed collection: below, with its entries */
+static int is_dict_method(const char *n) ;
 
 static PyObject *proxy_getattro(PyObject *self, PyObject *name){
 	const char *n = PyUnicode_AsUTF8(name) ;
@@ -759,6 +761,13 @@ static PyObject *proxy_getattro(PyObject *self, PyObject *name){
 		if (is_list_method(n)&&(proxy_traits(ctx, (proxy *)self) & UGLY_TRAIT_ELEMENTS)){
 			PyObject *bound = PyTuple_Pack(2, self, name) ;
 			PyObject *f = (bound != NULL ? PyCFunction_New(&list_def, bound) : NULL) ;
+			Py_XDECREF(bound) ;
+			return f ;
+		}
+		/* On a keyed collection, a dict's reading methods are Python's own, over its entries. */
+		if (is_dict_method(n)&&(proxy_traits(ctx, (proxy *)self) & UGLY_TRAIT_ENTRIES)){
+			PyObject *bound = PyTuple_Pack(2, self, name) ;
+			PyObject *f = (bound != NULL ? PyCFunction_New(&dict_def, bound) : NULL) ;
 			Py_XDECREF(bound) ;
 			return f ;
 		}
@@ -805,6 +814,193 @@ static int proxy_setattro(PyObject *self, PyObject *name, PyObject *value){
 		return -1 ;
 	}
 	return 0 ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* A foreign keyed collection as a dict (contract §2, entries)      */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Whether p[key] is an entry: the value is a keyed collection, and the key
+ * isn't an index into what is also a sequence (a Lua table is both).
+ * Python's syntax tells entries from members, so there is no fallback
+ * here: p["k"] is the entry, p.k the member.
+ */
+static int keyed(ugly_ctx *ctx, proxy *p, PyObject *key){
+	int traits = proxy_traits(ctx, p) ;
+	/* True is an int to Python, and a key of its own to a Lua table: there, an entry. */
+	int index = (PyIndex_Check(key)&&(! PyBool_Check(key)))||PySlice_Check(key) ;
+	return (traits & UGLY_TRAIT_ENTRIES)&&(! ((traits & UGLY_TRAIT_ELEMENTS)&& index)) ;
+}
+
+
+/* p[key] on a keyed collection: the entry, or KeyError. */
+static PyObject *entry_get(ugly_ctx *ctx, proxy *p, PyObject *key, PyObject *missing){
+	ugly_val k, out = ugly_null() ;
+	ugly_status st = to_val(ctx, key, UGLY_ANY, &k) ;
+	if (st == UGLY_OK){
+		st = OUT(ugly_get_entry(ctx, p->h, k, UGLY_ANY, &out)) ;
+		ugly_val_release(ctx, &k) ;
+	}
+	if (st == UGLY_ERR_NOT_FOUND){
+		if (missing != NULL){
+			Py_INCREF(missing) ;
+			return missing ;
+		}
+		PyErr_SetObject(PyExc_KeyError, key) ;
+		return NULL ;
+	}
+	return result(ctx, st, &out) ;
+}
+
+
+/* p[key] = value, or del p[key] (value NULL: KeyError if it isn't there, as a dict's). */
+static int entry_set(ugly_ctx *ctx, proxy *p, PyObject *key, PyObject *value){
+	ugly_val k, v = ugly_null() ;
+	ugly_status st = to_val(ctx, key, UGLY_ANY, &k) ;
+	if (st == UGLY_OK){
+		if (value == NULL){
+			ugly_val had = ugly_null() ;
+			st = OUT(ugly_get_entry(ctx, p->h, k, UGLY_ANY, &had)) ;
+			ugly_val_release(ctx, &had) ;
+			if (st == UGLY_OK){
+				st = OUT(ugly_delete_entry(ctx, p->h, k)) ;
+			}
+		}
+		else if ((st = to_val(ctx, value, UGLY_ANY, &v)) == UGLY_OK){
+			st = OUT(ugly_set_entry(ctx, p->h, k, v)) ;
+			ugly_val_release(ctx, &v) ;
+		}
+		ugly_val_release(ctx, &k) ;
+	}
+	if (st == UGLY_ERR_NOT_FOUND){
+		PyErr_SetObject(PyExc_KeyError, key) ;
+		return -1 ;
+	}
+	if (st != UGLY_OK){
+		raise_ugly(ctx, st) ;
+		return -1 ;
+	}
+	return 0 ;
+}
+
+
+/* The keys, now, as a Python list. NULL with an exception set. */
+static PyObject *entry_key_list(ugly_ctx *ctx, proxy *p){
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = OUT(ugly_entry_keys(ctx, p->h, &it)) ;
+	if (st != UGLY_OK){
+		return raise_ugly(ctx, st) ;
+	}
+	PyObject *list = PyList_New(0) ;
+	while (list != NULL){
+		ugly_val batch[16] ;
+		size_t got = 0, i ;
+		st = OUT(ugly_next(ctx, it, UGLY_ANY, batch, 16, &got)) ;
+		for (i = 0 ; i < got ; i++){
+			PyObject *k = (list != NULL ? from_val(ctx, batch[i]) : NULL) ;
+			if ((k == NULL)||(PyList_Append(list, k) != 0)){
+				Py_CLEAR(list) ;
+			}
+			Py_XDECREF(k) ;
+			ugly_val_release(ctx, &batch[i]) ;
+		}
+		if (st != UGLY_OK){
+			Py_CLEAR(list) ;
+			raise_ugly(ctx, st) ;
+		}
+		if (got < 16){
+			break ;
+		}
+	}
+	ugly_release(ctx, it) ;
+	return list ;
+}
+
+
+/* keys(), values(), items() and get(key, default=None): self is (proxy, name). Lists, as of now. */
+static PyObject *dict_method(PyObject *bound, PyObject *args){
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return NULL ;
+	}
+	proxy *p = (proxy *)PyTuple_GET_ITEM(bound, 0) ;
+	const char *name = PyUnicode_AsUTF8(PyTuple_GET_ITEM(bound, 1)) ;
+	if (strcmp(name, "get") == 0){
+		PyObject *key, *missing = Py_None ;
+		if (! PyArg_ParseTuple(args, "O|O:get", &key, &missing)){
+			return NULL ;
+		}
+		return entry_get(ctx, p, key, missing) ;
+	}
+	if (! PyArg_ParseTuple(args, strcmp(name, "keys") == 0 ? ":keys" : strcmp(name, "values") == 0 ? ":values" : ":items")){
+		return NULL ;
+	}
+	PyObject *keys = entry_key_list(ctx, p) ;
+	if ((keys == NULL)||(strcmp(name, "keys") == 0)){
+		return keys ;
+	}
+	int pairs = (strcmp(name, "items") == 0) ;
+	Py_ssize_t n = PyList_GET_SIZE(keys), i ;
+	PyObject *out = PyList_New(n) ;
+	for (i = 0 ; (out != NULL)&&(i < n) ; i++){
+		PyObject *k = PyList_GET_ITEM(keys, i) ;
+		PyObject *v = entry_get(ctx, p, k, Py_None) ;     /* gone since its key was listed: None */
+		PyObject *item = (((v != NULL)&& pairs) ? PyTuple_Pack(2, k, v) : v) ;
+		if (pairs){
+			Py_XDECREF(v) ;
+		}
+		if (item == NULL){
+			Py_CLEAR(out) ;
+		}
+		else {
+			PyList_SET_ITEM(out, i, item) ;
+		}
+	}
+	Py_DECREF(keys) ;
+	return out ;
+}
+
+static PyMethodDef dict_def = { "method", dict_method, METH_VARARGS, "a dict method on a foreign keyed collection" } ;
+
+static int is_dict_method(const char *n){
+	return (strcmp(n, "keys") == 0)||(strcmp(n, "values") == 0)||(strcmp(n, "items") == 0)||(strcmp(n, "get") == 0) ;
+}
+
+
+/* key in p: an entry, for a keyed collection; otherwise what its iteration gives, as Python does. */
+static int proxy_contains(PyObject *self, PyObject *key){
+	ugly_ctx *ctx = need_ctx() ;
+	if (ctx == NULL){
+		return -1 ;
+	}
+	proxy *p = (proxy *)self ;
+	if (proxy_traits(ctx, p) & UGLY_TRAIT_ENTRIES){
+		ugly_val k, out = ugly_null() ;
+		ugly_status st = to_val(ctx, key, UGLY_ANY, &k) ;
+		if (st == UGLY_OK){
+			st = OUT(ugly_get_entry(ctx, p->h, k, UGLY_ANY, &out)) ;
+			ugly_val_release(ctx, &k) ;
+			ugly_val_release(ctx, &out) ;
+		}
+		if ((st == UGLY_OK)||(st == UGLY_ERR_NOT_FOUND)){
+			return st == UGLY_OK ;
+		}
+		raise_ugly(ctx, st) ;
+		return -1 ;
+	}
+	PyObject *it = PyObject_GetIter(self), *x ;
+	if (it == NULL){
+		return -1 ;
+	}
+	int found = 0 ;
+	while ((found == 0)&&((x = PyIter_Next(it)) != NULL)){
+		found = PyObject_RichCompareBool(x, key, Py_EQ) ;
+		Py_DECREF(x) ;
+	}
+	Py_DECREF(it) ;
+	return (PyErr_Occurred() ? -1 : found) ;
 }
 
 
@@ -982,6 +1178,13 @@ static PyObject *proxy_item(PyObject *self, Py_ssize_t i){
 
 
 static PyObject *proxy_subscript(PyObject *self, PyObject *key){
+	ugly_ctx *kc = need_ctx() ;
+	if (kc == NULL){
+		return NULL ;
+	}
+	if (keyed(kc, (proxy *)self, key)){
+		return entry_get(kc, (proxy *)self, key, NULL) ;
+	}
 	if (PyIndex_Check(key)){
 		Py_ssize_t i = PyNumber_AsSsize_t(key, PyExc_IndexError) ;
 		if ((i == -1)&&(PyErr_Occurred())){
@@ -1036,6 +1239,9 @@ static int proxy_ass_subscript(PyObject *self, PyObject *key, PyObject *value){
 		return -1 ;
 	}
 	proxy *p = (proxy *)self ;
+	if (keyed(ctx, p, key)){
+		return entry_set(ctx, p, key, value) ;
+	}
 	if (PySlice_Check(key)){
 		/* p[a:b] = items, del p[a:b]: one splice. A step can't be spliced. */
 		Py_ssize_t start, count, step ;
@@ -1095,7 +1301,10 @@ static Py_ssize_t proxy_length(PyObject *self){
 		return -1 ;
 	}
 	int64_t n = 0 ;
-	ugly_status st = OUT(ugly_length(ctx, ((proxy *)self)->h, &n)) ;
+	int traits = proxy_traits(ctx, (proxy *)self) ;
+	/* A sequence's length; a keyed collection's count of entries. */
+	ugly_status st = (((traits & UGLY_TRAIT_ENTRIES)&&(! (traits & UGLY_TRAIT_ELEMENTS)))
+		? OUT(ugly_entry_count(ctx, ((proxy *)self)->h, &n)) : OUT(ugly_length(ctx, ((proxy *)self)->h, &n))) ;
 	if (st == UGLY_ERR_NOT_CAPABLE){
 		/* Python's own error for len() of what has none: list(p) and others skip it (a length hint). */
 		PyErr_SetString(PyExc_TypeError, "ugly: the foreign value has no length") ;
@@ -1120,9 +1329,21 @@ static int proxy_bool(PyObject *self){
 	if (ctx == NULL){
 		return -1 ;
 	}
-	ugly_val first = ugly_null() ;
-	ugly_status st = OUT(ugly_get_index(ctx, ((proxy *)self)->h, 0, UGLY_ANY, &first)) ;
-	ugly_val_release(ctx, &first) ;
+	int traits = proxy_traits(ctx, (proxy *)self) ;
+	ugly_status st = UGLY_ERR_NOT_FOUND ;
+	if ((traits & UGLY_TRAIT_ELEMENTS)||(! (traits & UGLY_TRAIT_ENTRIES))){
+		ugly_val first = ugly_null() ;
+		st = OUT(ugly_get_index(ctx, ((proxy *)self)->h, 0, UGLY_ANY, &first)) ;
+		ugly_val_release(ctx, &first) ;
+	}
+	if ((st == UGLY_ERR_NOT_FOUND)&&(traits & UGLY_TRAIT_ENTRIES)){
+		/* A keyed collection (a Lua table with named fields only is one): false when it has no entries, as a dict is. */
+		int64_t n = 0 ;
+		st = OUT(ugly_entry_count(ctx, ((proxy *)self)->h, &n)) ;
+		if (st == UGLY_OK){
+			return n != 0 ;
+		}
+	}
 	if (st == UGLY_ERR_NOT_FOUND){
 		return 0 ;
 	}
@@ -1187,6 +1408,12 @@ static PyObject *proxy_iter(PyObject *self){
 	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
 		if (proxy_traits(ctx, (proxy *)self) & UGLY_TRAIT_ELEMENTS){
 			return PySeqIter_New(self) ;
+		}
+		if (proxy_traits(ctx, (proxy *)self) & UGLY_TRAIT_ENTRIES){
+			/* A keyed collection its language doesn't iterate (a Perl hash): its keys, as a dict's. */
+			st = OUT(ugly_entry_keys(ctx, ((proxy *)self)->h, &it)) ;
+			ugly_val keys = ugly_hval(it) ;
+			return result(ctx, st, &keys) ;
 		}
 		PyErr_SetString(PyExc_TypeError, "ugly: the foreign value is not iterable") ;
 		return NULL ;
@@ -1269,6 +1496,7 @@ static PyMappingMethods proxy_mapping = {
 static PySequenceMethods proxy_sequence = {
 	.sq_length = proxy_length,
 	.sq_item = proxy_item,
+	.sq_contains = proxy_contains,
 } ;
 
 static PyTypeObject ProxyType = {
@@ -1500,19 +1728,30 @@ static int iterable(PyObject *o){
 }
 
 
+/*
+ * A keyed collection: a dict, or anything with a mapping's shape (keys()
+ * and item access), such as an OrderedDict, a MappingProxyType, os.environ.
+ * Not a list or a str, which have item access but no keys().
+ */
+static int is_mapping(PyObject *o){
+	if (PyDict_Check(o)){
+		return 1 ;
+	}
+	return (! PyType_Check(o))&& PyMapping_Check(o) &&(! PyList_Check(o))&&(! PyTuple_Check(o))
+		&&(! PyUnicode_Check(o))&&(! PyBytes_Check(o))&& PyObject_HasAttrString(o, "keys") ;
+}
+
+
 static ugly_status py_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *traits, ugly_val *type_name){
 	(void)rt ;
 	PyObject *o = ref ;
 	ENTER ;
-	uint32_t t = 0 ;
-	if (PyDict_Check(o)){
-		t |= UGLY_TRAIT_MEMBERS ;
+	uint32_t t = UGLY_TRAIT_MEMBERS ;     /* attributes: every object has them */
+	if (is_mapping(o)){
+		t |= UGLY_TRAIT_ENTRIES ;         /* a dict's keys are its entries, apart from them */
 	}
-	else {
-		t |= UGLY_TRAIT_MEMBERS ;     /* attributes */
-		if (PySequence_Check(o)&&(! PyUnicode_Check(o))&&(! PyBytes_Check(o))){
-			t |= UGLY_TRAIT_ELEMENTS ;
-		}
+	else if (PySequence_Check(o)&&(! PyUnicode_Check(o))&&(! PyBytes_Check(o))){
+		t |= UGLY_TRAIT_ELEMENTS ;
 	}
 	if (iterable(o)){
 		t |= UGLY_TRAIT_ITERABLE ;
@@ -1538,24 +1777,13 @@ static ugly_status py_get_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 	PyObject *o = ref ;
 	ugly_status st ;
 	ENTER ;
-	if (PyDict_Check(o)){
-		PyObject *v = PyDict_GetItemString(o, name) ;     /* borrowed */
-		if (v == NULL){
-			st = fail(ctx, UGLY_ERR_NOT_FOUND, "KeyError", name) ;
-		}
-		else {
-			Py_INCREF(v) ;
-			st = out_val(ctx, v, want, out) ;
-		}
+	/* Attributes, a dict's too (its methods): its keys are entries (py_get_entry). */
+	PyObject *v = PyObject_GetAttrString(o, name) ;
+	if ((v == NULL)&&(PyErr_ExceptionMatches(PyExc_AttributeError))){
+		st = fail(ctx, UGLY_ERR_NOT_FOUND, "AttributeError", name) ;
 	}
 	else {
-		PyObject *v = PyObject_GetAttrString(o, name) ;
-		if ((v == NULL)&&(PyErr_ExceptionMatches(PyExc_AttributeError))){
-			st = fail(ctx, UGLY_ERR_NOT_FOUND, "AttributeError", name) ;
-		}
-		else {
-			st = out_val(ctx, v, want, out) ;
-		}
+		st = out_val(ctx, v, want, out) ;
 	}
 	LEAVE ;
 	return st ;
@@ -1570,7 +1798,7 @@ static ugly_status py_set_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ch
 	PyObject *pv = from_val(ctx, v) ;
 	int rc = -1 ;
 	if (pv != NULL){
-		rc = (PyDict_Check(o) ? PyDict_SetItemString(o, name, pv) : PyObject_SetAttrString(o, name, pv)) ;
+		rc = PyObject_SetAttrString(o, name, pv) ;
 		Py_DECREF(pv) ;
 	}
 	if (rc != 0){
@@ -1588,12 +1816,7 @@ static ugly_status py_delete_member(ugly_ctx *ctx, ugly_rt *rt, void *ref, const
 	ugly_status st = UGLY_OK ;
 	ENTER ;
 	int rc = 0 ;
-	if (PyDict_Check(o)){
-		PyObject *k = PyUnicode_FromString(name) ;
-		rc = ((k == NULL) ? -1 : (PyDict_Contains(o, k) == 1 ? PyDict_DelItem(o, k) : 0)) ;
-		Py_XDECREF(k) ;
-	}
-	else if (PyObject_HasAttrString(o, name)){
+	if (PyObject_HasAttrString(o, name)){
 		rc = PyObject_DelAttrString(o, name) ;
 	}
 	if (rc != 0){
@@ -1609,8 +1832,8 @@ static ugly_status py_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_h
 	PyObject *o = ref ;
 	ugly_status st ;
 	ENTER ;
-	/* A dict's keys; otherwise dir(), without the dunder names. */
-	PyObject *names = (PyDict_Check(o) ? PyDict_Keys(o) : PyObject_Dir(o)) ;
+	/* dir(), without the dunder names. */
+	PyObject *names = PyObject_Dir(o) ;
 	if (names == NULL){
 		st = py_failure(ctx) ;
 	}
@@ -1621,7 +1844,7 @@ static ugly_status py_member_names(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_h
 			PyObject *s = PyList_GET_ITEM(names, i) ;
 			Py_ssize_t len ;
 			const char *u = (PyUnicode_Check(s) ? PyUnicode_AsUTF8AndSize(s, &len) : NULL) ;
-			if ((u == NULL)||((! PyDict_Check(o))&&(u[0] == '_')&&(u[1] == '_'))){
+			if ((u == NULL)||((u[0] == '_')&&(u[1] == '_'))){
 				PyErr_Clear() ;
 				continue ;
 			}
@@ -1640,7 +1863,8 @@ static ugly_status py_length(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out
 	(void)rt ;
 	ugly_status st = UGLY_OK ;
 	ENTER ;
-	Py_ssize_t n = PyObject_Length(ref) ;
+	/* A sequence's: a mapping's count is ugly_entry_count. */
+	Py_ssize_t n = (is_mapping(ref) ? (PyErr_SetString(PyExc_TypeError, "a mapping"), -1) : PyObject_Length(ref)) ;
 	if (n < 0){
 		st = (PyErr_ExceptionMatches(PyExc_TypeError) ? fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no length")
 			: py_failure(ctx)) ;
@@ -1658,7 +1882,7 @@ static ugly_status py_get_index(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t i
 	PyObject *o = ref ;
 	ugly_status st ;
 	ENTER ;
-	if ((! PySequence_Check(o))||PyDict_Check(o)){
+	if ((! PySequence_Check(o))||is_mapping(o)){
 		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no elements") ;
 	}
 	else {
@@ -1899,6 +2123,137 @@ static ugly_status py_new_opts(ugly_ctx *ctx, ugly_rt *rt, void *ref, const ugly
 
 
 /* iter(o); on an iterator, by Python's convention, itself. */
+/* ---------------------------------------------------------------- */
+/* Entries (ABI 6): a mapping's, by key                             */
+/* ---------------------------------------------------------------- */
+
+/* Python's own rules: keys compare with == and hash, so 1, 1.0 and True are one key. */
+static ugly_status py_get_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_kind want, ugly_val *out){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st ;
+	ENTER ;
+	if (! is_mapping(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+	}
+	else {
+		PyObject *k = from_val(ctx, key) ;
+		PyObject *v = (k != NULL ? PyObject_GetItem(o, k) : NULL) ;
+		if ((k != NULL)&&(v == NULL)&&(PyErr_ExceptionMatches(PyExc_KeyError)||PyErr_ExceptionMatches(PyExc_TypeError))){
+			/* Not there, or a key a dict can't hold (unhashable): not there either. */
+			st = fail(ctx, UGLY_ERR_NOT_FOUND, "KeyError", "no such entry") ;
+		}
+		else {
+			st = out_val(ctx, v, want, out) ;
+		}
+		Py_XDECREF(k) ;
+	}
+	LEAVE ;
+	return st ;
+}
+
+
+static ugly_status py_set_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_val v){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st = UGLY_OK ;
+	ENTER ;
+	if (! is_mapping(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+	}
+	else if (! PyObject_HasAttrString(o, "__setitem__")){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "the mapping can't be changed") ;
+	}
+	else {
+		PyObject *k = from_val(ctx, key), *pv = (k != NULL ? from_val(ctx, v) : NULL) ;
+		if ((pv == NULL)||(PyObject_SetItem(o, k, pv) != 0)){
+			st = (PyErr_ExceptionMatches(PyExc_TypeError) ? fail(ctx, UGLY_ERR_TYPE, "TypeError", "the key can't be a key of this mapping (unhashable)")
+				: py_failure(ctx)) ;
+		}
+		Py_XDECREF(pv) ;
+		Py_XDECREF(k) ;
+	}
+	LEAVE ;
+	return st ;
+}
+
+
+static ugly_status py_delete_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st = UGLY_OK ;
+	ENTER ;
+	if (! is_mapping(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+	}
+	else if (! PyObject_HasAttrString(o, "__delitem__")){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "the mapping can't be changed") ;
+	}
+	else {
+		PyObject *k = from_val(ctx, key) ;
+		if ((k == NULL)||(PyObject_DelItem(o, k) != 0)){
+			if ((k != NULL)&&(PyErr_ExceptionMatches(PyExc_KeyError)||PyErr_ExceptionMatches(PyExc_TypeError))){
+				PyErr_Clear() ;     /* not there: nothing to delete */
+			}
+			else {
+				st = py_failure(ctx) ;
+			}
+		}
+		Py_XDECREF(k) ;
+	}
+	LEAVE ;
+	return st ;
+}
+
+
+static ugly_status py_entry_count(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st = UGLY_OK ;
+	ENTER ;
+	if (! is_mapping(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+	}
+	else {
+		Py_ssize_t n = PyObject_Length(o) ;
+		if (n < 0){
+			st = py_failure(ctx) ;
+		}
+		else {
+			*out = (int64_t)n ;
+		}
+	}
+	LEAVE ;
+	return st ;
+}
+
+
+/* iter(o.keys()): a Python iterator, which py_next runs. Changing a dict while it runs raises, as in Python. */
+static ugly_status py_entry_keys(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	(void)rt ;
+	PyObject *o = ref ;
+	ugly_status st ;
+	ENTER ;
+	if (! is_mapping(o)){
+		st = fail(ctx, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+	}
+	else {
+		PyObject *keys = PyObject_CallMethod(o, "keys", NULL) ;
+		PyObject *it = (keys != NULL ? PyObject_GetIter(keys) : NULL) ;
+		Py_XDECREF(keys) ;
+		if (it == NULL){
+			st = py_failure(ctx) ;
+		}
+		else {
+			st = export_obj(ctx, it, out) ;
+			Py_DECREF(it) ;
+		}
+	}
+	LEAVE ;
+	return st ;
+}
+
+
 static ugly_status py_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	(void)rt ;
 	PyObject *o = ref ;
@@ -2242,6 +2597,11 @@ static const ugly_plugin plugin = {
 	.iter = py_iter,
 	.next = py_next,
 	.to_string = py_to_string,
+	.get_entry = py_get_entry,
+	.set_entry = py_set_entry,
+	.delete_entry = py_delete_entry,
+	.entry_count = py_entry_count,
+	.entry_keys = py_entry_keys,
 	.release = py_release,
 } ;
 

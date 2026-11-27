@@ -67,7 +67,7 @@ ok(abs(math::pi() - 3.14159265) < 1e-6, "a member that isn't callable reads as a
 ok(ref(math->can('floor')) eq 'CODE' && math->can('floor')->(2.5) == 2, "math->can('floor') gives a sub") ;
 ok(! defined(math->can('no_such_thing')), "  ... and undef for a missing member") ;
 eval { math::no_such_thing() } ;
-ok($@ =~ /no member 'no_such_thing'/, "calling a missing member dies with its name") ;
+ok(scalar($@ =~ /no member 'no_such_thing'/), "calling a missing member dies with its name") ;
 ok(scalar(@{ json::loads('[1, 2, 3]') }) == 3, "json::loads returns a Python list") ;
 ok(LuaString::upper("abc") eq "ABC", "use Ugly lua => { string => 'LuaString' }: LuaString::upper") ;
 ok(conformance::Point->new(3, 4)->norm2 == 25, "a class becomes a package with new(): conformance::Point->new(3, 4)") ;
@@ -142,7 +142,7 @@ my $failing = Ugly::iter($py->fail_after(1)) ;
 eval { $failing->next for 1 .. 2 } ;
 ok(Ugly::is_error($@) && $@->type eq 'ConformanceError', "an error while iterating is an Ugly::Error") ;
 eval { Ugly::iter(42) } ;
-ok($@ =~ /not iterable/, "Ugly::iter(42) dies") ;
+ok(scalar($@ =~ /not iterable/), "Ugly::iter(42) dies") ;
 
 package Countdown { sub new { bless { n => $_[1] }, $_[0] } sub next { my $s = shift ; return if $s->{n} <= 0 ; $s->{n}-- } }
 ok($py->sum_iter(Countdown->new(3)) == 6, "Python loops over a Perl object with a next method: 3+2+1") ;
@@ -193,6 +193,25 @@ ok($py->stringify(Countdown->new(1)) =~ /^Countdown=HASH\(0x/, "Python's str() o
 	ok(exists $h{"é"} && !defined $h{"é"}, "  ... and sets an existing character key") ;
 }
 
+# Entries (contract §2): a Python dict behind %$proxy, apart from its methods.
+{
+	my $pd = Ugly::eval("python", "{'name': 'ugly', 3: 'three', 'keys': 'an entry'}") ;
+	ok($pd->{name} eq 'ugly' && $pd->{3} eq 'three' && !exists $pd->{missing} && exists $pd->{3},
+		"a Python dict's entries: \$d->{name}, and \$d->{3} finds the integer key") ;
+	ok($pd->{keys} eq 'an entry' && Ugly::is_proxy($pd->keys),
+		"\$d->{keys} is the entry, \$d->keys the method") ;
+	$pd->{added} = 1 ;
+	Ugly::set_entry($pd, 2.5, "a float key") ;
+	delete $pd->{name} ;
+	ok(Ugly::entry($pd, 2.5) eq "a float key" && Ugly::has_entry($pd, "added") && !Ugly::has_entry($pd, "name")
+		&& join(",", sort map { "$_" } Ugly::entry_keys($pd)) eq "2.5,3,added,keys" && scalar(keys %$pd) == 4,
+		"stores and deletes are entries; Ugly::entry and friends take any key: " . join(",", sort map { "$_" } Ugly::entry_keys($pd))) ;
+}
+
+# A Perl die that crosses another language comes home as what was thrown, text and all.
+eval { $py->apply(sub { die "kept text\n" }, 1) } ;
+ok($@ eq "kept text\n", "a Perl die with a string, through Python, comes home as that string") ;
+
 # A croak in Perl's API, during an operation another language asked for, is that operation's error.
 {
 	require Hash::Util ;
@@ -200,7 +219,7 @@ ok($py->stringify(Countdown->new(1)) =~ /^Countdown=HASH\(0x/, "Python's str() o
 	Hash::Util::lock_ref_keys(\%locked) ;
 	my $store = Ugly::eval("python", "lambda d, k, v: d.__setitem__(k, v)") ;
 	eval { $store->(\%locked, "b", 2) } ;
-	ok($@ =~ /disallowed key/, "Python storing into a restricted hash: Perl's error, raised in Python and back here") ;
+	ok(scalar($@ =~ /disallowed key/), "Python storing into a restricted hash: Perl's error, raised in Python and back here") ;
 	my %open ;
 	$store->(\%open, "b", 2) ;
 	ok($open{b} == 2, "  ... and the next store works") ;

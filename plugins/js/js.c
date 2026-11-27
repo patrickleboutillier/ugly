@@ -1085,6 +1085,34 @@ static int proxy_get_own_property(JSContext *c, JSPropertyDescriptor *desc, JSVa
 			st = ugly_get_member(ctx, p->h, name, UGLY_ANY, &out) ;
 		}
 	}
+	if (((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE))&&(p->traits & UGLY_TRAIT_ENTRIES)
+		&&(! ((i >= 0)&&(p->traits & UGLY_TRAIT_ELEMENTS)))){
+		/*
+		 * Not a member: an entry of a keyed collection (contract §2). JS has
+		 * one syntax for both, so the member comes first and hides an entry
+		 * of the same name (ugly.entry reaches it). p[3] is the entry 3,
+		 * else "3": a property key that looks like a number may be either.
+		 */
+		ugly_status est = UGLY_ERR_NOT_FOUND ;
+		ugly_val e = ugly_null() ;
+		if (i >= 0){
+			est = ugly_get_entry(ctx, p->h, ugly_int(i), UGLY_ANY, &e) ;
+		}
+		if ((est == UGLY_ERR_NOT_FOUND)&&(name != NULL)){
+			est = ugly_get_entry(ctx, p->h, ugly_str(name, strlen(name)), UGLY_ANY, &e) ;
+		}
+		if (est == UGLY_OK){
+			st = UGLY_OK ;
+			out = e ;
+			JS_FreeCString(c, name) ;
+			name = NULL ;     /* an entry is a value, not a method to bind */
+		}
+		else if (est != UGLY_ERR_NOT_FOUND){
+			JS_FreeCString(c, name) ;
+			throw_ugly(c, ctx, est) ;
+			return -1 ;
+		}
+	}
 	if ((st == UGLY_ERR_NOT_FOUND)||(st == UGLY_ERR_NOT_CAPABLE)){
 		/* Not there. On a sequence, an array's resizing method of that name is ours (seq_method). */
 		int which = -1, m ;
@@ -1180,8 +1208,17 @@ static int proxy_define_own_property(JSContext *c, JSValueConst obj, JSAtom atom
 			st = ugly_set_index(ctx, p->h, i, v) ;
 		}
 		else {
+			/* On a keyed collection an assignment stores an entry (a number-like key as that number); elsewhere, a member. */
 			const char *name = JS_AtomToCString(c, atom) ;
-			st = (name != NULL ? ugly_set_member(ctx, p->h, name, v) : UGLY_ERR_USAGE) ;
+			if (name == NULL){
+				st = UGLY_ERR_USAGE ;
+			}
+			else if (p->traits & UGLY_TRAIT_ENTRIES){
+				st = ugly_set_entry(ctx, p->h, (i >= 0 ? ugly_int(i) : ugly_str(name, strlen(name))), v) ;
+			}
+			else {
+				st = ugly_set_member(ctx, p->h, name, v) ;
+			}
 			JS_FreeCString(c, name) ;
 		}
 		ugly_val_release(ctx, &v) ;
@@ -1201,6 +1238,38 @@ static int proxy_get_own_property_names(JSContext *c, JSPropertyEnum **ptab, uin
 	*plen = 0 ;
 	if ((p == NULL)||(ctx == NULL)){
 		return -1 ;
+	}
+	if (p->traits & UGLY_TRAIT_ENTRIES){
+		/* A keyed collection's own keys are its entries' (Object.keys(dict)), those a property key can spell: strings and integers. */
+		ugly_handle it = UGLY_NO_HANDLE ;
+		int64_t count = 0 ;
+		if ((ugly_entry_count(ctx, p->h, &count) != UGLY_OK)||(ugly_entry_keys(ctx, p->h, &it) != UGLY_OK)){
+			return 0 ;
+		}
+		JSPropertyEnum *ktab = js_malloc(c, sizeof(JSPropertyEnum) * (size_t)(count > 0 ? count : 1)) ;
+		uint32_t made = 0 ;
+		while (ktab != NULL){
+			ugly_val key = ugly_null() ;
+			size_t got = 0 ;
+			if ((ugly_next(ctx, it, UGLY_ANY, &key, 1, &got) != UGLY_OK)||(got == 0)){
+				break ;
+			}
+			if ((made < (uint32_t)count)&&((key.kind == UGLY_STRING)||(key.kind == UGLY_INT))){
+				char num[32] ;
+				snprintf(num, sizeof(num), "%lld", (long long)(key.kind == UGLY_INT ? key.as.i : 0)) ;
+				ktab[made].is_enumerable = 1 ;
+				ktab[made].atom = (key.kind == UGLY_STRING ? JS_NewAtomLen(c, key.as.str.ptr, key.as.str.len) : JS_NewAtom(c, num)) ;
+				made++ ;
+			}
+			ugly_val_release(ctx, &key) ;
+		}
+		ugly_release(ctx, it) ;
+		if (ktab == NULL){
+			return -1 ;
+		}
+		*ptab = ktab ;
+		*plen = made ;
+		return 0 ;
 	}
 	ugly_handle names ;
 	if (ugly_member_names(ctx, p->h, &names) != UGLY_OK){
@@ -1252,7 +1321,10 @@ static int proxy_delete_property(JSContext *c, JSValueConst obj, JSAtom atom){
 	if (name == NULL){
 		return -1 ;
 	}
-	ugly_status st = ugly_delete_member(ctx, p->h, name) ;
+	int64_t at = atom_index(c, atom) ;
+	ugly_status st = ((p->traits & UGLY_TRAIT_ENTRIES)
+		? ugly_delete_entry(ctx, p->h, (at >= 0 ? ugly_int(at) : ugly_str(name, strlen(name))))     /* a keyed collection's entry */
+		: ugly_delete_member(ctx, p->h, name)) ;
 	JS_FreeCString(c, name) ;
 	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_SUPPORTED)||(st == UGLY_ERR_NOT_IMPLEMENTED)){
 		return 0 ;     /* its members are fixed: false, a TypeError in strict code, as for a frozen object */
@@ -1589,6 +1661,123 @@ static JSValue api_is_proxy(JSContext *c, JSValueConst this_val, int argc, JSVal
 }
 
 
+/*
+ * Entries by key, for what JS's one syntax can't say (a key that isn't a
+ * string, an entry a member hides): ugly.entry(p, key), undefined if it
+ * isn't there; ugly.setEntry(p, key, value); ugly.deleteEntry(p, key); and
+ * ugly.entries(p), an array of [key, value] as they are now (new Map(...)
+ * takes it).
+ */
+static jsproxy *entries_arg(JSContext *c, int argc, JSValueConst *argv, int need){
+	jsproxy *p = (argc >= need ? proxy_of(argv[0]) : NULL) ;
+	if (p == NULL){
+		JS_ThrowTypeError(c, "ugly: a foreign value%s expected", need > 1 ? " and a key" : "") ;
+	}
+	return p ;
+}
+
+static JSValue api_entry(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	jsproxy *p = entries_arg(c, argc, argv, 2) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return JS_EXCEPTION ;
+	}
+	ugly_val key, out = ugly_null() ;
+	ugly_status st = to_val(ctx, R(c), argv[1], UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		st = ugly_get_entry(ctx, p->h, key, UGLY_ANY, &out) ;
+		ugly_val_release(ctx, &key) ;
+	}
+	return (st == UGLY_ERR_NOT_FOUND ? JS_UNDEFINED : result(c, ctx, st, &out)) ;
+}
+
+static JSValue api_set_entry(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	jsproxy *p = entries_arg(c, argc, argv, 3) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return JS_EXCEPTION ;
+	}
+	ugly_val key, v = ugly_null() ;
+	ugly_status st = to_val(ctx, R(c), argv[1], UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		if ((st = to_val(ctx, R(c), argv[2], UGLY_ANY, &v)) == UGLY_OK){
+			st = ugly_set_entry(ctx, p->h, key, v) ;
+			ugly_val_release(ctx, &v) ;
+		}
+		ugly_val_release(ctx, &key) ;
+	}
+	return (st == UGLY_OK ? JS_UNDEFINED : throw_ugly(c, ctx, st)) ;
+}
+
+static JSValue api_delete_entry(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	jsproxy *p = entries_arg(c, argc, argv, 2) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return JS_EXCEPTION ;
+	}
+	ugly_val key ;
+	ugly_status st = to_val(ctx, R(c), argv[1], UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		st = ugly_delete_entry(ctx, p->h, key) ;
+		ugly_val_release(ctx, &key) ;
+	}
+	return (st == UGLY_OK ? JS_UNDEFINED : throw_ugly(c, ctx, st)) ;
+}
+
+static JSValue api_entries(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
+	(void)this_val ;
+	jsproxy *p = entries_arg(c, argc, argv, 1) ;
+	ugly_ctx *ctx = need_ctx(c) ;
+	if ((p == NULL)||(ctx == NULL)){
+		return JS_EXCEPTION ;
+	}
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_entry_keys(ctx, p->h, &it) ;
+	if (st != UGLY_OK){
+		return throw_ugly(c, ctx, st) ;
+	}
+	JSValue pairs = JS_NewArray(c) ;
+	int64_t n = 0 ;
+	for (;;){
+		ugly_val key = ugly_null(), v = ugly_null() ;
+		size_t got = 0 ;
+		st = ugly_next(ctx, it, UGLY_ANY, &key, 1, &got) ;
+		if ((st != UGLY_OK)||(got == 0)){
+			break ;
+		}
+		st = ugly_get_entry(ctx, p->h, key, UGLY_ANY, &v) ;
+		if (st == UGLY_ERR_NOT_FOUND){
+			st = UGLY_OK ;     /* gone since its key was listed: undefined */
+		}
+		JSValue pair = JS_NewArray(c) ;
+		JSValue k = (st == UGLY_OK ? result(c, ctx, UGLY_OK, &key) : JS_UNDEFINED) ;
+		JSValue x = (st == UGLY_OK ? result(c, ctx, UGLY_OK, &v) : JS_UNDEFINED) ;
+		if ((st != UGLY_OK)||JS_IsException(k)||JS_IsException(x)){
+			ugly_val_release(ctx, &key) ;
+			ugly_val_release(ctx, &v) ;
+			JS_FreeValue(c, k) ;
+			JS_FreeValue(c, x) ;
+			JS_FreeValue(c, pair) ;
+			JS_FreeValue(c, pairs) ;
+			ugly_release(ctx, it) ;
+			return (st != UGLY_OK ? throw_ugly(c, ctx, st) : JS_EXCEPTION) ;
+		}
+		JS_SetPropertyUint32(c, pair, 0, k) ;
+		JS_SetPropertyUint32(c, pair, 1, x) ;
+		JS_SetPropertyInt64(c, pairs, n++, pair) ;
+	}
+	ugly_release(ctx, it) ;
+	if (st != UGLY_OK){
+		JS_FreeValue(c, pairs) ;
+		return throw_ugly(c, ctx, st) ;
+	}
+	return pairs ;
+}
+
+
 /* ugly.gc(): collect now, and run the finalization callbacks this queued (QuickJS queues them only at GC). */
 static JSValue api_gc(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv){
 	(void)this_val ; (void)argc ; (void)argv ;
@@ -1608,6 +1797,10 @@ static const JSCFunctionListEntry api[] = {
 	JS_CFUNC_DEF("isError", 1, api_is_error),
 	JS_CFUNC_DEF("isProxy", 1, api_is_proxy),
 	JS_CFUNC_DEF("gc", 0, api_gc),
+	JS_CFUNC_DEF("entry", 2, api_entry),
+	JS_CFUNC_DEF("setEntry", 3, api_set_entry),
+	JS_CFUNC_DEF("deleteEntry", 2, api_delete_entry),
+	JS_CFUNC_DEF("entries", 1, api_entries),
 } ;
 
 
