@@ -2,6 +2,7 @@
 
 import builtins
 import gc
+import itertools
 
 import ugly
 
@@ -29,6 +30,9 @@ class counter:
     def __del__(self):
         global _finalized
         _finalized += 1
+
+    def __str__(self):
+        return f"counter({self.count})"
 
 
 class ConformanceError(Exception):
@@ -127,3 +131,47 @@ class KwBox:
 
     def add(self, n=1):
         return self.value + n
+
+
+# Iteration (contract §2): generators, run only as far as asked.
+_produced = 0
+
+
+def count_to(n):
+    global _produced
+    _produced = 0
+    for i in range(n):
+        _produced += 1
+        yield i
+
+
+def naturals():
+    global _finalized
+    try:
+        yield from itertools.count()
+    finally:     # closed when released early
+        _finalized += 1
+
+
+def fail_after(n):
+    yield from range(n)
+    raise ConformanceError(f"fail_after({n})")
+
+
+def produced():
+    return _produced
+
+
+def sum_iter(xs):
+    total = 0
+    for x in xs:
+        total += x
+    return total
+
+
+def take_iter(xs, n):
+    return builtins.list(itertools.islice(xs, n))
+
+
+def stringify(x):
+    return str(x)

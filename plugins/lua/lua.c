@@ -29,6 +29,8 @@
 #error "the Lua plugin needs Lua 5.3 or 5.4"
 #elif LUA_VERSION_NUM == 503
 #define lua_newuserdatauv(L, size, nuv) lua_newuserdata((L), (size))
+#define lua_setiuservalue(L, idx, n) lua_setuservalue((L), (idx))
+#define lua_getiuservalue(L, idx, n) lua_getuservalue((L), (idx))
 #endif
 
 #include "ugly_plugin.h"
@@ -38,6 +40,7 @@
 #define ERROR_MT "ugly.error"
 #define KW_MT "ugly.kw"
 #define OPTS_MT "ugly.opts"
+#define ITER_MT "ugly.iterator"
 #define PROXY_CACHE "ugly.proxies"
 
 #define REF(p) ((int)(intptr_t)(p))
@@ -71,6 +74,37 @@ static proxy *to_proxy(lua_State *L, int idx){
 	return p ;
 }
 typedef struct { ugly_error *err ; } errbox ;
+
+/*
+ * An iterator over a Lua function (ugly_iter): the generic for's state.
+ * Its user value is { f, control }; each step is f(nil, control), and the
+ * first value returned is the next control, until nil.
+ */
+typedef struct { int done ; } lua_iter ;
+
+
+/* One step of the iterator at idx: pushes the value and returns 1, or returns 0 at the end. May raise. */
+static int iter_advance(lua_State *L, int idx){
+	lua_iter *it = luaL_checkudata(L, idx, ITER_MT) ;
+	if (it->done){
+		return 0 ;
+	}
+	idx = lua_absindex(L, idx) ;
+	lua_getiuservalue(L, idx, 1) ;
+	lua_rawgeti(L, -1, 1) ;
+	lua_pushnil(L) ;
+	lua_rawgeti(L, -3, 2) ;
+	lua_call(L, 2, 1) ;
+	if (lua_isnil(L, -1)){
+		it->done = 1 ;     /* the for loop would stop here: so does the iterator */
+		lua_pop(L, 2) ;
+		return 0 ;
+	}
+	lua_pushvalue(L, -1) ;
+	lua_rawseti(L, -3, 2) ;
+	lua_remove(L, -2) ;
+	return 1 ;
+}
 
 
 /* The runtime a state (or one of its coroutines) belongs to, from the registry. */
@@ -392,7 +426,8 @@ static ugly_status lua_failure(ugly_ctx *ctx, lrt *r){
 /* ---------------------------------------------------------------- */
 
 enum { OP_IMPORT, OP_GLOBALS, OP_EVAL, OP_DESCRIBE, OP_GET_MEMBER, OP_SET_MEMBER, OP_MEMBER_NAMES,
-	OP_LENGTH, OP_GET_INDEX, OP_SET_INDEX, OP_INVOKE, OP_NEW, OP_DELETE_MEMBER, OP_SPLICE } ;
+	OP_LENGTH, OP_GET_INDEX, OP_SET_INDEX, OP_INVOKE, OP_NEW, OP_DELETE_MEMBER, OP_SPLICE,
+	OP_ITER, OP_NEXT, OP_TO_STRING } ;
 
 typedef struct op {
 	int code ;
@@ -402,7 +437,7 @@ typedef struct op {
 	const char *name ;
 	size_t len ;
 	int64_t index ;
-	int64_t count ;       /* splice: how many to remove */
+	int64_t count ;       /* splice: how many to remove; next: how many were made */
 	const ugly_val *args ;
 	size_t nargs ;
 	ugly_kind want ;
@@ -501,6 +536,10 @@ static int op_body(lua_State *L){
 			}
 			else if ((lt == LUA_TUSERDATA)&&(indexable(L, 2))){
 				t |= UGLY_TRAIT_MEMBERS ;
+			}
+			/* Lua's iterators are functions: every one is, with the generic for's meaning. */
+			if ((lt == LUA_TFUNCTION)||(luaL_testudata(L, 2, ITER_MT) != NULL)){
+				t |= UGLY_TRAIT_ITERABLE ;
 			}
 			if (callable(L, 2)){
 				t |= UGLY_TRAIT_CALLABLE ;
@@ -679,6 +718,50 @@ static int op_body(lua_State *L){
 					*o->hout = v.as.h ;
 				}
 			}
+			return 0 ;
+
+		case OP_ITER:
+			if (luaL_testudata(L, 2, ITER_MT) != NULL){
+				lua_pushvalue(L, 2) ;     /* an iterator's iterator is itself */
+			}
+			else if (lua_type(L, 2) == LUA_TFUNCTION){
+				lua_iter *it = lua_newuserdatauv(L, sizeof(lua_iter), 1) ;
+				it->done = 0 ;
+				luaL_setmetatable(L, ITER_MT) ;
+				lua_createtable(L, 2, 0) ;
+				lua_pushvalue(L, 2) ;
+				lua_rawseti(L, -2, 1) ;
+				lua_setiuservalue(L, -2, 1) ;
+			}
+			else {
+				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not iterable (Lua's iterators are functions)") ;
+			}
+			{
+				ugly_val v ;
+				o->st = to_val(ctx, r, L, -1, UGLY_HANDLE, &v) ;
+				if (o->st == UGLY_OK){
+					*o->hout = v.as.h ;
+				}
+			}
+			return 0 ;
+
+		case OP_NEXT: {
+			/* As the generic for: f(nil, control) until nil, at most len steps. o->count survives an error. */
+			if (luaL_testudata(L, 2, ITER_MT) == NULL){
+				FAIL(o, UGLY_ERR_NOT_CAPABLE, "TypeError", "value is not an iterator") ;
+			}
+			while ((o->count < (int64_t)o->len)&&iter_advance(L, 2)){
+				CHECK(o, to_val(ctx, r, L, -1, o->want, &o->out[o->count])) ;
+				o->count++ ;
+				lua_pop(L, 1) ;
+			}
+			return 0 ;
+		}
+
+		case OP_TO_STRING:
+			/* tostring(): __tostring, or __name and the address; STRING if valid UTF-8, else BYTES. */
+			luaL_tolstring(L, 2, NULL) ;
+			o->st = to_val(ctx, r, L, -1, UGLY_ANY, o->out) ;
 			return 0 ;
 	}
 	return 0 ;
@@ -1080,9 +1163,93 @@ static int proxy_eq(lua_State *L){
 }
 
 
+/* tostring(p): the value as its language makes it a string (ugly_to_string); where it has none, ugly.proxy(<handle>). */
 static int proxy_tostring(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
-	lua_pushfstring(L, "ugly.proxy(%p)", (void *)(uintptr_t)p->h) ;
+	ugly_ctx *ctx = need_ctx(L) ;
+	ugly_val v = ugly_null() ;
+	ugly_status st = ugly_to_string(ctx, p->h, &v) ;
+	if (st == UGLY_ERR_RAISED){
+		return throw_ugly_error(L, ctx, st) ;     /* its str() raised */
+	}
+	if (st != UGLY_OK){
+		lua_pushfstring(L, "ugly.proxy(%p)", (void *)(uintptr_t)p->h) ;
+		return 1 ;
+	}
+	if (v.kind == UGLY_STRING){
+		lua_pushlstring(L, v.as.str.ptr, v.as.str.len) ;
+	}
+	else {
+		lua_pushlstring(L, (const char *)v.as.bytes.ptr, v.as.bytes.len) ;
+	}
+	ugly_val_release(ctx, &v) ;
+	return 1 ;
+}
+
+
+/* A step of ugly.iter(p): the next value, or nil at the end. Upvalue 1 is the iterator's proxy. */
+static int iter_step(lua_State *L){
+	proxy *p = to_proxy(L, lua_upvalueindex(1)) ;
+	ugly_ctx *ctx = need_ctx(L) ;
+	ugly_val v = ugly_null() ;
+	size_t got = 0 ;
+	ugly_status st = ugly_next(ctx, p->h, UGLY_ANY, &v, 1, &got) ;
+	if ((st == UGLY_OK)&&(got == 0)){
+		lua_pushnil(L) ;
+		return 1 ;
+	}
+	return finish(L, ctx, st, &v) ;
+}
+
+
+/* A step of ugly.iter(it), for an iterator over a Lua function come home: upvalue 1. */
+static int iter_native(lua_State *L){
+	if (! iter_advance(L, lua_upvalueindex(1))){
+		lua_pushnil(L) ;
+	}
+	return 1 ;
+}
+
+
+/*
+ * ugly.iter(x): for v in ugly.iter(x) do. A foreign iterable gives a
+ * function over its own iteration, one value per step (a nil value ends
+ * Lua's loop, as it would any iterator); a Lua function is returned as is,
+ * and an iterator over one (ugly_iter's, come home) goes on from where it is.
+ */
+static int api_iter(lua_State *L){
+	proxy *p = to_proxy(L, 1) ;
+	if ((p == NULL)&&(lua_type(L, 1) == LUA_TFUNCTION)){
+		lua_settop(L, 1) ;
+		return 1 ;
+	}
+	if (luaL_testudata(L, 1, ITER_MT) != NULL){
+		lua_settop(L, 1) ;
+		lua_pushcclosure(L, iter_native, 1) ;
+		return 1 ;
+	}
+	if (p == NULL){
+		return luaL_argerror(L, 1, "a foreign value or a function expected") ;
+	}
+	ugly_ctx *ctx = need_ctx(L) ;
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_iter(ctx, p->h, &it) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
+	st = push_val(ctx, R(L), L, ugly_hval(it)) ;
+	ugly_release(ctx, it) ;
+	if (st != UGLY_OK){
+		return throw_ugly_error(L, ctx, st) ;
+	}
+	if (luaL_testudata(L, -1, ITER_MT) != NULL){
+		lua_pushcclosure(L, iter_native, 1) ;
+		return 1 ;
+	}
+	if (to_proxy(L, -1) == NULL){
+		return luaL_error(L, "ugly.iter: the foreign value's iterator is a Lua value") ;
+	}
+	lua_pushcclosure(L, iter_step, 1) ;
 	return 1 ;
 }
 
@@ -1273,6 +1440,7 @@ static int api_is_proxy(lua_State *L){
 static const luaL_Reg api[] = {
 	{ "module", api_module }, { "eval", api_eval }, { "configure", api_configure },
 	{ "shared_by_threads", api_shared_by_threads }, { "kw", api_kw }, { "opts", api_opts }, { "is_error", api_is_error }, { "is_proxy", api_is_proxy },
+	{ "iter", api_iter },
 	{ NULL, NULL }
 } ;
 
@@ -1303,6 +1471,11 @@ static void setup_state(lua_State *L, lrt *r){
 	lua_pop(L, 1) ;
 
 	luaL_newmetatable(L, KW_MT) ;     /* marks ugly.kw{...} tables */
+	lua_pop(L, 1) ;
+
+	luaL_newmetatable(L, ITER_MT) ;     /* iterators over functions (ugly_iter), named for describe */
+	lua_pushliteral(L, "iterator") ;
+	lua_setfield(L, -2, "__name") ;
 	lua_pop(L, 1) ;
 
 	/* Proxy cache: handle -> proxy, with weak values. */
@@ -1551,6 +1724,31 @@ static ugly_status lua_new_instance(ugly_ctx *ctx, ugly_rt *rt, void *ref, const
 }
 
 
+static ugly_status lua_iter_op(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	op o = mkop(OP_ITER, ctx, rt, ref) ;
+	o.hout = out ;
+	return run(&o) ;
+}
+
+
+static ugly_status lua_next_op(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max, size_t *got){
+	op o = mkop(OP_NEXT, ctx, rt, ref) ;
+	o.want = want ;
+	o.out = out ;
+	o.len = max ;
+	ugly_status st = run(&o) ;
+	*got = (size_t)o.count ;     /* what was made before an error too */
+	return st ;
+}
+
+
+static ugly_status lua_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out){
+	op o = mkop(OP_TO_STRING, ctx, rt, ref) ;
+	o.out = out ;
+	return run(&o) ;
+}
+
+
 static void lua_release(ugly_rt *rt, void *ref){
 	lrt *r = ugly_rt_native(rt) ;
 	luaL_unref(r->L, LUA_REGISTRYINDEX, REF(ref)) ;
@@ -1580,6 +1778,9 @@ static const ugly_plugin plugin = {
 	.call = lua_call_op,
 	.invoke = lua_invoke,
 	.new_instance = lua_new_instance,
+	.iter = lua_iter_op,
+	.next = lua_next_op,
+	.to_string = lua_to_string,
 	.release = lua_release,
 } ;
 

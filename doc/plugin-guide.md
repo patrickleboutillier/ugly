@@ -58,6 +58,16 @@ lines of C, with no interpreter in the way: read it first.
   key, so the same handle), and `release` of the last reference closes it
   as a `break` would. Values made before an error stay in `out` with `*got`
   counting them: the core hands them to the caller with the error.
+  - Where the language's iterator isn't an object (Lua: a function, plus
+    the control variable the `for` keeps), `iter` makes one holding that
+    state, and everything that takes an iterator must recognize it when it
+    comes home (rule 5): Lua's `ugly.iter` steps it natively.
+  - Hooking a proxy into the language's loop can replace a fallback the
+    language had: Python's `iter()` used the sequence protocol on proxies
+    until `tp_iter` existed, so `proxy_iter` falls back to it for a value
+    with elements that its own language doesn't iterate. And loops probe
+    more than `next`: `list(p)` asks for a length hint, which skips only a
+    `TypeError`, so a proxy's "no length" must be the language's own error.
 - **Identity.** Export the same object with the same identity key, so the
   core gives back the same handle. A moving GC needs a stable key: an id
   table (Java's `IdentityHashMap`), or a pinned handle whose address is the

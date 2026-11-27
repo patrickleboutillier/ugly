@@ -148,6 +148,48 @@ int main(void){
 	}
 	ugly_release(ctx, cb) ;
 
+	/* Iteration (contract §2): A's own loop over B's iterables, and B's stringification in A. */
+	ugly_handle a_sum = member(ctx, f.mod, "sum_iter"), b_count = member(ctx, mb, "count_to") ;
+	if ((a_sum != UGLY_NO_HANDLE)&&(b_count != UGLY_NO_HANDLE)){
+		ugly_val five = ugly_int(5), two = ugly_int(2), g ;
+		if (ugly_call(ctx, b_count, &five, 1, UGLY_HANDLE, &g) == UGLY_OK){
+			st = ugly_call(ctx, a_sum, &g, 1, UGLY_INT, &v) ;
+			ok((st == UGLY_OK)&&(v.as.i == 10), "A.sum_iter(B.count_to(5)): A's loop over B's iterable: 10") ;
+			ugly_val_release(ctx, &g) ;
+		}
+		if (fcall(&f, mb, "naturals", NULL, 0, UGLY_HANDLE, &g) == UGLY_OK){
+			ugly_val args[] = { g, ugly_int(3) } ;
+			int64_t len = -1 ;
+			st = fcall(&f, f.mod, "take_iter", args, 2, UGLY_HANDLE, &v) ;
+			ok((st == UGLY_OK)&&(ugly_length(ctx, v.as.h, &len) == UGLY_OK)&&(len == 3),
+				"A.take_iter(B.naturals(), 3): A's loop stops B's infinite one") ;
+			if (st == UGLY_OK){
+				ugly_val_release(ctx, &v) ;
+			}
+			ugly_val_release(ctx, &g) ;
+		}
+		if (fcall(&f, mb, "fail_after", &two, 1, UGLY_HANDLE, &g) == UGLY_OK){
+			st = ugly_call(ctx, a_sum, &g, 1, UGLY_INT, &v) ;
+			is_status(ctx, st, UGLY_ERR_RAISED, "A.sum_iter(B.fail_after(2)): B's error ends A's loop") ;
+			if ((e = ugly_last_error(ctx)) != NULL){
+				is_str(ugly_error_language(e), peer_name(), "  ... still B's error") ;
+				is_str(ugly_error_type(e), "ConformanceError", "  ... type intact") ;
+			}
+			ugly_val_release(ctx, &g) ;
+		}
+		arg = ugly_hval(bc) ;
+		st = fcall(&f, f.mod, "stringify", &arg, 1, UGLY_STRING, &v) ;
+		if (is_status(ctx, st, UGLY_OK, "A.stringify(B counter)")){
+			is_str(sval(&v), "counter(1)", "  ... B's own string for it: counter(1)") ;
+			ugly_val_release(ctx, &v) ;
+		}
+	}
+	else {
+		skip("iteration across A and B: one of them doesn't iterate yet") ;
+	}
+	ugly_release(ctx, a_sum) ;
+	ugly_release(ctx, b_count) ;
+
 	/* Recursion alternating languages: A -> C -> B -> C -> A ... 50 levels. */
 	alt a = { &f, UGLY_NO_HANDLE, { member(ctx, f.mod, "apply"), member(ctx, mb, "apply") } } ;
 	ugly_callable_new(ctx, alternate, &a, NULL, &a.self) ;
