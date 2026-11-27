@@ -179,7 +179,7 @@ math::sqrt(16) ;                                  # 4
 my $l = json::loads('[1, 2, 3]') ;                # a Python list
 push @$l, 4 ;  shift @$l ;  splice(@$l, 0, 1, 'x') ;   # Python sees ['x', 3, 4]
 my $al = java::util::ArrayList->new ;             # classes are packages with new()
-my $d = json::loads('{"k": 1}') ;                 # a Python dict
+my $d = json::loads('{"k": 1}') ;                 # a Python dict: its keys are %$d
 delete $d->{k} ;  exists $d->{k} ;                # false
 ```
 

@@ -511,7 +511,14 @@ static void croak_ugly(pTHX_ ugly_ctx *ctx, plrt *r, ugly_status st){
 static const char *message_of(pTHX_ SV *sv){
 	SV *text ;
 	if (! (SvROK(sv)&&SvOBJECT(SvRV(sv)))){
-		text = sv_mortalcopy(sv) ;
+		/*
+		 * A copy of its characters, made by hand: sv_mortalcopy of a
+		 * temporary takes its buffer away (perl's "steal" optimization),
+		 * and sv is the caller's copy of $@, the payload to be.
+		 */
+		STRLEN n ;
+		const char *chars = SvPV(sv, n) ;
+		text = newSVpvn_flags(chars, n, SVs_TEMP | (SvUTF8(sv) ? SVf_UTF8 : 0)) ;
 	}
 	else {
 		ENTER ;
@@ -931,6 +938,122 @@ XS(xs_proxy_set){
 }
 
 
+/*
+ * Entries (contract §2), behind %$proxy for a foreign keyed collection and
+ * behind Ugly::entry and friends. The key is any Perl value.
+ *
+ * Ugly::Core::_entry_get($proxy, $key): the value, or the empty list if it isn't there.
+ */
+XS(xs_entry_get){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 2)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_val key, out = ugly_null() ;
+	ugly_status st = to_val(aTHX_ ctx, r, ST(1), UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		st = ugly_get_entry(ctx, PROXY_HANDLE(ST(0)), key, UGLY_ANY, &out) ;
+		ugly_val_release(ctx, &key) ;
+	}
+	if (st == UGLY_ERR_NOT_FOUND){
+		XSRETURN_EMPTY ;
+	}
+	ST(0) = xs_result(aTHX_ ctx, r, st, &out) ;
+	XSRETURN(1) ;
+}
+
+
+/* Ugly::Core::_entry_set($proxy, $key, $value) */
+XS(xs_entry_set){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 3)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_val key, v = ugly_null() ;
+	ugly_status st = to_val(aTHX_ ctx, r, ST(1), UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		if ((st = to_val(aTHX_ ctx, r, ST(2), UGLY_ANY, &v)) == UGLY_OK){
+			st = ugly_set_entry(ctx, PROXY_HANDLE(ST(0)), key, v) ;
+			ugly_val_release(ctx, &v) ;
+		}
+		ugly_val_release(ctx, &key) ;
+	}
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	XSRETURN_EMPTY ;
+}
+
+
+/* Ugly::Core::_entry_delete($proxy, $key) */
+XS(xs_entry_delete){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 2)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_val key ;
+	ugly_status st = to_val(aTHX_ ctx, r, ST(1), UGLY_ANY, &key) ;
+	if (st == UGLY_OK){
+		st = ugly_delete_entry(ctx, PROXY_HANDLE(ST(0)), key) ;
+		ugly_val_release(ctx, &key) ;
+	}
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	XSRETURN_EMPTY ;
+}
+
+
+/* Ugly::Core::_entry_keys($proxy): the keys, as they are now. */
+XS(xs_entry_keys){
+	dXSARGS ;
+	plrt *r = R(my_perl) ;
+	ugly_ctx *ctx = xs_ctx(aTHX) ;
+	if ((items < 1)||(! IS_PROXY(ST(0)))){
+		croak("ugly: not a proxy") ;
+	}
+	ugly_handle it = UGLY_NO_HANDLE ;
+	ugly_status st = ugly_entry_keys(ctx, PROXY_HANDLE(ST(0)), &it) ;
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	/* The keys first, then the stack: a call through the core can move perl's stack (see xs_proxy_keys). */
+	AV *keys = (AV *)sv_2mortal((SV *)newAV()) ;
+	for (;;){
+		ugly_val k = ugly_null() ;
+		size_t got = 0 ;
+		st = ugly_next(ctx, it, UGLY_ANY, &k, 1, &got) ;
+		if ((st != UGLY_OK)||(got == 0)){
+			break ;
+		}
+		SV *sv = from_val(aTHX_ ctx, r, k, &st) ;
+		ugly_val_release(ctx, &k) ;
+		if (sv == NULL){
+			break ;
+		}
+		av_push(keys, sv) ;
+	}
+	ugly_release(ctx, it) ;
+	if (st != UGLY_OK){
+		croak_ugly(aTHX_ ctx, r, st) ;
+	}
+	SSize_t n = av_len(keys) + 1, i ;
+	SPAGAIN ;
+	SP -= items ;
+	EXTEND(SP, n) ;
+	for (i = 0 ; i < n ; i++){
+		PUSHs(sv_mortalcopy(*av_fetch(keys, i, 0))) ;
+	}
+	PUTBACK ;
+}
+
+
 /* Ugly::Core::_has($proxy, $name): whether the member exists (even if it is undef). */
 XS(xs_proxy_has){
 	dXSARGS ;
@@ -1299,6 +1422,10 @@ static void register_xs(pTHX){
 	newXS("Ugly::Core::_iter", xs_proxy_iter, file) ;
 	newXS("Ugly::Core::_next", xs_proxy_next, file) ;
 	newXS("Ugly::Core::_str", xs_proxy_str, file) ;
+	newXS("Ugly::Core::_entry_get", xs_entry_get, file) ;
+	newXS("Ugly::Core::_entry_set", xs_entry_set, file) ;
+	newXS("Ugly::Core::_entry_delete", xs_entry_delete, file) ;
+	newXS("Ugly::Core::_entry_keys", xs_entry_keys, file) ;
 	newXS("Ugly::Error::_free", xs_error_free, file) ;
 	newXS("Ugly::module", xs_module, file) ;
 	newXS("Ugly::eval", xs_eval, file) ;

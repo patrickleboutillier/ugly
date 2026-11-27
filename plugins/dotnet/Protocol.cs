@@ -27,7 +27,7 @@ sealed class MethodRef(Type cls, object? target, string name) {
 }
 
 static class Protocol {
-    public const uint MEMBERS = 1, ELEMENTS = 2, CALLABLE = 4, INSTANTIABLE = 8, ITERABLE = 32;
+    public const uint MEMBERS = 1, ELEMENTS = 2, CALLABLE = 4, INSTANTIABLE = 8, ITERABLE = 32, ENTRIES = 64;
 
     const BindingFlags Static = BindingFlags.Public | BindingFlags.Static;
     const BindingFlags Instance = BindingFlags.Public | BindingFlags.Instance;

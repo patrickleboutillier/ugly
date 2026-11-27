@@ -92,7 +92,10 @@ plugins do.
   `get_member` on a dict keeps reaching its keys.
   **Under way** (2026-11-27): the core, the mock and the `entries` group
   are in (libugly 2.8, plugin ABI 6; contract §2 "Entries"). Left, a
-  language per pull request: Python, JS, Perl, Java, C#, Haskell (Lua is done), each
+  language at a time: Lua and Python are done, and the JS, Perl and C#
+  bindings read a foreign collection's entries. Still to do: JS (`Map`),
+  Perl (hashes), Java (`Map`) and C# (dictionaries) as collections, the
+  Java and Haskell bindings, Haskell's `Map`. Each
   with its plugin's entries, its dictionaries' keys taken out of `MEMBERS`,
   its binding's syntax, and pairwise checks at the end.
   *The recommendation it follows:* split them. A new
