@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define UGLY_PLUGIN_ABI 5     /* 2: delete_member, splice; 3: options; 4: call options; 5: iter, next, to_string */
+#define UGLY_PLUGIN_ABI 6     /* 2: delete_member, splice; 3: options; 4: call options; 5: iter, next, to_string; 6: entries */
 
 
 /*
@@ -169,6 +169,20 @@ typedef struct ugly_plugin {
 	ugly_status (*next)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_kind want, ugly_val *out, size_t max,
 		size_t *got) ;
 	ugly_status (*to_string)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val *out) ;
+
+	/*
+	 * ABI 6. Entries (contract §2): a keyed collection's, apart from its
+	 * members. The key and the value are borrowed, like arguments. A key the
+	 * collection can't hold is UGLY_ERR_NOT_FOUND to get, nothing to delete,
+	 * and UGLY_ERR_TYPE to set; keys compare as the language compares them.
+	 * 'entry_keys' exports an iterator over the keys, which 'next' runs.
+	 * NULL: UGLY_ERR_NOT_IMPLEMENTED.
+	 */
+	ugly_status (*get_entry)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_kind want, ugly_val *out) ;
+	ugly_status (*set_entry)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_val v) ;
+	ugly_status (*delete_entry)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key) ;
+	ugly_status (*entry_count)(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out) ;
+	ugly_status (*entry_keys)(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out) ;
 } ugly_plugin ;
 
 

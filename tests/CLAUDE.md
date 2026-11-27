@@ -2,7 +2,7 @@
 
 Notes for Claude Code, loaded when working in this directory. The project's rules are in the root `CLAUDE.md`.
 
-**`tests/`** is the conformance suite: 10 C programs (the 8 groups of contract §9, `options` and `iterators`) plus `conformance.h` (TAP and fixture), and `pairwise.c`.
+**`tests/`** is the conformance suite: 11 C programs (the 8 groups of contract §9, `options`, `iterators` and `entries`) plus `conformance.h` (TAP and fixture), and `pairwise.c`.
 
 - Meson registers each program once per plugin in `test_plugins` (suites `conformance` and `conformance-<plugin>`, env `UGLY_TEST_PLUGIN`), and `pairwise.c` once per ordered pair of different plugins (suite `pairwise`, env `UGLY_TEST_PEER`).
 - Fixtures are each plugin's `conformance` module, in `tests/lua/` and `tests/python/` (the mock's are built in). The spec is in contract §9.

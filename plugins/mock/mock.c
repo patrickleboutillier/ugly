@@ -23,7 +23,7 @@
 /* The mock language's native values                                */
 /* ---------------------------------------------------------------- */
 
-typedef enum { M_MODULE, M_FUNC, M_COUNTER, M_LIST, M_CLASS, M_POINT, M_EXC, M_PROXY, M_KWBOX, M_ITER, M_GEN } mkind ;
+typedef enum { M_MODULE, M_FUNC, M_COUNTER, M_LIST, M_CLASS, M_POINT, M_EXC, M_PROXY, M_KWBOX, M_ITER, M_GEN, M_TABLE } mkind ;
 
 typedef struct mobj mobj ;
 typedef struct mock_rt mock_rt ;
@@ -55,7 +55,8 @@ struct mobj {
 	int64_t limit ;      /* M_GEN: where it ends (< 0: never) */
 	bool fails ;         /* M_GEN: raises at 'limit' instead of ending */
 
-	mval *vals ;         /* M_LIST */
+	mval *vals ;         /* M_LIST; M_TABLE: the values, beside keys */
+	mval *keys ;         /* M_TABLE */
 	size_t n, cap ;
 
 	double x, y ;        /* M_POINT */
@@ -137,6 +138,12 @@ static void obj_unref(mobj *o){
 		case M_ITER:
 			obj_unref(o->items) ;
 			break ;
+		case M_TABLE:
+			for (i = 0 ; i < o->n ; i++){
+				mval_free(&o->keys[i]) ;
+			}
+			free(o->keys) ;
+			/* fall through */
 		case M_MODULE:
 		case M_LIST:
 			for (i = 0 ; i < o->n ; i++){
@@ -391,7 +398,7 @@ static ugly_status f_echo(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *re
 
 static const char *kind_of(const mval *v){
 	static const char *objs[] = { "module", "function", "counter", "list", "class", "point", "exception", "proxy", "kwbox",
-		"iterator", "generator" } ;
+		"iterator", "generator", "table" } ;
 	switch (v->kind){
 		case UGLY_NULL: return "null" ;
 		case UGLY_BOOL: return "bool" ;
@@ -409,6 +416,86 @@ static ugly_status f_kind_of(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval 
 	ARGS(1) ;
 	const char *k = kind_of(&a[0]) ;
 	*ret = mstr(UGLY_STRING, k, strlen(k)) ;
+	return UGLY_OK ;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Tables: the mock's keyed collection (contract §2, entries)       */
+/* ---------------------------------------------------------------- */
+
+/* Keys are equal when they are the same kind of value and the same value; objects, when the same object. */
+static int key_equal(ugly_ctx *ctx, const mval *a, const mval *b){
+	if (a->kind != b->kind){
+		return 0 ;
+	}
+	switch (a->kind){
+		case UGLY_NULL: return 1 ;
+		case UGLY_BOOL: return a->as.b == b->as.b ;
+		case UGLY_INT: return a->as.i == b->as.i ;
+		case UGLY_DOUBLE: return a->as.d == b->as.d ;
+		case UGLY_STRING:
+		case UGLY_BYTES: return (a->as.s.len == b->as.s.len)&&(memcmp(a->as.s.p, b->as.s.p, a->as.s.len) == 0) ;
+		case UGLY_HANDLE: {
+			bool same = (a->as.o == b->as.o) ;
+			if ((! same)&&(a->as.o->kind == M_PROXY)&&(b->as.o->kind == M_PROXY)){
+				ugly_same(ctx, a->as.o->h, b->as.o->h, &same) ;
+			}
+			return same ;
+		}
+		default: return 0 ;
+	}
+}
+
+
+static long table_find(ugly_ctx *ctx, const mobj *t, const mval *key){
+	size_t i ;
+	for (i = 0 ; i < t->n ; i++){
+		if (key_equal(ctx, &t->keys[i], key)){
+			return (long)i ;
+		}
+	}
+	return -1 ;
+}
+
+
+/* Sets key to value (both taken). */
+static void table_set(ugly_ctx *ctx, mobj *t, mval key, mval value){
+	long i = table_find(ctx, t, &key) ;
+	if (i >= 0){
+		mval_free(&key) ;
+		mval_free(&t->vals[i]) ;
+		t->vals[i] = value ;
+		return ;
+	}
+	if (t->n == t->cap){
+		t->cap = (t->cap ? t->cap * 2 : 8) ;
+		t->keys = realloc(t->keys, t->cap * sizeof(mval)) ;
+		t->vals = realloc(t->vals, t->cap * sizeof(mval)) ;
+	}
+	t->keys[t->n] = key ;
+	t->vals[t->n++] = value ;
+}
+
+
+/* make_table(): { "one": 1, "two": 2, 3: "three" }. */
+static ugly_status f_make_table(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	(void)a ;
+	ARGS(0) ;
+	mobj *t = obj_new(m, M_TABLE) ;
+	table_set(ctx, t, mstr(UGLY_STRING, "one", 3), mint(1)) ;
+	table_set(ctx, t, mstr(UGLY_STRING, "two", 3), mint(2)) ;
+	table_set(ctx, t, mint(3), mstr(UGLY_STRING, "three", 5)) ;
+	*ret = mobjval(t) ;
+	return UGLY_OK ;
+}
+
+
+/* table_method(): the name of a method every table has, which an entry may be named too. */
+static ugly_status f_table_method(ugly_ctx *ctx, mock_rt *m, mval *a, size_t n, mval *ret){
+	(void)a ;
+	ARGS(0) ;
+	*ret = mstr(UGLY_STRING, "count", 5) ;
 	return UGLY_OK ;
 }
 
@@ -849,6 +936,8 @@ static const struct { const char *name ; mock_fn fn ; } functions[] = {
 	{ "sum_iter", f_sum_iter },
 	{ "take_iter", f_take_iter },
 	{ "stringify", f_stringify },
+	{ "make_table", f_make_table },
+	{ "table_method", f_table_method },
 } ;
 #define NFUNCTIONS (sizeof(functions) / sizeof(functions[0]))
 
@@ -951,7 +1040,8 @@ static ugly_status mock_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t
 		0,                           /* proxy: never exported */
 		UGLY_TRAIT_MEMBERS,          /* kwbox */
 		UGLY_TRAIT_ITERABLE,         /* iterator */
-		UGLY_TRAIT_ITERABLE          /* generator */
+		UGLY_TRAIT_ITERABLE,         /* generator */
+		UGLY_TRAIT_MEMBERS | UGLY_TRAIT_ENTRIES     /* table: its entries, and its method (count) */
 	} ;
 	*traits = t[o->kind] ;
 	mval v = mobjval(o) ;
@@ -1231,6 +1321,11 @@ static ugly_status call_method(ugly_ctx *ctx, mock_rt *m, mobj *self, mval *a, s
 		}
 		return st ;
 	}
+	if ((self->kind == M_TABLE)&&(strcmp(method, "count") == 0)){
+		ARGS(0) ;
+		*ret = mint((int64_t)self->n) ;
+		return UGLY_OK ;
+	}
 	if ((self->kind == M_POINT)&&(strcmp(method, "norm2") == 0)){
 		ARGS(0) ;
 		*ret = mdouble(self->x * self->x + self->y * self->y) ;
@@ -1427,6 +1522,100 @@ static ugly_status mock_to_string(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_va
 }
 
 
+/* Entries: a table's, by key. */
+static ugly_status no_entries(ugly_ctx *ctx, mock_rt *m){
+	return fail(ctx, m, UGLY_ERR_NOT_CAPABLE, "TypeError", "value has no entries") ;
+}
+
+static ugly_status mock_get_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_kind want, ugly_val *out){
+	mock_rt *m = M(rt) ;
+	mobj *t = ref ;
+	if (t->kind != M_TABLE){
+		return no_entries(ctx, m) ;
+	}
+	mval k ;
+	ugly_status st = to_native(ctx, m, key, &k) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	long i = table_find(ctx, t, &k) ;
+	mval_free(&k) ;
+	if (i < 0){
+		return fail(ctx, m, UGLY_ERR_NOT_FOUND, "KeyError", "no such entry") ;
+	}
+	return from_native(ctx, m, &t->vals[i], want, out) ;
+}
+
+static ugly_status mock_set_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_val v){
+	mock_rt *m = M(rt) ;
+	mobj *t = ref ;
+	if (t->kind != M_TABLE){
+		return no_entries(ctx, m) ;
+	}
+	mval k, value ;
+	ugly_status st = to_native(ctx, m, key, &k) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	if ((st = to_native(ctx, m, v, &value)) != UGLY_OK){
+		mval_free(&k) ;
+		return st ;
+	}
+	table_set(ctx, t, k, value) ;
+	return UGLY_OK ;
+}
+
+static ugly_status mock_delete_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key){
+	mock_rt *m = M(rt) ;
+	mobj *t = ref ;
+	if (t->kind != M_TABLE){
+		return no_entries(ctx, m) ;
+	}
+	mval k ;
+	ugly_status st = to_native(ctx, m, key, &k) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	long i = table_find(ctx, t, &k) ;
+	mval_free(&k) ;
+	if (i >= 0){
+		mval gone_key = t->keys[i], gone = t->vals[i] ;
+		memmove(&t->keys[i], &t->keys[i + 1], (t->n - (size_t)i - 1) * sizeof(mval)) ;
+		memmove(&t->vals[i], &t->vals[i + 1], (t->n - (size_t)i - 1) * sizeof(mval)) ;
+		t->n-- ;
+		mval_free(&gone_key) ;
+		mval_free(&gone) ;
+	}
+	return UGLY_OK ;
+}
+
+static ugly_status mock_entry_count(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
+	mobj *t = ref ;
+	if (t->kind != M_TABLE){
+		return no_entries(ctx, M(rt)) ;
+	}
+	*out = (int64_t)t->n ;
+	return UGLY_OK ;
+}
+
+/* The keys as they are now: an iterator over a list of them. */
+static ugly_status mock_entry_keys(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	mock_rt *m = M(rt) ;
+	mobj *t = ref ;
+	if (t->kind != M_TABLE){
+		return no_entries(ctx, m) ;
+	}
+	mobj *keys = obj_new(m, M_LIST) ;
+	size_t i ;
+	for (i = 0 ; i < t->n ; i++){
+		list_push(keys, mval_copy(&t->keys[i])) ;
+	}
+	ugly_status st = mock_iter(ctx, rt, keys, out) ;
+	obj_unref(keys) ;     /* the iterator holds it */
+	return st ;
+}
+
+
 static void mock_release(ugly_rt *rt, void *ref){
 	(void)rt ;
 	obj_unref(ref) ;
@@ -1462,6 +1651,11 @@ static const ugly_plugin plugin = {
 	.iter = mock_iter,
 	.next = mock_next,
 	.to_string = mock_to_string,
+	.get_entry = mock_get_entry,
+	.set_entry = mock_set_entry,
+	.delete_entry = mock_delete_entry,
+	.entry_count = mock_entry_count,
+	.entry_keys = mock_entry_keys,
 } ;
 
 

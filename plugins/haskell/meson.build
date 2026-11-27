@@ -50,9 +50,11 @@ if haskell_ok
   # binding.c is haskell.c again, in binding mode (a Haskell program as the host).
   ugly_hs = custom_target('libugly_hs.so',
     input: ['glue.c', 'binding.c', hs_sources],
-    depend_files: files('haskell.c'),
+    # The C files include the core's headers, which ghc doesn't track: when
+    # one changes (the plugin ABI), everything here is compiled again.
+    depend_files: files('haskell.c', '../../include/ugly.h', '../../include/ugly_plugin.h'),
     output: 'libugly_hs.so',
-    command: ghc_common + ['-this-unit-id', 'ugly', '-hisuf', 'dyn_hi', '-osuf', 'dyn_o',
+    command: ghc_common + ['-fforce-recomp', '-this-unit-id', 'ugly', '-hisuf', 'dyn_hi', '-osuf', 'dyn_o',
       '-i' + meson.current_source_dir(), '-I' + (meson.project_source_root() / 'include'),
       '-optc-Wall', '-optl-Wl,-soname,libugly_hs.so', '-o', '@OUTPUT@', '@INPUT@'],
     install: true,

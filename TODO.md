@@ -90,7 +90,12 @@ plugins do.
   the other half of this split: once it exists, a string key of a dict has
   two routes. Decide which is canonical before writing it, and whether
   `get_member` on a dict keeps reaching its keys.
-  *Recommendation (2026-11-27), parked by the author:* split them. A new
+  **Under way** (2026-11-27): the core, the mock and the `entries` group
+  are in (libugly 2.8, plugin ABI 6; contract §2 "Entries"). Left, a
+  language per pull request: Lua, Python, JS, Perl, Java, C#, Haskell, each
+  with its plugin's entries, its dictionaries' keys taken out of `MEMBERS`,
+  its binding's syntax, and pairwise checks at the end.
+  *The recommendation it follows:* split them. A new
   trait `ENTRIES` with `get_entry`, `set_entry`, `delete_entry` and
   iteration over keys, the keys any `ugly_val`: this is the hash protocol,
   one piece of work, not two. `MEMBERS` becomes what the language's dot

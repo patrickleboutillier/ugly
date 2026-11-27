@@ -111,7 +111,8 @@ This is Truffle's idea, reduced:
 
 | Trait | Operations |
 |---|---|
-| `MEMBERS` | `get_member`, `set_member`, `member_names`, `delete_member`: string keys, so fields, methods and dict/hash/table entries |
+| `MEMBERS` | `get_member`, `set_member`, `member_names`, `delete_member`: names, what the language's dot reaches (fields, attributes, methods) |
+| `ENTRIES` | `get_entry`, `set_entry`, `delete_entry`, `entry_count`, `entry_keys`: a keyed collection's, by any key (libugly 2.8) |
 | `ELEMENTS` | `length`, `get_index`, `set_index`, `splice`: integer indexes |
 | `CALLABLE` | `call` |
 | `INSTANTIABLE` | `new` |
@@ -176,6 +177,46 @@ then refuses the splice without asking (libugly 2.6, found by writing this
 paragraph; before it, splicing `[0..]` never returned). Reporting it for
 any other sequence of fixed size is optional, and saves a `length` call.
 Haskell reports it for every immutable sequence.
+
+### Entries
+
+Added with libugly 2.8 and plugin ABI 6 (2026-11-27), on the author's
+question about a dict's key named like one of its methods.
+
+Until then `MEMBERS` held both what a value *has* (attributes, fields,
+methods) and what a collection *holds* (a dict's keys, a hash's, a `Map`'s).
+A key named `get` or `keys` was then ambiguous, each plugin settled it its
+own way, and only string keys could be reached at all. Truffle keeps the two
+apart, and so does UGLY now:
+
+- **`ENTRIES` is a keyed collection**: a Python dict, a Lua table, a Perl
+  hash, a JS `Map`, a Java `Map`, a C# dictionary, a Haskell `Map`.
+  `get_entry`, `set_entry` and `delete_entry` take a key; `entry_count` is
+  how many; `entry_keys` is an iterator over the keys, run with `next`.
+- **`MEMBERS` is what the language's dot reaches.** A dict's `get` is a
+  member; its key `"get"` is an entry. `get_member` on a dict no longer
+  reaches its keys.
+- **A key is any value**, a handle included, and keys compare as the
+  collection's own language compares them: Python's `==` and hash, Lua's raw
+  equality, Java's `equals`. A neutral rule would be wrong for somebody's
+  tuples. A key the collection can't hold (a Perl hash takes strings) isn't
+  there to get (`NOT_FOUND`) or to delete, and is `TYPE` to set.
+- **Deleting an entry that isn't there is not an error**, as for members.
+- **A value can have both**, and where the language makes no difference
+  between them, they are the same data: a Lua table's string keys are its
+  members and among its entries, and so are a core map's.
+- **The core doesn't fall back** from one to the other: exact or refused, as
+  for iteration. A binding does, where its language's syntax has only one
+  way to say both (`t.k` and `t["k"]` in Lua and JS): the member, then the
+  entry, with an explicit way to reach an entry that a member hides. A
+  binding whose syntax tells them apart uses it (`p.k` and `p["k"]` in
+  Python, `$p->m` and `$p->{k}` in Perl).
+- **`entry_keys` gives the keys in the collection's own order**, and what
+  changing the collection meanwhile does is its language's rule.
+
+The languages move one at a time: a plugin that has no `get_entry` yet
+still answers `get_member` for its dictionaries' string keys, and the
+`entries` group of the suite is skipped for it.
 
 ### Iteration
 
@@ -718,6 +759,7 @@ pairwise run is where "2N composes" actually gets proven. The groups:
 | errors | type and message are preserved; **the payload rethrown at home is the identical object**; an error crossing three runtimes |
 | threads | calls from another thread give `WRONG_THREAD`, or work with `UGLY_CAP_ANY_THREAD` or once the runtime is host-serialized (then `ugly_rt_drain` runs queued releases); a release from another thread is deferred and drained; for `UGLY_CAP_ANY_THREAD`, 4 threads at once in the shared runtime (`ugly_rt_get`), and a runtime deleted while another thread holds a share |
 | lifecycle | capabilities are honoured; runtime delete makes outstanding handles stale; unload is refused while runtimes are alive; restart is tested only with `RESTARTABLE` |
+| entries | core maps (entries are members, string keys); a table's `ENTRIES`, `entry_count`, `get_entry` (a string key, one that isn't there, one that isn't a string), `entry_keys`; `set_entry` (new and existing), `delete_entry` (twice), an object as a key, or all refused where tables don't change; an entry named like the table's method is apart from it; an object that isn't a table has none |
 | iterators | core lists; `ITERABLE`; one at a time, then the end (twice); batches; nothing produced ahead (`produced()`); `want`; an infinite iterator, freed when released early; the values before an error, then the error; the language's loop over its own and over a core list, stopping early; `to_string` and `stringify` of a counter |
 | pairwise | values, identity, calls, caught and rethrown errors, and alternating recursion between two languages; deleting one language's runtime while the other holds its values |
 | memory | the whole suite under the valgrind setup: no errors and no leaks |

@@ -180,7 +180,7 @@ static ugly_status c_describe(ugly_ctx *ctx, ugly_rt *rt, void *ref, uint32_t *t
 	switch (o->kind){
 		case C_CALLABLE: *traits = UGLY_TRAIT_CALLABLE ; name = "function" ; break ;
 		case C_LIST: *traits = UGLY_TRAIT_ELEMENTS | UGLY_TRAIT_ITERABLE ; name = "list" ; break ;
-		case C_MAP: *traits = UGLY_TRAIT_MEMBERS ; name = "map" ; break ;
+		case C_MAP: *traits = UGLY_TRAIT_MEMBERS | UGLY_TRAIT_ENTRIES ; name = "map" ; break ;
 		case C_ITER: *traits = UGLY_TRAIT_ITERABLE ; name = "iterator" ; break ;
 	}
 	return ugly_val_set_string(ctx, type_name, name, strlen(name)) ;
@@ -406,6 +406,85 @@ static ugly_status c_invoke(ugly_ctx *ctx, ugly_rt *rt, void *ref, const char *m
 }
 
 
+/*
+ * A core map's entries are its members: it is a record and a dictionary at
+ * once, as a Lua table is, with string keys. Another kind of key isn't
+ * there, and can't be set.
+ */
+static const char *map_key(const cobj *o, ugly_val key){
+	return ((o->kind == C_MAP)&&(key.kind == UGLY_STRING)&&(memchr(key.as.str.ptr, '\0', key.as.str.len) == NULL)
+		? key.as.str.ptr : NULL) ;
+}
+
+static ugly_status c_get_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_kind want, ugly_val *out){
+	cobj *o = ref ;
+	if (o->kind != C_MAP){
+		return not_capable(ctx, "value has no entries") ;
+	}
+	char *k = (map_key(o, key) != NULL ? strndup(key.as.str.ptr, key.as.str.len) : NULL) ;
+	if (k == NULL){
+		return ctx_fail(ctx, UGLY_ERR_NOT_FOUND, "c", "KeyError", "no such entry") ;
+	}
+	ugly_status st = c_get_member(ctx, rt, ref, k, want, out) ;
+	free(k) ;
+	return st ;
+}
+
+static ugly_status c_set_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key, ugly_val v){
+	cobj *o = ref ;
+	if (o->kind != C_MAP){
+		return not_capable(ctx, "value has no entries") ;
+	}
+	char *k = (map_key(o, key) != NULL ? strndup(key.as.str.ptr, key.as.str.len) : NULL) ;
+	if (k == NULL){
+		return ctx_fail(ctx, UGLY_ERR_TYPE, "c", "TypeError", "a core map's keys are strings") ;
+	}
+	ugly_status st = c_set_member(ctx, rt, ref, k, v) ;
+	free(k) ;
+	return st ;
+}
+
+static ugly_status c_delete_entry(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_val key){
+	cobj *o = ref ;
+	if (o->kind != C_MAP){
+		return not_capable(ctx, "value has no entries") ;
+	}
+	char *k = (map_key(o, key) != NULL ? strndup(key.as.str.ptr, key.as.str.len) : NULL) ;
+	if (k == NULL){
+		return UGLY_OK ;
+	}
+	ugly_status st = c_delete_member(ctx, rt, ref, k) ;
+	free(k) ;
+	return st ;
+}
+
+static ugly_status c_entry_count(ugly_ctx *ctx, ugly_rt *rt, void *ref, int64_t *out){
+	(void)rt ;
+	cobj *o = ref ;
+	if (o->kind != C_MAP){
+		return not_capable(ctx, "value has no entries") ;
+	}
+	*out = (int64_t)o->n ;
+	return UGLY_OK ;
+}
+
+/* The keys as they are now: an iterator over a list of them. */
+static ugly_status c_entry_keys(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
+	ugly_handle names = UGLY_NO_HANDLE ;
+	ugly_status st = c_member_names(ctx, rt, ref, &names) ;
+	if (st != UGLY_OK){
+		return st ;
+	}
+	st = ugly_iter(ctx, names, out) ;
+	ugly_error *kept = (st != UGLY_OK ? ugly_take_error(ctx) : NULL) ;
+	ugly_release(ctx, names) ;
+	if (kept != NULL){
+		ugly_restore_error(ctx, kept) ;
+	}
+	return st ;
+}
+
+
 /* A list gives an iterator over its indexes; an iterator gives itself. */
 static ugly_status c_iter(ugly_ctx *ctx, ugly_rt *rt, void *ref, ugly_handle *out){
 	cobj *o = ref ;
@@ -485,6 +564,11 @@ const ugly_plugin ugly_c_plugin = {
 	.iter = c_iter,
 	.next = c_next,
 	.to_string = c_to_string,
+	.get_entry = c_get_entry,
+	.set_entry = c_set_entry,
+	.delete_entry = c_delete_entry,
+	.entry_count = c_entry_count,
+	.entry_keys = c_entry_keys,
 } ;
 
 
