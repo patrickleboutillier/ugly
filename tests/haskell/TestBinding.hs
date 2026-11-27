@@ -128,6 +128,11 @@ main = do
       results <- mapM (const (takeMVar done)) [1 .. 4 :: Int]
       ok tap (all (== Right True) results) ("4 forkIO threads, " ++ show calls ++ " calls to Python each: " ++ show (filter (/= Right True) results))
 
+      -- Python's truth of a Haskell list asks for its first element, not its length: [0..] has none.
+      truth <- Ugly.eval "python" "lambda xs: [bool(xs[0]), bool(xs[1])]"
+      bs <- Ugly.callValue truth [Ugly.toValue [[0 :: Int ..], []]]
+      ok tap (bs == [True, False]) "bool() in Python of an infinite Haskell list, and of an empty one"
+
       own <- Ugly.eval "python" "__import__('ugly').module('haskell', 'TestBinding').double(21)"
       ok tap (own == (42 :: Int)) "Python uses this program's own export module (found in the process)"
       g <- Ugly.eval "python" "__import__('ugly').module('haskell', 'TestBinding').greet('python')"

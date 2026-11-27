@@ -884,21 +884,23 @@ static Py_ssize_t proxy_length(PyObject *self){
 
 
 /*
- * Truth: false for a sequence of length 0, as Python's own are; anything
- * else is true, a value without a length included (a function: Python would
- * otherwise ask for its len(), a TypeError).
+ * Truth: false for an empty sequence, as Python's own are; anything else is
+ * true, a value that isn't a sequence included (a function: Python would
+ * otherwise ask for its len(), a TypeError). Empty is "no first element",
+ * not "length 0": a sequence may be infinite, and its length never come.
  */
 static int proxy_bool(PyObject *self){
 	ugly_ctx *ctx = need_ctx() ;
 	if (ctx == NULL){
 		return -1 ;
 	}
-	int64_t n = 0 ;
-	ugly_status st = OUT(ugly_length(ctx, ((proxy *)self)->h, &n)) ;
-	if (st == UGLY_OK){
-		return n != 0 ;
+	ugly_val first = ugly_null() ;
+	ugly_status st = OUT(ugly_get_index(ctx, ((proxy *)self)->h, 0, UGLY_ANY, &first)) ;
+	ugly_val_release(ctx, &first) ;
+	if (st == UGLY_ERR_NOT_FOUND){
+		return 0 ;
 	}
-	if ((st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)||(st == UGLY_ERR_NOT_SUPPORTED)){
+	if ((st == UGLY_OK)||(st == UGLY_ERR_NOT_CAPABLE)||(st == UGLY_ERR_NOT_IMPLEMENTED)||(st == UGLY_ERR_NOT_SUPPORTED)){
 		return 1 ;
 	}
 	raise_ugly(ctx, st) ;

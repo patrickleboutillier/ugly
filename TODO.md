@@ -30,16 +30,10 @@ reading only:
 
 The thirteen are fixed (under "Done"). Seen while fixing them:
 
-- [ ] **A JS class can't be constructed from Python or Lua.** A JS class
-  is CALLABLE and INSTANTIABLE, so calling its proxy calls it, and JS
-  refuses ("class constructors must be invoked with 'new'"). Every JS
-  function is a constructor too, so the traits can't tell them apart: it
-  needs a way to say `new` (`ugly.new(cls, ...)`?), or JS reporting
-  INSTANTIABLE only for classes. A design choice.
-- [ ] **Lua: a JS function member that is also a constructor** (a classic
-  `function`) isn't a method closure in Lua (`proxy_index` leaves an
-  INSTANTIABLE member alone), so `obj.f(x)` loses `this`. Python keeps the
-  owner (`member_proxy`); Lua could do the same.
+- [ ] **JS: a native constructor that can't be called** (`Map`, `Set`)
+  is still CALLABLE and INSTANTIABLE: only classes written in JS are
+  recognized (by their source text), so `Map()` from Python calls it, and
+  JS refuses. `Date` is fine either way.
 - [ ] **Perl: `isa`, `can`, `DOES` and `VERSION`** on a proxy are Perl's
   own, not the foreign value's (Perl code calls them on any object).
 
@@ -337,5 +331,9 @@ contract and in the pull requests.
   results, a hint never left for the next call; C#: an enumerable that is
   its own enumerator can be iterated again, a wide integer's DOUBLE;
   Haskell: identity keyed on the type too; JS: no symbol-keyed stores.
+  Then, with no users to break: a JS class is INSTANTIABLE and not
+  CALLABLE, so calling it from Python or Lua constructs it; Lua keeps a
+  callable class member's owner, as Python does (`this` for a JS function
+  member); Python's `bool()` asks for a first element, not a length.
 - **Docs:** the README's tradeoffs (isolation, the blocking model, cycles,
   local builds); Apache-2.0 after 2.4.0 (GPL v3 before).
