@@ -7,11 +7,17 @@ libm = cc.find_library('m', required: false)
 
 ugly_inc = include_directories('../include')
 
+# Only ugly_* is exported (ugly.map): the internals shared by the core's files
+# aren't the process's to see, or to replace.
+ugly_map = meson.current_source_dir() / 'ugly.map'
+
 libugly = shared_library('ugly',
   'ctx.c', 'handles.c', 'values.c', 'lang.c', 'rt.c', 'protocol.c', 'host.c',
   include_directories: ugly_inc,
   c_args: ['-DUGLY_PLUGIN_DIR="@0@"'.format(ugly_plugin_dir)],
   dependencies: [threads, libdl, libm],
+  link_args: ['-Wl,--version-script=' + ugly_map],
+  link_depends: 'ugly.map',
   version: '2.7.0',
   install: true,
 )

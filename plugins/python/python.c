@@ -768,18 +768,29 @@ static int proxy_ass_subscript(PyObject *self, PyObject *key, PyObject *value){
 		PyErr_SetString(PyExc_TypeError, "ugly: can't delete a foreign element") ;
 		return -1 ;
 	}
+	/* The key first, with the GIL: OUT() releases it around its whole argument. */
+	Py_ssize_t index = 0 ;
+	const char *name = NULL ;
+	if (PyIndex_Check(key)){
+		index = PyNumber_AsSsize_t(key, PyExc_IndexError) ;
+		if ((index == -1)&&PyErr_Occurred()){
+			return -1 ;
+		}
+	}
+	else if (PyUnicode_Check(key)){
+		if ((name = PyUnicode_AsUTF8(key)) == NULL){
+			return -1 ;
+		}
+	}
+	else {
+		PyErr_SetString(PyExc_TypeError, "ugly: keys are ints (elements) or strs (members)") ;
+		return -1 ;
+	}
 	ugly_val v ;
 	ugly_status st = to_val(ctx, value, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){
-		if (PyIndex_Check(key)){
-			st = OUT(ugly_set_index(ctx, ((proxy *)self)->h, (int64_t)PyNumber_AsSsize_t(key, NULL), v)) ;
-		}
-		else if (PyUnicode_Check(key)){
-			st = OUT(ugly_set_member(ctx, ((proxy *)self)->h, PyUnicode_AsUTF8(key), v)) ;
-		}
-		else {
-			st = UGLY_ERR_USAGE ;
-		}
+		st = (name != NULL ? OUT(ugly_set_member(ctx, ((proxy *)self)->h, name, v))
+			: OUT(ugly_set_index(ctx, ((proxy *)self)->h, (int64_t)index, v))) ;
 		ugly_val_release(ctx, &v) ;
 	}
 	if (st != UGLY_OK){

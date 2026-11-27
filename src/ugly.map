@@ -1,0 +1,13 @@
+/*
+ * What libugly exports: the public API and the plugin services, all named
+ * ugly_*, and nothing else. The core's internal functions (xstrdup,
+ * on_thread, rt_enter...) stay local, so a host or an interpreter that
+ * defines a function of the same name can't take their place (a program
+ * built with -rdynamic exports its own).
+ */
+{
+	global:
+		ugly_*;
+	local:
+		*;
+};
