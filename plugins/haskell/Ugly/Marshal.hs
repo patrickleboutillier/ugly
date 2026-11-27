@@ -370,6 +370,8 @@ currentCtx :: IO (Ptr Ctx)
 currentCtx = do
   ctx <- c_ctx
   when (ctx == nullPtr) (throwIO (ErrorCall "ugly: no ctx for this thread"))
+  outside <- c_outside
+  when (outside /= 0) c_drain     -- the program's own code: run the releases queued for its runtime
   return ctx
 
 -- | An operation on a foreign value, with a result.

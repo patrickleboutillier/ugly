@@ -123,6 +123,22 @@ ugly_rt *ugly_hs_current_rt(void){
 	return current_rt != NULL ? current_rt : attached_rt ;
 }
 
+/*
+ * The binding's own code (outside any entry) is about to call out: whether
+ * to run the releases queued for its runtime first (ugly_hs_drain). They are
+ * always queued (any-thread), and a program that only calls out never enters
+ * its runtime through the core, where they would otherwise run. Inside an
+ * entry, the core has just run them. Two calls, since a release re-enters
+ * Haskell (a safe import), and this check is on every call out (unsafe).
+ */
+int ugly_hs_outside(void){
+	return (current_rt == NULL)&&(attached_rt != NULL) ;
+}
+
+void ugly_hs_drain(void){
+	ugly_rt_drain(attached_rt) ;
+}
+
 /* This thread's ctx: the caller's, inside an entry; otherwise one of the thread's own. */
 ugly_ctx *ugly_hs_ctx(void){
 	ugly_ctx *ctx = ugly_current_ctx() ;

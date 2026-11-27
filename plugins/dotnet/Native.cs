@@ -67,6 +67,7 @@ static unsafe class Core {
     [DllImport(L)] public static extern Status ugly_lang_unload(nint ctx, nint lang);
     [DllImport(L)] public static extern Status ugly_rt_attach(nint ctx, nint lang, nint native, nint* o);
     [DllImport(L)] public static extern Status ugly_rt_delete(nint ctx, nint rt);
+    [DllImport(L)] public static extern void ugly_rt_drain(nint rt);
     [DllImport(L)] public static extern nint ugly_last_error(nint ctx);
     [DllImport(L)] public static extern byte* ugly_error_language(nint err);
     [DllImport(L)] public static extern byte* ugly_error_type(nint err);

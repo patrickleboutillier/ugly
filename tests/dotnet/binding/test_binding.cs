@@ -5,7 +5,7 @@
 using Ugly;
 
 static class TestBinding {
-    const int Plan = 40;
+    const int Plan = 41;
     static int count;
     static readonly HashSet<string> langs = new((Environment.GetEnvironmentVariable("UGLY_TEST_LANGS") ?? "").Split(','));
 
@@ -29,6 +29,14 @@ static class TestBinding {
             Ok(false, $"{what}: {e.GetType().Name}: {e.Message}");
         }
         while (count < before + tests) Ok(false, $"{what}: a test didn't run");
+    }
+
+    // Passes a new object to Lua and keeps only a weak reference to it.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static WeakReference PassOne(Foreign lua) {
+        object o = new object();
+        lua.Invoke("echo", o);
+        return new WeakReference(o);
     }
 
     static int Main() {
@@ -189,6 +197,18 @@ static class TestBinding {
             Ok(3.0.Equals(got[0]), $"another C# thread shares Python (UGLY_CAP_ANY_THREAD): {got[0]}");
             Ok("ABC".Equals(got[1]), $"  ... and gets its own Lua: {got[1]}");
             Ok(got[2] is ForeignException e && e.Message.Contains("thread"), $"  ... but the main thread's Lua values stay the main thread's: {(got[2] as Exception)?.Message}");
+        });
+
+        Check("leaks", 1, ["lua"], () => {
+            // A program that only calls out: what it passed is released at its next use of UGLY.
+            WeakReference w = PassOne(lua);
+            for (int i = 0; i < 100 && w.IsAlive; i++) {
+                Interop.Eval("lua", "collectgarbage() collectgarbage()");     // Lua drops its proxy of it
+                lua.Invoke("echo", 1);
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            Ok(!w.IsAlive, "a C# object passed to Lua is collectable after the next use of UGLY");
         });
 
         Check("teardown", 1, ["lua"], () => {

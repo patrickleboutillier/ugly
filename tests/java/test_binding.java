@@ -13,7 +13,7 @@ import ugly.Ugly;
  * when UGLY tears down at JVM exit.
  */
 public class test_binding {
-	static final int PLAN = 37;
+	static final int PLAN = 39;
 	static int count = 0;
 
 	static void ok(boolean cond, String what){
@@ -22,6 +22,20 @@ public class test_binding {
 	}
 
 	interface Body { void run() throws Throwable; }
+
+	/** Passes a new object to Lua and keeps only a weak reference to it. */
+	static java.lang.ref.WeakReference<Object> passOne(Foreign lua){
+		Object o = new Object();
+		lua.invoke("echo", o);
+		return new java.lang.ref.WeakReference<>(o);
+	}
+
+	/** Entries in ugly.Foreign's cache (package-private: for tests). */
+	static int cached() throws Exception {
+		java.lang.reflect.Method m = Foreign.class.getDeclaredMethod("cached");
+		m.setAccessible(true);
+		return (Integer)m.invoke(null);
+	}
 
 	/** Runs a test body; an unexpected exception fails it. */
 	static void check(String what, Body body){
@@ -195,6 +209,28 @@ public class test_binding {
 			ok("ABC".equals(got[1]), "  ... and gets its own Lua: " + got[1]);
 			ok(got[2] instanceof RuntimeException && String.valueOf(((Throwable)got[2]).getMessage()).contains("another thread"),
 				"  ... but the main thread's Lua values stay the main thread's: " + got[2]);
+		});
+
+		check("leaks", () -> {
+			// A program that only calls out: what it passed is released at its next use of UGLY.
+			java.lang.ref.WeakReference<Object> w = passOne(lua);
+			for (int i = 0 ; (i < 100)&&(w.get() != null) ; i++){
+				Ugly.eval("lua", "collectgarbage() collectgarbage()");     // Lua drops its proxy of it
+				lua.invoke("echo", 1);
+				System.gc();
+				Thread.sleep(10);
+			}
+			ok(w.get() == null, "a Java object passed to Lua is collectable after the next use of UGLY");
+
+			// A collected Foreign leaves the cache.
+			for (int i = 0 ; i < 2000 ; i++){
+				Ugly.eval("lua", "return {}");
+			}
+			for (int i = 0 ; (i < 100)&&(cached() > 500) ; i++){
+				System.gc();
+				Thread.sleep(10);
+			}
+			ok(cached() <= 500, "collected Foreigns leave the cache: " + cached() + " entries after 2000 values");
 		});
 
 		check("teardown", () -> {

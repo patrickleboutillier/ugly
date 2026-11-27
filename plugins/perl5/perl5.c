@@ -79,9 +79,15 @@ static int registered(plrt *r){
 }
 
 
-/* Every entry into an interpreter: make it current, and restore the caller's on the way out. */
-#define ENTER_PERL(r) PerlInterpreter *saved_perl_ = PERL_GET_CONTEXT ; PerlInterpreter *my_perl = (r)->perl ; PERL_SET_CONTEXT(my_perl)
-#define LEAVE_PERL() PERL_SET_CONTEXT(saved_perl_)
+/*
+ * Every entry into an interpreter: make it current, and restore the caller's
+ * on the way out. Each is a scope for temporaries too: a caller that isn't
+ * Perl has none around us, and the mortals an entry makes (the RV it calls,
+ * an iterator) would otherwise live until the interpreter is destroyed.
+ */
+#define ENTER_PERL(r) PerlInterpreter *saved_perl_ = PERL_GET_CONTEXT ; PerlInterpreter *my_perl = (r)->perl ; \
+	PERL_SET_CONTEXT(my_perl) ; ENTER ; SAVETMPS
+#define LEAVE_PERL() FREETMPS ; LEAVE ; PERL_SET_CONTEXT(saved_perl_)
 
 
 /* ---------------------------------------------------------------- */

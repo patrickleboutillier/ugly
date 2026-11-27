@@ -502,13 +502,21 @@ static void throw_ugly(JNIEnv *env, ugly_ctx *ctx, ugly_status st){
 /* Natives behind ugly.Foreign                                      */
 /* ---------------------------------------------------------------- */
 
-/* This thread's ctx; a Java thread that has none gets one, deleted when it ends (ugly_ctx_thread). */
+/*
+ * This thread's ctx; a Java thread that has none gets one, deleted when it
+ * ends (ugly_ctx_thread). Java code is running here, so the releases queued
+ * for its runtime run now (ugly_rt_drain): they are always queued
+ * (UGLY_CAP_ANY_THREAD), and a program that only calls out never enters its
+ * runtime through the core, where they would otherwise run.
+ */
 static ugly_ctx *native_ctx(JNIEnv *env){
 	ugly_ctx *ctx = NULL ;
 	if (ugly_ctx_thread(&ctx) != UGLY_OK){
 		jclass ise = (*env)->FindClass(env, "java/lang/IllegalStateException") ;
 		(*env)->ThrowNew(env, ise, "ugly: can't create a ctx on this thread") ;
+		return NULL ;
 	}
+	ugly_rt_drain(URT()) ;
 	return ctx ;
 }
 

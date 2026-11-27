@@ -201,10 +201,15 @@ public sealed class ForeignException : Exception {
 
 static unsafe class Ops {
     // This thread's ctx; a thread that has none gets one, deleted when it ends.
+    // C# code is running here, so the releases queued for its runtime run
+    // now: they are always queued (any-thread), and a program that only calls
+    // out never enters its runtime through the core, where they would run.
     public static nint Ctx() {
         nint ctx;
         Status st = Core.ugly_ctx_thread(&ctx);
         if (st != Status.Ok) throw new InvalidOperationException($"ugly: no context on this thread ({st})");
+        nint rt = Bridge.Rt;
+        if (rt != 0) Core.ugly_rt_drain(rt);
         return ctx;
     }
 

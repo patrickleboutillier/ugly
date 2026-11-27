@@ -1131,14 +1131,16 @@ static int proxy_index(lua_State *L){
 static int proxy_newindex(lua_State *L){
 	proxy *p = luaL_checkudata(L, 1, PROXY_MT) ;
 	ugly_ctx *ctx = need_ctx(L) ;
+	/* The key first: a bad one is a Lua error, which would skip releasing the converted value. */
+	const char *name = (lua_isinteger(L, 2) ? NULL : luaL_checkstring(L, 2)) ;
 	ugly_val v ;
 	ugly_status st = to_val(ctx, R(L), L, 3, UGLY_ANY, &v) ;
 	if (st == UGLY_OK){
-		if (lua_isinteger(L, 2)){
+		if (name == NULL){
 			st = ugly_set_index(ctx, p->h, (int64_t)lua_tointeger(L, 2) - 1, v) ;
 		}
 		else {
-			st = ugly_set_member(ctx, p->h, luaL_checkstring(L, 2), v) ;
+			st = ugly_set_member(ctx, p->h, name, v) ;
 		}
 		ugly_val_release(ctx, &v) ;
 	}
